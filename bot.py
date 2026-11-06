@@ -1,3 +1,4 @@
+
 import os
 import math
 import logging
@@ -14,15 +15,15 @@ from telegram.ext import (
 )
 
 # ==========================================
-# ODDS INTELLIGENCE AI
-# Version 1.1 - Diagnostic foundation
+# PUNTER KENYA - ODDS INTELLIGENCE AI
+# Version 2.0 - GOAL API integration
 # ==========================================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
+BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
+GOAL_API_KEY = os.getenv("GOAL_API_KEY")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
-API_FOOTBALL_URL = "https://v3.football.api-sports.io"
+GOAL_API_URL = "https://api.goal-api.com/v1"
 KENYA_TZ = ZoneInfo("Africa/Nairobi")
 
 logging.basicConfig(
@@ -41,20 +42,22 @@ class APIRequestError(Exception):
     pass
 
 
-def football_request(endpoint, params=None):
+def goal_request(endpoint, params=None):
 
-    if not API_FOOTBALL_KEY:
+    if not GOAL_API_KEY:
         raise APIRequestError(
-            "API_FOOTBALL_KEY is missing from Railway Variables."
+            "GOAL_API_KEY is missing from Railway Variables."
         )
 
     headers = {
-        "x-apisports-key": API_FOOTBALL_KEY
+        "Authorization": f"Bearer {GOAL_API_KEY}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
     }
 
     try:
         response = requests.get(
-            f"{API_FOOTBALL_URL}/{endpoint}",
+            f"{GOAL_API_URL}/{endpoint.lstrip('/')}",
             headers=headers,
             params=params,
             timeout=25,
@@ -62,55 +65,77 @@ def football_request(endpoint, params=None):
 
     except requests.exceptions.Timeout:
         raise APIRequestError(
-            "The football API timed out. Please try again."
+            "GOAL API timed out. Please try again."
         )
 
     except requests.exceptions.ConnectionError:
         raise APIRequestError(
-            "Could not connect to the football API."
+            "Could not connect to GOAL API."
         )
 
     except requests.exceptions.RequestException as error:
         raise APIRequestError(
-            f"Network error: {str(error)[:500]}"
+            f"Network error: {str(error)[:400]}"
         )
 
     try:
-        data = response.json()
+        result = response.json()
 
     except ValueError:
         raise APIRequestError(
-            f"API returned a non-JSON response. "
-            f"HTTP status: {response.status_code}. "
-            f"Response: {response.text[:700]}"
+            f"API returned non-JSON data. "
+            f"HTTP status: {response.status_code}"
         )
 
     if not response.ok:
         raise APIRequestError(
-            f"HTTP {response.status_code}: "
-            f"{str(data)[:900]}"
+            f"GOAL API HTTP {response.status_code}: "
+            f"{str(result)[:700]}"
         )
 
-    api_errors = data.get("errors")
-
-    if api_errors:
+    if isinstance(result, dict) and result.get("success") is False:
         raise APIRequestError(
-            f"API-Football reported: {str(api_errors)[:900]}"
+            f"GOAL API rejected the request: {str(result)[:700]}"
         )
 
-    return data
+    return result
+
+
+def get_api_data(result):
+
+    if not isinstance(result, dict):
+        raise APIRequestError("Unexpected API response format.")
+
+    data = result.get("data", [])
+
+    if isinstance(data, list):
+        return data
+
+    if isinstance(data, dict):
+        # Some endpoints may return one object.
+        return [data]
+
+    return []
 
 
 # ==========================================
-# FORMATTING FUNCTIONS
+# DATA FORMATTING
 # ==========================================
 
 def kenya_time(date_string):
 
+    if not date_string:
+        return "Time unavailable"
+
     try:
         match_time = datetime.fromisoformat(
-            date_string.replace("Z", "+00:00")
+            str(date_string).replace("Z", "+00:00")
         )
+
+        if match_time.tzinfo is None:
+            match_time = match_time.replace(
+                tzinfo=ZoneInfo("UTC")
+            )
 
         return match_time.astimezone(KENYA_TZ).strftime(
             "%d %b %Y, %H:%M EAT"
@@ -120,10 +145,44 @@ def kenya_time(date_string):
         return "Time unavailable"
 
 
-async def send_long_message(update, message):
+def field(match, *names, default="N/A"):
 
-    # Telegram messages have a maximum length.
-    # Split long reports into safe chunks.
+    for name in names:
+        value = match.get(name)
+
+        if value is not None and value != "":
+            return value
+
+    return default
+
+
+def match_teams(match):
+
+    home = field(
+        match,
+        "homeTeamName",
+        "home_team_name",
+        default=None,
+    )
+
+    away = field(
+        match,
+        "awayTeamName",
+        "away_team_name",
+        default=None,
+    )
+
+    # Also support nested team objects if returned.
+    if not home and isinstance(match.get("homeTeam"), dict):
+        home = match["homeTeam"].get("name")
+
+    if not away and isinstance(match.get("awayTeam"), dict):
+        away = match["awayTeam"].get("name")
+
+    return home or "Home team unavailable", away or "Away team unavailable"
+
+
+async def send_long_message(update, message):
 
     limit = 3900
 
@@ -133,15 +192,15 @@ async def send_long_message(update, message):
         )
 
 
-def empty_results_message(data):
+def empty_results_message(result):
+
+    pagination = result.get("pagination", "Not supplied")
 
     return (
-        "No matches were returned by the API.\n\n"
-        f"Results: {data.get('results', 'Not supplied')}\n"
-        f"Paging: {data.get('paging', 'Not supplied')}\n"
-        f"API errors: {data.get('errors', 'None reported')}\n\n"
-        "This does not necessarily mean there are no matches. "
-        "We need to inspect the API response."
+        "No matches were returned.\n\n"
+        f"Pagination: {pagination}\n\n"
+        "This does not necessarily mean no matches exist. "
+        "Check competition coverage and API access."
     )
 
 
@@ -152,26 +211,26 @@ def empty_results_message(data):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     message = (
-        "⚽ ODDS INTELLIGENCE AI\n\n"
+        "⚽ PUNTER KENYA\n"
+        "ODDS INTELLIGENCE AI\n\n"
         "Welcome to your football research system.\n\n"
         "COMMANDS\n\n"
-        "/fixtures - Upcoming football fixtures\n"
+        "/fixtures - Upcoming fixtures\n"
         "/live - Live football matches\n"
-        "/diagnose - Test the football API\n"
-        "/odds - Odds API configuration status\n"
-        "/compare - Bookmaker comparison status\n"
+        "/diagnose - Test GOAL API\n"
+        "/odds - Odds API configuration\n"
+        "/compare - Bookmaker comparison\n"
         "/bookmakers - Bookmaker coverage\n"
         "/calculator - Calculate combined odds\n"
-        "/help - Show this menu\n\n"
-        "Our priority is verified data, accurate "
-        "calculations and transparent analysis."
+        "/help - Show commands\n\n"
+        "Our priority is verified data, "
+        "accurate calculations and transparent analysis."
     )
 
     await update.message.reply_text(message)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     await start(update, context)
 
 
@@ -182,59 +241,74 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-        "🔎 Connecting to API-Football...\n"
+        "🔎 CONNECTING TO GOAL API...\n\n"
         "Retrieving upcoming fixtures."
     )
 
     try:
-        data = await asyncio.to_thread(
-            football_request,
+        result = await asyncio.to_thread(
+            goal_request,
             "fixtures",
-            {
-                "next": 10,
-                "timezone": "Africa/Nairobi",
-            },
+            {"limit": 10, "offset": 0},
         )
 
-        matches = data.get("response", [])
+        matches = get_api_data(result)
 
         if not matches:
             await update.message.reply_text(
-                empty_results_message(data)
+                empty_results_message(result)
             )
             return
 
-        lines = ["⚽ UPCOMING FIXTURES\n"]
+        lines = ["⚽ UPCOMING FOOTBALL FIXTURES\n"]
 
-        for match in matches:
+        for match in matches[:10]:
 
-            home = match["teams"]["home"]["name"]
-            away = match["teams"]["away"]["name"]
+            home, away = match_teams(match)
 
-            league = match["league"]["name"]
-            country = match["league"].get("country", "")
+            league = field(
+                match,
+                "leagueName",
+                "league_name",
+                default="League unavailable",
+            )
+
+            country = field(
+                match,
+                "countryName",
+                "country_name",
+                default="",
+            )
 
             kickoff = kenya_time(
-                match["fixture"]["date"]
+                field(
+                    match,
+                    "kickoffUtc",
+                    "kickoff_utc",
+                    "date",
+                    default=None,
+                )
+            )
+
+            competition = (
+                f"{league} ({country})"
+                if country else league
             )
 
             lines.append(
-                f"🏆 {league} ({country})\n"
+                f"🏆 {competition}\n"
                 f"⚽ {home} vs {away}\n"
                 f"🕒 {kickoff}\n"
             )
 
-        await send_long_message(
-            update,
-            "\n".join(lines)
-        )
+        await send_long_message(update, "\n".join(lines))
 
     except APIRequestError as error:
 
-        logger.error("Fixtures API error: %s", error)
+        logger.error("GOAL fixtures error: %s", error)
 
         await update.message.reply_text(
-            f"⚠️ FIXTURES API ERROR\n\n{str(error)[:3000]}"
+            f"⚠️ FIXTURES API ERROR\n\n{str(error)[:2500]}"
         )
 
     except Exception as error:
@@ -242,8 +316,8 @@ async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Unexpected fixtures error")
 
         await update.message.reply_text(
-            f"⚠️ UNEXPECTED FIXTURES ERROR\n\n"
-            f"{type(error).__name__}: {str(error)[:1000]}"
+            f"⚠️ UNEXPECTED ERROR\n\n"
+            f"{type(error).__name__}: {str(error)[:800]}"
         )
 
 
@@ -254,25 +328,23 @@ async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-        "🔴 Connecting to API-Football...\n"
+        "🔴 CONNECTING TO GOAL API...\n\n"
         "Checking live matches."
     )
 
     try:
-        data = await asyncio.to_thread(
-            football_request,
-            "fixtures",
-            {
-                "live": "all",
-                "timezone": "Africa/Nairobi",
-            },
+        result = await asyncio.to_thread(
+            goal_request,
+            "fixtures/live",
         )
 
-        matches = data.get("response", [])
+        matches = get_api_data(result)
 
         if not matches:
             await update.message.reply_text(
-                empty_results_message(data)
+                "🔴 NO LIVE MATCHES RETURNED.\n\n"
+                "There may currently be no matches in play, "
+                "or your plan may restrict live data."
             )
             return
 
@@ -280,42 +352,52 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         for match in matches[:25]:
 
-            home = match["teams"]["home"]["name"]
-            away = match["teams"]["away"]["name"]
+            home, away = match_teams(match)
 
-            home_goals = match["goals"]["home"]
-            away_goals = match["goals"]["away"]
+            home_goals = field(
+                match,
+                "homeTeamScore",
+                "home_team_score",
+                default="0",
+            )
 
-            status = match["fixture"]["status"]
+            away_goals = field(
+                match,
+                "awayTeamScore",
+                "away_team_score",
+                default="0",
+            )
 
-            elapsed = status.get("elapsed")
-            short_status = status.get("short", "LIVE")
+            league = field(
+                match,
+                "leagueName",
+                "league_name",
+                default="League unavailable",
+            )
 
-            if elapsed is not None:
-                match_status = f"{elapsed}'"
-            else:
-                match_status = short_status
-
-            league = match["league"]["name"]
+            minute = field(
+                match,
+                "matchMinute",
+                "matchElapsed",
+                "match_status",
+                default="LIVE",
+            )
 
             lines.append(
                 f"🏆 {league}\n"
                 f"⚽ {home} {home_goals} - "
                 f"{away_goals} {away}\n"
-                f"⏱ {match_status}\n"
+                f"⏱ {minute}\n"
             )
 
-        await send_long_message(
-            update,
-            "\n".join(lines)
-        )
+        await send_long_message(update, "\n".join(lines))
 
     except APIRequestError as error:
 
-        logger.error("Live API error: %s", error)
+        logger.error("GOAL live error: %s", error)
 
         await update.message.reply_text(
-            f"⚠️ LIVE API ERROR\n\n{str(error)[:3000]}"
+            f"⚠️ LIVE API ERROR\n\n{str(error)[:2500]}"
         )
 
     except Exception as error:
@@ -323,8 +405,8 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Unexpected live error")
 
         await update.message.reply_text(
-            f"⚠️ UNEXPECTED LIVE ERROR\n\n"
-            f"{type(error).__name__}: {str(error)[:1000]}"
+            f"⚠️ UNEXPECTED ERROR\n\n"
+            f"{type(error).__name__}: {str(error)[:800]}"
         )
 
 
@@ -335,66 +417,62 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def diagnose(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-        "🛠 RUNNING API DIAGNOSTICS...\n\n"
-        "Checking your API-Football connection."
+        "🛠 GOAL API DIAGNOSTICS\n\n"
+        "Checking API authentication and fixtures."
     )
 
-    if not API_FOOTBALL_KEY:
-
+    if not GOAL_API_KEY:
         await update.message.reply_text(
-            "❌ API_FOOTBALL_KEY is missing in Railway."
+            "❌ GOAL_API_KEY is missing in Railway Variables."
         )
         return
 
     try:
 
-        data = await asyncio.to_thread(
-            football_request,
-            "status",
+        fixture_result = await asyncio.to_thread(
+            goal_request,
+            "fixtures",
+            {"limit": 5, "offset": 0},
         )
 
-        results = data.get("results", "Not supplied")
+        matches = get_api_data(fixture_result)
 
         await update.message.reply_text(
-            "✅ API CONNECTION SUCCESSFUL\n\n"
-            "API-Football accepted the request.\n"
-            f"Status results: {results}\n\n"
-            "Now testing upcoming fixtures..."
+            "✅ API AUTHENTICATION SUCCESSFUL\n\n"
+            "GOAL API accepted the request.\n"
+            "Endpoint: /fixtures\n"
+            f"Fixtures returned: {len(matches)}\n"
+            f"Success: {fixture_result.get('success', 'Not supplied')}\n"
         )
 
-        fixture_data = await asyncio.to_thread(
-            football_request,
-            "fixtures",
-            {
-                "next": 5,
-                "timezone": "Africa/Nairobi",
-            },
-        )
+        try:
 
-        matches = fixture_data.get("response", [])
-
-        if matches:
-
-            await update.message.reply_text(
-                f"✅ FIXTURE TEST SUCCESSFUL\n\n"
-                f"Matches returned: {len(matches)}\n"
-                "Your football API can retrieve fixtures."
+            live_result = await asyncio.to_thread(
+                goal_request,
+                "fixtures/live",
             )
 
-        else:
+            live_matches = get_api_data(live_result)
 
             await update.message.reply_text(
-                "⚠️ API CONNECTION WORKED, "
-                "BUT NO FIXTURES WERE RETURNED.\n\n"
-                + empty_results_message(fixture_data)
+                "🔴 LIVE ENDPOINT TEST\n\n"
+                "Request successful.\n"
+                f"Live matches returned: {len(live_matches)}"
+            )
+
+        except APIRequestError as live_error:
+
+            await update.message.reply_text(
+                "⚠️ FIXTURES WORKED, BUT LIVE TEST FAILED.\n\n"
+                f"{str(live_error)[:1500]}"
             )
 
     except APIRequestError as error:
 
-        logger.error("Diagnostic API error: %s", error)
+        logger.error("GOAL diagnostic error: %s", error)
 
         await update.message.reply_text(
-            f"❌ API DIAGNOSTIC FAILED\n\n{str(error)[:3000]}"
+            f"❌ API DIAGNOSTIC FAILED\n\n{str(error)[:2500]}"
         )
 
     except Exception as error:
@@ -403,7 +481,7 @@ async def diagnose(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             f"❌ DIAGNOSTIC ERROR\n\n"
-            f"{type(error).__name__}: {str(error)[:1000]}"
+            f"{type(error).__name__}: {str(error)[:800]}"
         )
 
 
@@ -417,11 +495,11 @@ async def odds(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         message = (
             "📊 ODDS API STATUS\n\n"
-            "✅ ODDS_API_KEY is configured in Railway.\n\n"
+            "✅ ODDS_API_KEY is configured.\n\n"
             "Actual bookmaker coverage has not yet "
             "been verified.\n\n"
-            "We will only display prices returned by "
-            "a genuine, permitted data source."
+            "Football fixtures and bookmaker odds "
+            "are separate data services."
         )
 
     else:
@@ -443,8 +521,8 @@ async def compare(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 BOOKMAKER COMPARISON\n\n"
         "The comparison engine is under development.\n\n"
         "It will compare matching events and markets "
-        "across verified bookmakers.\n\n"
-        "We will not invent or estimate bookmaker prices."
+        "using verified bookmaker prices.\n\n"
+        "No bookmaker prices will be invented."
     )
 
 
@@ -483,9 +561,7 @@ async def calculator(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
 
-        values = [
-            float(value) for value in context.args
-        ]
+        values = [float(value) for value in context.args]
 
         if not values:
             raise ValueError("Enter at least one selection.")
@@ -500,6 +576,9 @@ async def calculator(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         combined = math.prod(values)
 
+        if not math.isfinite(combined):
+            raise ValueError("Combined odds are too large.")
+
         implied_probability = 100 / combined
 
         await update.message.reply_text(
@@ -508,8 +587,8 @@ async def calculator(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Combined odds: {combined:.2f}\n"
             f"Combined implied probability: "
             f"{implied_probability:.2f}%\n\n"
-            "Example: KSh 100 stake would return "
-            f"KSh {100 * combined:.2f} before any deductions.\n\n"
+            "KSh 100 stake would return "
+            f"KSh {100 * combined:.2f} before deductions.\n\n"
             "This is a mathematical calculation, "
             "not a guarantee of winning."
         )
@@ -565,7 +644,8 @@ def main():
 
     app.add_error_handler(error_handler)
 
-    logger.info("ODDS INTELLIGENCE AI starting...")
+    logger.info("PUNTER KENYA - ODDS INTELLIGENCE AI starting...")
+    logger.info("Football provider: GOAL API")
 
     app.run_polling()
 
