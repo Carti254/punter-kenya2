@@ -25,4 +25,29 @@ def get_fixtures():
             away = match.get("strAwayTeam", "Unknown")
             date = match.get("dateEvent", "")
 
-            message
+            message += f"{home} vs {away}\n📅 {date}\n\n"
+
+        return message
+
+    except Exception as e:
+        return f"Error fetching fixtures: {e}"
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "✅ Bot is running!\n\nUse /fixtures"
+    )
+
+
+async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(get_fixtures())
+
+
+app = Application.builder().token(TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("fixtures", fixtures))
+
+print("Bot started...")
+
+app.run_polling()
