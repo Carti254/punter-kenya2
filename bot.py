@@ -25,3 +25,6 @@ def get_fixtures():
 
     except Exception as e:
         return f"Error fetching fixtures: {e}"
+
+
+print(get_fixtures())
