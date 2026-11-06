@@ -18,51 +18,90 @@ API_FOOTBALL_URL = "https://v3.football.api-sports.io"
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🔥 PunterKenya AI\n\n"
-        "Commands:\n"
         "/fixtures\n"
         "/analyze Arsenal vs Chelsea\n"
+        "/live\n"
         "/banker\n"
-        "/acca\n"
         "/valuebets\n"
-        "/live"
+        "/acca"
     )
 
 
-def get_fixtures():
+def football_request(endpoint, params=None):
     headers = {
         "x-apisports-key": API_FOOTBALL_KEY
     }
 
     response = requests.get(
-        f"{API_FOOTBALL_URL}/fixtures?next=10",
+        f"{API_FOOTBALL_URL}/{endpoint}",
         headers=headers,
+        params=params,
         timeout=20
     )
 
     response.raise_for_status()
 
-    return response.json().get("response", [])
+    return response.json()
 
 
 async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        matches = get_fixtures()
+        data = football_request(
+            "fixtures",
+            {"next": 10}
+        )
+
+        matches = data.get("response", [])
 
         if not matches:
-            await update.message.reply_text(
-                "No fixtures found."
-            )
+            await update.message.reply_text("No fixtures found.")
             return
 
-        message = "⚽ Upcoming Fixtures\n\n"
+        text = "⚽ Upcoming Fixtures\n\n"
 
         for match in matches:
             home = match["teams"]["home"]["name"]
             away = match["teams"]["away"]["name"]
 
-            message += f"{home} vs {away}\n"
+            text += f"{home} vs {away}\n"
 
-        await update.message.reply_text(message)
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        await update.message.reply_text(
+            f"Error: {e}"
+        )
+
+
+async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        data = football_request(
+            "fixtures",
+            {"live": "all"}
+        )
+
+        matches = data.get("response", [])
+
+        if not matches:
+            await update.message.reply_text(
+                "No live matches."
+            )
+            return
+
+        text = "🔴 Live Matches\n\n"
+
+        for match in matches[:15]:
+            home = match["teams"]["home"]["name"]
+            away = match["teams"]["away"]["name"]
+
+            hg = match["goals"]["home"]
+            ag = match["goals"]["away"]
+
+            text += (
+                f"{home} {hg} - {ag} {away}\n"
+            )
+
+        await update.message.reply_text(text)
 
     except Exception as e:
         await update.message.reply_text(
@@ -72,29 +111,22 @@ async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def banker(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏦 Banker Research\n\n"
-        "Top banker engine coming online.\n"
-        "API connection successful."
+        "🏦 Banker Engine\n\n"
+        "Next step: connect real odds and probability calculations."
+    )
+
+
+async def valuebets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "💎 Value Bets Engine\n\n"
+        "Next step: connect The Odds API."
     )
 
 
 async def acca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎯 Accumulator Builder\n\n"
-        "Safe accumulator engine ready."
-    )
-
-
-async def valuebets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "💎 Value Bets\n\n"
-        "Odds scanner ready."
-    )
-
-
-async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🔴 Live matches engine ready."
+        "Next step: build selections from live odds."
     )
 
 
@@ -102,45 +134,17 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
         await update.message.reply_text(
-            "Usage:\n/analyze Arsenal vs Chelsea"
+            "Example:\n/analyze Arsenal vs Chelsea"
         )
         return
 
     match_name = " ".join(context.args)
 
     await update.message.reply_text(
-        f"📊 Match Analysis\n\n"
+        f"📊 Analysis\n\n"
         f"{match_name}\n\n"
-        f"Home Win: 45%\n"
-        f"Draw: 28%\n"
-        f"Away Win: 27%\n\n"
-        f"BTTS: 68%\n"
-        f"Over 1.5: 85%\n"
-        f"Over 2.5: 61%\n\n"
-        f"Recommended Bet:\n"
-        f"✅ Over 1.5 Goals"
+        f"Feature under development."
     )
 
 
 def main():
-
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN missing")
-
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("fixtures", fixtures))
-    app.add_handler(CommandHandler("analyze", analyze))
-    app.add_handler(CommandHandler("banker", banker))
-    app.add_handler(CommandHandler("acca", acca))
-    app.add_handler(CommandHandler("valuebets", valuebets))
-    app.add_handler(CommandHandler("live", live))
-
-    print("🔥 PunterKenya AI Running")
-
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
