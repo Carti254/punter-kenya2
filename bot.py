@@ -1,9 +1,8 @@
 
 import os
-import math
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import requests
@@ -14,314 +13,608 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from database import test_connection
+from database import get_connection, test_connection
 
-# ==========================================
+
+# ==========================================================
 # PUNTER KENYA - ODDS INTELLIGENCE AI
-# ==========================================
+# Version 3.0 - GOAL API + TiDB fixture storage
+# ==========================================================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 GOAL_API_KEY = os.getenv("GOAL_API_KEY")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
-GOAL_API_URL = "https://api.goal-api.com/v1"
-KENYA_TZ = ZoneInfo("Africa/Nairobi")
+GOAL_API_BASE = "https://api.goal-api.com/v1"
+PROVIDER_NAME = "goal_api"
+
+EAT = ZoneInfo("Africa/Nairobi")
 
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
-logger = logging.getLogger(__name__)
+
+logger = logging.getLogger("punter_kenya")
 
 
-# ==========================================
-# GOAL API
-# ==========================================
+# ==========================================================
+# GENERAL HELPERS
+# ==========================================================
 
-class APIRequestError(Exception):
-    pass
+def eat_now():
+    return datetime.now(EAT)
 
 
-def goal_request(endpoint, params=None):
-    if not GOAL_API_KEY:
-        raise APIRequestError(
-            "GOAL_API_KEY is missing from Railway Variables."
-        )
-
-    headers = {
-        "Authorization": f"Bearer {GOAL_API_KEY}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
+def safe_int(value):
+    if value is None or value == "":
+        return None
 
     try:
-        response = requests.get(
-            f"{GOAL_API_URL}/{endpoint.lstrip('/')}",
-            headers=headers,
-            params=params,
-            timeout=25,
-        )
-        result = response.json()
-
-    except requests.exceptions.Timeout:
-        raise APIRequestError("GOAL API timed out.")
-
-    except requests.exceptions.ConnectionError:
-        raise APIRequestError("Could not connect to GOAL API.")
-
-    except ValueError:
-        raise APIRequestError("GOAL API returned invalid JSON.")
-
-    except requests.exceptions.RequestException as error:
-        raise APIRequestError(f"Network error: {str(error)[:400]}")
-
-    if not response.ok:
-        raise APIRequestError(
-            f"GOAL API HTTP {response.status_code}: {str(result)[:700]}"
-        )
-
-    if isinstance(result, dict) and result.get("success") is False:
-        raise APIRequestError(
-            f"GOAL API rejected the request: {str(result)[:700]}"
-        )
-
-    return result
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
-def get_api_data(result):
-    if not isinstance(result, dict):
-        raise APIRequestError("Unexpected API response format.")
+def first_value(data, *keys):
+    if not isinstance(data, dict):
+        return None
 
-    data = result.get("data", [])
+    for key in keys:
+        value = data.get(key)
+
+        if value is not None and value != "":
+            return value
+
+    return None
+
+
+def nested_name(value):
+    if isinstance(value, dict):
+        return first_value(value, "name", "teamName", "title")
+
+    if isinstance(value, str):
+        return value
+
+    return None
+
+
+def parse_kickoff(value):
+    if not value:
+        return None
+
+    try:
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            dt = datetime.fromisoformat(
+                str(value).replace("Z", "+00:00")
+            )
+
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+        return dt
+
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_fixtures(response):
+    """
+    Supports the normal GOAL API data-list response
+    and common nested response structures.
+    """
+
+    if isinstance(response, list):
+        return response
+
+    if not isinstance(response, dict):
+        return []
+
+    data = response.get("data")
 
     if isinstance(data, list):
         return data
 
     if isinstance(data, dict):
-        return [data]
+        for key in ("fixtures", "matches", "results"):
+            if isinstance(data.get(key), list):
+                return data[key]
+
+    for key in ("fixtures", "matches", "results"):
+        if isinstance(response.get(key), list):
+            return response[key]
 
     return []
 
 
-# ==========================================
-# FORMATTING
-# ==========================================
+# ==========================================================
+# GOAL API CONNECTION
+# ==========================================================
 
-def kenya_time(date_string):
-    if not date_string:
-        return "Time unavailable"
+def goal_request(endpoint, params=None):
+    if not GOAL_API_KEY:
+        raise RuntimeError("GOAL_API_KEY is missing in Railway.")
 
-    try:
-        match_time = datetime.fromisoformat(
-            str(date_string).replace("Z", "+00:00")
+    url = f"{GOAL_API_BASE}/{endpoint.lstrip('/')}"
+
+    headers = {
+        "Authorization": f"Bearer {GOAL_API_KEY}",
+        "Accept": "application/json",
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        params=params or {},
+        timeout=30,
+    )
+
+    response.raise_for_status()
+
+    result = response.json()
+
+    if isinstance(result, dict) and result.get("success") is False:
+        raise RuntimeError(
+            result.get("message", "GOAL API returned an error.")
         )
 
-        if match_time.tzinfo is None:
-            match_time = match_time.replace(
-                tzinfo=ZoneInfo("UTC")
+    return result
+
+
+# ==========================================================
+# FIXTURE NORMALISATION
+# ==========================================================
+
+def normalise_fixture(fixture):
+    if not isinstance(fixture, dict):
+        return None
+
+    fixture_id = first_value(
+        fixture,
+        "id",
+        "fixtureId",
+        "matchId",
+        "match_id",
+    )
+
+    home = first_value(
+        fixture,
+        "homeTeamName",
+        "homeTeam",
+        "home_team",
+        "home",
+    )
+
+    away = first_value(
+        fixture,
+        "awayTeamName",
+        "awayTeam",
+        "away_team",
+        "away",
+    )
+
+    home_name = nested_name(home)
+    away_name = nested_name(away)
+
+    if not fixture_id or not home_name or not away_name:
+        return None
+
+    competition = first_value(
+        fixture,
+        "leagueName",
+        "competitionName",
+        "competition",
+        "league",
+    )
+
+    country = first_value(
+        fixture,
+        "countryName",
+        "country",
+    )
+
+    if isinstance(competition, dict):
+        if not country:
+            country = nested_name(
+                competition.get("country")
             )
 
-        return match_time.astimezone(KENYA_TZ).strftime(
-            "%d %b %Y, %H:%M EAT"
-        )
+        competition = nested_name(competition)
 
-    except (ValueError, TypeError):
-        return "Time unavailable"
-
-
-def field(match, *names, default="N/A"):
-    for name in names:
-        value = match.get(name)
-
-        if value is not None and value != "":
-            return value
-
-    return default
-
-
-def match_teams(match):
-    home = field(
-        match,
-        "homeTeamName",
-        "home_team_name",
-        default=None,
+    kickoff = first_value(
+        fixture,
+        "kickoffUtc",
+        "kickoff_utc",
+        "dateTime",
+        "matchDateTime",
+        "date",
     )
 
-    away = field(
-        match,
-        "awayTeamName",
-        "away_team_name",
-        default=None,
+    status = first_value(
+        fixture,
+        "matchStatus",
+        "status",
+        "fixtureStatus",
     )
 
-    if not home and isinstance(match.get("homeTeam"), dict):
-        home = match["homeTeam"].get("name")
-
-    if not away and isinstance(match.get("awayTeam"), dict):
-        away = match["awayTeam"].get("name")
-
-    return (
-        home or "Home team unavailable",
-        away or "Away team unavailable",
+    home_score = first_value(
+        fixture,
+        "homeTeamScore",
+        "homeScore",
+        "home_score",
     )
 
+    away_score = first_value(
+        fixture,
+        "awayTeamScore",
+        "awayScore",
+        "away_score",
+    )
 
-async def send_long_message(update, message):
-    limit = 3900
+    return {
+        "provider_match_id": str(fixture_id),
+        "competition": str(competition) if competition else None,
+        "country": str(country) if country else None,
+        "home_team": str(home_name),
+        "away_team": str(away_name),
+        "kickoff_at": parse_kickoff(kickoff),
+        "status": str(status) if status is not None else None,
+        "home_score": safe_int(home_score),
+        "away_score": safe_int(away_score),
+    }
 
-    for start in range(0, len(message), limit):
-        await update.message.reply_text(
-            message[start:start + limit]
-        )
+
+# ==========================================================
+# DATABASE FIXTURE STORAGE
+# ==========================================================
+
+def save_fixtures_to_database(fixtures):
+    """
+    Saves fixtures using the unique provider + fixture ID.
+    Existing records are updated instead of duplicated.
+    """
+
+    connection = get_connection()
+
+    received = len(fixtures)
+    saved = 0
+    skipped = 0
+    started_at = datetime.utcnow()
+
+    try:
+        with connection.cursor() as cursor:
+
+            cursor.execute(
+                """
+                INSERT INTO sync_runs
+                (
+                    provider,
+                    sync_type,
+                    records_received,
+                    records_saved,
+                    status,
+                    started_at
+                )
+                VALUES (%s, %s, %s, 0, %s, %s)
+                """,
+                (
+                    PROVIDER_NAME,
+                    "fixtures",
+                    received,
+                    "running",
+                    started_at,
+                ),
+            )
+
+            sync_id = cursor.lastrowid
+
+            for raw_fixture in fixtures:
+                fixture = normalise_fixture(raw_fixture)
+
+                if not fixture:
+                    skipped += 1
+                    continue
+
+                cursor.execute(
+                    """
+                    INSERT INTO matches
+                    (
+                        provider,
+                        provider_match_id,
+                        competition,
+                        country,
+                        home_team,
+                        away_team,
+                        kickoff_at,
+                        status,
+                        home_score,
+                        away_score,
+                        last_synced_at
+                    )
+                    VALUES
+                    (
+                        %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, CURRENT_TIMESTAMP
+                    )
+                    ON DUPLICATE KEY UPDATE
+                        competition = VALUES(competition),
+                        country = VALUES(country),
+                        home_team = VALUES(home_team),
+                        away_team = VALUES(away_team),
+                        kickoff_at = VALUES(kickoff_at),
+                        status = VALUES(status),
+                        home_score = VALUES(home_score),
+                        away_score = VALUES(away_score),
+                        last_synced_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        PROVIDER_NAME,
+                        fixture["provider_match_id"],
+                        fixture["competition"],
+                        fixture["country"],
+                        fixture["home_team"],
+                        fixture["away_team"],
+                        fixture["kickoff_at"],
+                        fixture["status"],
+                        fixture["home_score"],
+                        fixture["away_score"],
+                    ),
+                )
+
+                saved += 1
+
+            cursor.execute(
+                """
+                UPDATE sync_runs
+                SET
+                    records_saved = %s,
+                    status = %s,
+                    completed_at = %s
+                WHERE id = %s
+                """,
+                (
+                    saved,
+                    "success",
+                    datetime.utcnow(),
+                    sync_id,
+                ),
+            )
+
+        return {
+            "received": received,
+            "saved": saved,
+            "skipped": skipped,
+        }
+
+    except Exception as error:
+        logger.exception("Fixture database sync failed.")
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO sync_runs
+                    (
+                        provider,
+                        sync_type,
+                        records_received,
+                        records_saved,
+                        status,
+                        error_message,
+                        started_at,
+                        completed_at
+                    )
+                    VALUES (%s, %s, %s, 0, %s, %s, %s, %s)
+                    """,
+                    (
+                        PROVIDER_NAME,
+                        "fixtures",
+                        received,
+                        "failed",
+                        str(error)[:5000],
+                        started_at,
+                        datetime.utcnow(),
+                    ),
+                )
+        except Exception:
+            logger.exception("Could not record failed sync.")
+
+        raise
+
+    finally:
+        connection.close()
 
 
-# ==========================================
-# START AND HELP
-# ==========================================
+# ==========================================================
+# TELEGRAM COMMANDS
+# ==========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = (
-        "⚽ PUNTER KENYA\n"
-        "ODDS INTELLIGENCE AI\n\n"
-        "Your football research system.\n\n"
+        "⚽ PUNTER KENYA - ODDS INTELLIGENCE AI\n\n"
+        "Welcome to your football research system.\n\n"
         "COMMANDS\n\n"
-        "/fixtures - Upcoming fixtures\n"
+        "/fixtures - Upcoming football fixtures\n"
         "/live - Live football matches\n"
-        "/diagnose - Test GOAL API\n"
+        "/syncfixtures - Save fixtures into the database\n"
         "/dbtest - Test database connection\n"
-        "/odds - Odds API configuration\n"
-        "/compare - Bookmaker comparison\n"
-        "/bookmakers - Bookmaker coverage\n"
-        "/calculator - Calculate combined odds\n"
+        "/diagnose - Test GOAL API connection\n"
+        "/odds - Check odds API configuration\n"
+        "/compare - Bookmaker comparison status\n"
+        "/bookmakers - Supported bookmaker list\n"
+        "/calculator - Odds calculator\n"
         "/help - Show commands\n\n"
-        "Priority: verified data, accurate calculations "
-        "and transparent analysis."
+        "PUNTER KENYA is being built to research "
+        "football data, bookmaker odds and market movements."
     )
 
     await update.message.reply_text(message)
 
 
-async def help_command(update, context):
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
 
-# ==========================================
-# DATABASE TEST
-# ==========================================
-
-async def dbtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🗄️ DATABASE DIAGNOSTICS\n\n"
-        "Testing Railway connection to TiDB..."
-    )
-
-    try:
-        result = await asyncio.to_thread(test_connection)
-
-        database_name = result.get("database_name", "Unknown")
-        database_version = result.get("database_version", "Unknown")
-
-        await update.message.reply_text(
-            "✅ DATABASE CONNECTION SUCCESSFUL\n\n"
-            f"Database: {database_name}\n"
-            f"Server version: {database_version}\n\n"
-            "Railway can communicate with TiDB."
-        )
-
-    except Exception as error:
-        logger.exception("Database connection test failed")
-
-        await update.message.reply_text(
-            "❌ DATABASE CONNECTION FAILED\n\n"
-            f"Error: {type(error).__name__}\n"
-            f"Details: {str(error)[:1800]}\n\n"
-            "Check Railway database variables, TLS settings "
-            "and TiDB network access."
-        )
-
-
-# ==========================================
-# UPCOMING FIXTURES
-# ==========================================
+# ==========================================================
+# FIXTURES COMMAND
+# ==========================================================
 
 async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔎 CONNECTING TO GOAL API...\n\n"
-        "Retrieving upcoming fixtures."
+        "⚽ Fetching upcoming fixtures from GOAL API..."
     )
 
     try:
         result = await asyncio.to_thread(
             goal_request,
             "fixtures",
-            {"limit": 10, "offset": 0},
+            {"limit": 20, "offset": 0},
         )
 
-        matches = get_api_data(result)
+        matches = extract_fixtures(result)
 
         if not matches:
             await update.message.reply_text(
-                "No matches were returned. "
-                "Check competition coverage and API access."
+                "No fixtures were returned by GOAL API."
             )
             return
 
-        lines = ["⚽ UPCOMING FOOTBALL FIXTURES\n"]
+        output = [
+            "⚽ UPCOMING FIXTURES",
+            "",
+        ]
 
-        for match in matches[:10]:
-            home, away = match_teams(match)
+        for match in matches[:15]:
+            normalised = normalise_fixture(match)
 
-            league = field(
-                match,
-                "leagueName",
-                "league_name",
-                default="League unavailable",
-            )
+            if not normalised:
+                continue
 
-            country = field(
-                match,
-                "countryName",
-                "country_name",
-                default="",
-            )
+            kickoff = normalised["kickoff_at"]
 
-            kickoff = kenya_time(
-                field(
-                    match,
-                    "kickoffUtc",
-                    "kickoff_utc",
-                    "date",
-                    default=None,
+            if kickoff:
+                kickoff_text = (
+                    kickoff.replace(tzinfo=timezone.utc)
+                    .astimezone(EAT)
+                    .strftime("%d %b %Y - %H:%M EAT")
                 )
-            )
+            else:
+                kickoff_text = "Kickoff time unavailable"
 
             competition = (
-                f"{league} ({country})" if country else league
+                normalised["competition"] or "Competition unavailable"
             )
 
-            lines.append(
+            output.append(
                 f"🏆 {competition}\n"
-                f"⚽ {home} vs {away}\n"
-                f"🕒 {kickoff}\n"
+                f"🏠 {normalised['home_team']}\n"
+                f"🆚 {normalised['away_team']}\n"
+                f"🕒 {kickoff_text}\n"
             )
 
-        await send_long_message(update, "\n".join(lines))
+        await update.message.reply_text(
+            "\n".join(output)[:4000]
+        )
+
+        # Automatically store the returned fixtures.
+        try:
+            stats = await asyncio.to_thread(
+                save_fixtures_to_database,
+                matches,
+            )
+
+            await update.message.reply_text(
+                "✅ DATABASE FIXTURE SYNC\n\n"
+                f"Fixtures received: {stats['received']}\n"
+                f"Fixtures saved/updated: {stats['saved']}\n"
+                f"Fixtures skipped: {stats['skipped']}\n\n"
+                "Existing fixtures are updated instead of duplicated."
+            )
+
+        except Exception as db_error:
+            logger.exception("Automatic fixture storage failed.")
+
+            await update.message.reply_text(
+                "⚠️ Fixtures were retrieved from GOAL API, "
+                "but database storage failed.\n\n"
+                f"Error: {str(db_error)[:700]}"
+            )
+
+    except requests.RequestException as error:
+        logger.exception("GOAL API fixture request failed.")
+
+        await update.message.reply_text(
+            "❌ GOAL API request failed.\n\n"
+            f"{str(error)[:800]}"
+        )
 
     except Exception as error:
-        logger.exception("Fixtures error")
+        logger.exception("Fixture command failed.")
+
         await update.message.reply_text(
-            f"⚠️ FIXTURES ERROR\n\n{str(error)[:1800]}"
+            "❌ Fixture error.\n\n"
+            f"{str(error)[:800]}"
         )
 
 
-# ==========================================
+# ==========================================================
+# MANUAL FIXTURE SYNC COMMAND
+# ==========================================================
+
+async def syncfixtures(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    await update.message.reply_text(
+        "🔄 Fetching fixtures and saving them into TiDB..."
+    )
+
+    try:
+        result = await asyncio.to_thread(
+            goal_request,
+            "fixtures",
+            {"limit": 100, "offset": 0},
+        )
+
+        matches = extract_fixtures(result)
+
+        if not matches:
+            await update.message.reply_text(
+                "No fixtures returned. Nothing was saved."
+            )
+            return
+
+        stats = await asyncio.to_thread(
+            save_fixtures_to_database,
+            matches,
+        )
+
+        await update.message.reply_text(
+            "✅ FIXTURE SYNC COMPLETED\n\n"
+            f"Received: {stats['received']}\n"
+            f"Saved/updated: {stats['saved']}\n"
+            f"Skipped: {stats['skipped']}\n\n"
+            "Your matches table has been updated."
+        )
+
+    except Exception as error:
+        logger.exception("Manual fixture sync failed.")
+
+        await update.message.reply_text(
+            "❌ FIXTURE SYNC FAILED\n\n"
+            f"{str(error)[:900]}"
+        )
+
+
+# ==========================================================
 # LIVE MATCHES
-# ==========================================
+# ==========================================================
 
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔴 CONNECTING TO GOAL API...\n\n"
-        "Checking live matches."
+        "🔴 Checking live football matches..."
     )
 
     try:
@@ -330,67 +623,85 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "fixtures/live",
         )
 
-        matches = get_api_data(result)
+        matches = extract_fixtures(result)
 
         if not matches:
             await update.message.reply_text(
-                "🔴 No live matches returned."
+                "No live matches currently returned by GOAL API."
             )
             return
 
-        lines = ["🔴 LIVE FOOTBALL MATCHES\n"]
+        output = [
+            "🔴 LIVE FOOTBALL MATCHES",
+            "",
+        ]
 
-        for match in matches[:25]:
-            home, away = match_teams(match)
+        for match in matches[:20]:
+            normalised = normalise_fixture(match)
 
-            home_goals = field(
-                match,
-                "homeTeamScore",
-                "home_team_score",
-                default="0",
+            if not normalised:
+                continue
+
+            home_score = normalised["home_score"]
+            away_score = normalised["away_score"]
+
+            score = (
+                f"{home_score if home_score is not None else '-'}"
+                f" - "
+                f"{away_score if away_score is not None else '-'}"
             )
 
-            away_goals = field(
-                match,
-                "awayTeamScore",
-                "away_team_score",
-                default="0",
+            status = normalised["status"] or "LIVE"
+
+            output.append(
+                f"⚽ {normalised['home_team']} "
+                f"{score} {normalised['away_team']}\n"
+                f"⏱ {status}\n"
             )
 
-            league = field(
-                match,
-                "leagueName",
-                "league_name",
-                default="League unavailable",
-            )
-
-            minute = field(
-                match,
-                "matchMinute",
-                "matchElapsed",
-                "match_status",
-                default="LIVE",
-            )
-
-            lines.append(
-                f"🏆 {league}\n"
-                f"⚽ {home} {home_goals} - "
-                f"{away_goals} {away}\n"
-                f"⏱ {minute}\n"
-            )
-
-        await send_long_message(update, "\n".join(lines))
+        await update.message.reply_text(
+            "\n".join(output)[:4000]
+        )
 
     except Exception as error:
-        logger.exception("Live matches error")
+        logger.exception("Live matches request failed.")
+
         await update.message.reply_text(
-            f"⚠️ LIVE API ERROR\n\n{str(error)[:1800]}"
+            "❌ Could not retrieve live matches.\n\n"
+            f"{str(error)[:800]}"
         )
 
 
-# ==========================================
+# ==========================================================
+# DATABASE TEST
+# ==========================================================
+
+async def dbtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🔄 Testing TiDB database connection..."
+    )
+
+    try:
+        result = await asyncio.to_thread(test_connection)
+
+        await update.message.reply_text(
+            "✅ DATABASE CONNECTION SUCCESSFUL\n\n"
+            f"Database: {result['database_name']}\n"
+            f"Server version: {result['database_version']}"
+        )
+
+    except Exception as error:
+        logger.exception("Database test failed.")
+
+        await update.message.reply_text(
+            "❌ DATABASE CONNECTION FAILED\n\n"
+            f"{str(error)[:900]}"
+        )
+
+
+# ==========================================================
 # API DIAGNOSTICS
-# ==========================================
+# ==========================================================
 
 async def diagnose(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -398,203 +709,222 @@ async def diagnose(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Checking API authentication and fixtures."
     )
 
-    if not GOAL_API_KEY:
-        await update.message.reply_text(
-            "❌ GOAL_API_KEY is missing in Railway Variables."
-        )
-        return
-
     try:
-        fixture_result = await asyncio.to_thread(
+        result = await asyncio.to_thread(
             goal_request,
             "fixtures",
             {"limit": 5, "offset": 0},
         )
 
-        matches = get_api_data(fixture_result)
+        matches = extract_fixtures(result)
 
         await update.message.reply_text(
             "✅ API AUTHENTICATION SUCCESSFUL\n\n"
+            "GOAL API accepted the request.\n"
             "Endpoint: /fixtures\n"
             f"Fixtures returned: {len(matches)}\n"
-            f"Success: {fixture_result.get('success', 'Not supplied')}"
+            "Success: True"
         )
-
-        try:
-            live_result = await asyncio.to_thread(
-                goal_request,
-                "fixtures/live",
-            )
-
-            live_matches = get_api_data(live_result)
-
-            await update.message.reply_text(
-                "🔴 LIVE ENDPOINT TEST\n\n"
-                "Request successful.\n"
-                f"Live matches returned: {len(live_matches)}"
-            )
-
-        except Exception as error:
-            await update.message.reply_text(
-                f"⚠️ LIVE TEST FAILED\n\n{str(error)[:1200]}"
-            )
 
     except Exception as error:
-        logger.exception("GOAL API diagnostic failed")
+        logger.exception("GOAL API diagnostic failed.")
+
         await update.message.reply_text(
-            f"❌ API DIAGNOSTIC FAILED\n\n{str(error)[:1800]}"
+            "❌ GOAL API DIAGNOSTIC FAILED\n\n"
+            f"{str(error)[:900]}"
+        )
+
+    try:
+        live_result = await asyncio.to_thread(
+            goal_request,
+            "fixtures/live",
+        )
+
+        live_matches = extract_fixtures(live_result)
+
+        await update.message.reply_text(
+            "🔴 LIVE ENDPOINT TEST\n\n"
+            "Request successful.\n"
+            f"Live matches returned: {len(live_matches)}"
+        )
+
+    except Exception as error:
+        logger.exception("Live endpoint diagnostic failed.")
+
+        await update.message.reply_text(
+            "⚠️ LIVE ENDPOINT TEST FAILED\n\n"
+            f"{str(error)[:700]}"
         )
 
 
-# ==========================================
-# ODDS API STATUS
-# ==========================================
+# ==========================================================
+# ODDS CONFIGURATION
+# ==========================================================
 
 async def odds(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ODDS_API_KEY:
         message = (
-            "📊 ODDS API STATUS\n\n"
-            "✅ ODDS_API_KEY is configured.\n\n"
-            "Actual bookmaker coverage has not yet "
-            "been verified."
+            "✅ ODDS API KEY CONFIGURED\n\n"
+            "An odds API key is present in Railway.\n"
+            "Actual bookmaker odds collection is not yet connected."
         )
     else:
         message = (
-            "❌ ODDS_API_KEY is missing from Railway."
+            "⚠️ ODDS API KEY NOT CONFIGURED\n\n"
+            "No ODDS_API_KEY was found in Railway.\n"
+            "The bookmaker odds collection system is still under development."
         )
 
     await update.message.reply_text(message)
 
 
-# ==========================================
-# BOOKMAKER COMPARISON
-# ==========================================
+# ==========================================================
+# BOOKMAKERS
+# ==========================================================
+
+async def bookmakers(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    names = [
+        "BetPawa",
+        "SportyBet",
+        "SportPesa",
+        "Odibets",
+        "Mozzart Bet",
+        "1xBet",
+    ]
+
+    message = "🏦 PUNTER KENYA BOOKMAKERS\n\n"
+
+    for name in names:
+        message += f"• {name}\n"
+
+    message += (
+        "\nThese bookmakers are registered in the system's "
+        "initial list. Live odds feeds have not yet been verified "
+        "or connected."
+    )
+
+    await update.message.reply_text(message)
+
+
+# ==========================================================
+# BOOKMAKER COMPARISON STATUS
+# ==========================================================
 
 async def compare(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📊 BOOKMAKER COMPARISON\n\n"
-        "The comparison engine is under development.\n\n"
-        "It will compare matching events and markets "
-        "using verified bookmaker prices.\n\n"
-        "No bookmaker prices will be invented."
+        "📊 ODDS COMPARISON SYSTEM\n\n"
+        "Status: Under development.\n\n"
+        "The comparison engine will need verified bookmaker "
+        "odds feeds before it can compare prices, identify "
+        "price differences or calculate value.\n\n"
+        "No live bookmaker comparison is being claimed yet."
     )
 
 
-async def bookmakers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🇰🇪 KENYAN BOOKMAKER COVERAGE\n\n"
-        "Bookmakers being investigated:\n\n"
-        "1. BetPawa\n"
-        "2. SportyBet\n"
-        "3. SportPesa\n"
-        "4. Odibets\n"
-        "5. Mozzart Bet\n"
-        "6. 1xBet\n\n"
-        "Status: Not yet verified.\n\n"
-        "A bookmaker will only be marked active "
-        "after its data source is tested."
-    )
-
-
-# ==========================================
+# ==========================================================
 # ODDS CALCULATOR
-# ==========================================
+# ==========================================================
 
-async def calculator(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def calculator(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     if not context.args:
         await update.message.reply_text(
             "🧮 ODDS CALCULATOR\n\n"
-            "Enter decimal odds separated by spaces.\n\n"
+            "Usage:\n"
+            "/calculator 2.50 100\n\n"
             "Example:\n"
-            "/calculator 1.50 2.00 1.80"
+            "/calculator 2.50 100"
         )
         return
 
     try:
-        values = [float(value) for value in context.args]
+        decimal_odds = float(context.args[0])
+        stake = float(context.args[1]) if len(context.args) > 1 else 100
 
-        if any(
-            not math.isfinite(value) or value <= 1
-            for value in values
-        ):
-            raise ValueError(
-                "Every decimal odd must be greater than 1."
-            )
+        if decimal_odds <= 1 or stake <= 0:
+            raise ValueError("Odds must exceed 1 and stake must be positive.")
 
-        combined = math.prod(values)
-
-        if not math.isfinite(combined):
-            raise ValueError("Combined odds are too large.")
-
-        implied_probability = 100 / combined
+        potential_return = decimal_odds * stake
+        potential_profit = potential_return - stake
+        implied_probability = (1 / decimal_odds) * 100
 
         await update.message.reply_text(
-            "🧮 CALCULATION RESULT\n\n"
-            f"Selections: {len(values)}\n"
-            f"Combined odds: {combined:.2f}\n"
-            f"Combined implied probability: "
-            f"{implied_probability:.2f}%\n\n"
-            "KSh 100 stake would return "
-            f"KSh {100 * combined:.2f} before deductions.\n\n"
-            "This is a mathematical calculation, "
-            "not a guarantee of winning."
+            "🧮 ODDS CALCULATION\n\n"
+            f"Decimal odds: {decimal_odds:.2f}\n"
+            f"Stake: KSh {stake:,.2f}\n"
+            f"Potential return: KSh {potential_return:,.2f}\n"
+            f"Potential profit: KSh {potential_profit:,.2f}\n"
+            f"Implied probability: {implied_probability:.2f}%"
         )
 
-    except (ValueError, OverflowError) as error:
+    except (ValueError, IndexError):
         await update.message.reply_text(
-            f"⚠️ INVALID INPUT\n\n{str(error)}"
+            "❌ Invalid input.\n\n"
+            "Example: /calculator 2.50 100"
         )
 
 
-# ==========================================
-# TELEGRAM ERROR HANDLER
-# ==========================================
+# ==========================================================
+# ERROR HANDLER
+# ==========================================================
 
-async def error_handler(update, context):
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     logger.error(
-        "Telegram application error",
+        "Telegram update caused an error:",
         exc_info=context.error,
     )
 
 
-# ==========================================
-# MAIN APPLICATION
-# ==========================================
+# ==========================================================
+# START BOT
+# ==========================================================
 
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError(
-            "BOT_TOKEN is missing in Railway Variables."
+        raise RuntimeError("BOT_TOKEN is missing in Railway variables.")
+
+    if not GOAL_API_KEY:
+        logger.warning(
+            "GOAL_API_KEY is missing. GOAL API commands will not work."
         )
 
-    app = (
+    application = (
         Application.builder()
         .token(BOT_TOKEN)
         .build()
     )
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
 
-    app.add_handler(CommandHandler("fixtures", fixtures))
-    app.add_handler(CommandHandler("live", live))
-    app.add_handler(CommandHandler("diagnose", diagnose))
+    application.add_handler(CommandHandler("fixtures", fixtures))
+    application.add_handler(CommandHandler("syncfixtures", syncfixtures))
+    application.add_handler(CommandHandler("live", live))
 
-    app.add_handler(CommandHandler("dbtest", dbtest))
+    application.add_handler(CommandHandler("dbtest", dbtest))
+    application.add_handler(CommandHandler("diagnose", diagnose))
 
-    app.add_handler(CommandHandler("odds", odds))
-    app.add_handler(CommandHandler("compare", compare))
-    app.add_handler(CommandHandler("bookmakers", bookmakers))
+    application.add_handler(CommandHandler("odds", odds))
+    application.add_handler(CommandHandler("bookmakers", bookmakers))
+    application.add_handler(CommandHandler("compare", compare))
+    application.add_handler(CommandHandler("calculator", calculator))
 
-    app.add_handler(CommandHandler("calculator", calculator))
+    application.add_error_handler(error_handler)
 
-    app.add_error_handler(error_handler)
+    logger.info("PUNTER KENYA is starting...")
 
-    logger.info("PUNTER KENYA - ODDS INTELLIGENCE AI starting...")
-    logger.info("Football provider: GOAL API")
-    logger.info("Database diagnostics: enabled")
-
-    app.run_polling()
+    application.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES,
+    )
 
 
 if __name__ == "__main__":
