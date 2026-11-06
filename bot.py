@@ -15,6 +15,7 @@ TOKEN = os.getenv("TOKEN")
 keyboard = [
     ["⚽ Today's Matches"],
     ["🏆 Top Leagues"],
+    ["📊 Analyze Match"],
     ["ℹ️ Help"]
 ]
 
@@ -26,28 +27,34 @@ reply_markup = ReplyKeyboardMarkup(
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔥 Welcome to PunterKenyaBot",
+        "🔥 Welcome to PunterKenyaBot\n\nChoose an option:",
         reply_markup=reply_markup
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Use the buttons below."
+        "Available options:\n\n"
+        "⚽ Today's Matches\n"
+        "🏆 Top Leagues\n"
+        "📊 Analyze Match"
     )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     text = update.message.text
 
     if text == "🏆 Top Leagues":
+
         await update.message.reply_text(
-            "🏆 Supported Leagues\n\n"
-            "Premier League\n"
-            "La Liga\n"
-            "Serie A\n"
-            "Bundesliga\n"
-            "Ligue 1"
+            "🏆 Top Leagues\n\n"
+            "🇬🇧 Premier League\n"
+            "🇪🇸 La Liga\n"
+            "🇮🇹 Serie A\n"
+            "🇩🇪 Bundesliga\n"
+            "🇫🇷 Ligue 1\n"
+            "🏆 Champions League"
         )
 
     elif text == "⚽ Today's Matches":
@@ -73,7 +80,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 away = match.get("strAwayTeam", "Unknown")
                 date = match.get("dateEvent", "")
 
-                message += f"{home} vs {away}\n📅 {date}\n\n"
+                message += (
+                    f"{home} vs {away}\n"
+                    f"📅 {date}\n\n"
+                )
 
             await update.message.reply_text(message)
 
@@ -82,9 +92,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Error loading fixtures: {e}"
             )
 
-    else:
+    elif text == "📊 Analyze Match":
+
         await update.message.reply_text(
-            "Use the menu buttons."
+            "📊 Match Analysis\n\n"
+            "Send a match exactly like this:\n\n"
+            "Liverpool vs Arsenal\n"
+            "Barcelona vs Real Madrid\n"
+            "Chelsea vs Newcastle\n\n"
+            "⚠ Real analysis engine coming next."
+        )
+
+    elif " vs " in text.lower():
+
+        await update.message.reply_text(
+            f"📊 Analysis requested:\n\n{text}\n\n"
+            "✅ Match received\n"
+            "✅ Teams detected\n\n"
+            "🚧 Deep AI analysis will be added next."
+        )
+
+    else:
+
+        await update.message.reply_text(
+            "Please use the menu buttons."
         )
 
 
@@ -92,6 +123,7 @@ app = Application.builder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("help", help_command))
+
 app.add_handler(
     MessageHandler(
         filters.TEXT & ~filters.COMMAND,
