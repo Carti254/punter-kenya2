@@ -1,66 +1,31 @@
-import requests
-from telegram import ReplyKeyboardMarkup, Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
-import os
+elif text == "⚽ Today's Matches":
 
-TOKEN = os.getenv("TOKEN")
+    url = "https://www.thesportsdb.com/api/v1/json/123/eventsnextleague.php?id=4328"
 
-keyboard = [
-    ["⚽ Today's Matches"],
-    ["🏆 Top Leagues"],
-    ["ℹ️ Help"]
-]
+    try:
+        response = requests.get(url, timeout=10)
+        data = response.json()
 
-reply_markup = ReplyKeyboardMarkup(
-    keyboard,
-    resize_keyboard=True
-)
+        events = data.get("events", [])
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🔥 Welcome to PunterKenyaBot\n\nChoose an option:",
-        reply_markup=reply_markup
-    )
+        if not events:
+            await update.message.reply_text(
+                "No fixtures found."
+            )
+            return
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Available options:\n\n⚽ Today's Matches\n🏆 Top Leagues"
-    )
+        message = "⚽ Upcoming Premier League Matches\n\n"
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+        for match in events[:10]:
+            home = match.get("strHomeTeam", "Unknown")
+            away = match.get("strAwayTeam", "Unknown")
+            date = match.get("dateEvent", "")
 
-    if text == "🏆 Top Leagues":
+            message += f"{home} vs {away}\n📅 {date}\n\n"
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
         await update.message.reply_text(
-            "🏆 Supported leagues:\n\n"
-            "Premier League\n"
-            "La Liga\n"
-            "Serie A\n"
-            "Bundesliga\n"
-            "Ligue 1"
+            f"Error loading fixtures: {e}"
         )
-
-    elif text == "⚽ Today's Matches":
-        await update.message.reply_text(
-            "🚧 Live fixtures integration coming next.\n"
-            "This button is now connected and ready."
-        )
-
-    else:
-        await update.message.reply_text(
-            "Choose one of the menu buttons."
-        )
-
-app = Application.builder().token(TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("help", help_command))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-app.run_polling()
