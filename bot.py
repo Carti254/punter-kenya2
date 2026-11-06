@@ -2,9 +2,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import requests
 
-# PASTE YOUR REAL BOTFATHER TOKEN BETWEEN THE QUOTES
-TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
-
+TOKEN = "YOUR_BOTFATHER_TOKEN_HERE"
 
 def get_fixtures():
     url = "https://www.thesportsdb.com/api/v1/json/3/eventsnextleague.php?id=4328"
@@ -23,14 +21,26 @@ def get_fixtures():
         for match in events[:10]:
             home = match.get("strHomeTeam", "Unknown")
             away = match.get("strAwayTeam", "Unknown")
-            date = match.get("dateEvent", "Unknown Date")
+            date = match.get("dateEvent", "Unknown")
 
             message += f"{home} vs {away}\n📅 {date}\n\n"
 
         return message
 
     except Exception as e:
-        return f"Error: {e}"
+        return str(e)
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ Bot is running!")
 
-async def start(update: Update, 
+async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(get_fixtures())
+
+app = Application.builder().token(TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("fixtures", fixtures))
+
+print("Bot started")
+
+app.run_polling()
