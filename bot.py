@@ -1,4 +1,10 @@
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 import requests
+import os
+
+TOKEN = os.getenv("BOT_TOKEN")
+
 
 def get_fixtures():
     url = "https://www.thesportsdb.com/api/v1/json/123/eventsnextleague.php?id=4328"
@@ -19,12 +25,4 @@ def get_fixtures():
             away = match.get("strAwayTeam", "Unknown")
             date = match.get("dateEvent", "")
 
-            message += f"{home} vs {away}\n📅 {date}\n\n"
-
-        return message
-
-    except Exception as e:
-        return f"Error fetching fixtures: {e}"
-
-
-print(get_fixtures())
+            message
