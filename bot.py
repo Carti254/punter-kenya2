@@ -8,21 +8,26 @@ from telegram.ext import (
     ContextTypes,
 )
 
-BOT_TOKEN = os.getenv("9031121490:AAGq3wUDUrD9qXc1OspIyNZWMTZ5jfY9bMI")
-API_FOOTBALL_KEY = os.getenv("d75bb15f1a4252aa256f633460cb4fe2e78433827f327a654cd43d8bc484ee94")
-ODDS_API_KEY = os.getenv("9682f8a9f5db8cff1348a0f1603f8745")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
+ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🔥 PunterKenya AI\n\n"
-        "Commands:\n"
-        "/fixtures\n"
-        "/banker\n"
-        "/acca\n"
-        "/valuebets\n"
-        "/analyze Arsenal vs Chelsea"
-    )
+    text = """
+🔥 PunterKenya AI
+
+Commands:
+
+/fixtures
+/banker
+/acca
+/valuebets
+
+Example:
+/analyze Arsenal vs Chelsea
+"""
+    await update.message.reply_text(text)
 
 
 async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -41,7 +46,16 @@ async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         data = response.json()
 
-        fixtures = data.get("response", [])
+        matches = data.get("response", [])
 
-        if not fixtures:
-            await
+        if not matches:
+            await update.message.reply_text(
+                "No fixtures found."
+            )
+            return
+
+        message = "⚽ Upcoming Fixtures\n\n"
+
+        for match in matches[:10]:
+            home = match["teams"]["home"]["name"]
+    
