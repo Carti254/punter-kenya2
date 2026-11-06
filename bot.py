@@ -1,18 +1,18 @@
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-TOKEN = "YOUR_REAL_BOTFATHER_TOKEN"
+TOKEN = "PUT_YOUR_NEW_BOT_TOKEN_HERE"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot works!")
+    await update.message.reply_text("✅ Bot is online!")
 
-app = Application.builder().token(TOKEN).build()
+def main():
+    app = Application.builder().token(TOKEN).build()
 
-app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start", start))
 
-print("Starting bot...")
+    print("Bot started successfully")
+    app.run_polling()
 
-app.run_polling(
-    drop_pending_updates=True,
-    allowed_updates=[]
-)
+if __name__ == "__main__":
+    main()
