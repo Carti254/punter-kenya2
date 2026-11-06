@@ -1,46 +1,18 @@
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-import requests
 
-TOKEN = "YOUR_BOTFATHER_TOKEN_HERE"
-
-def get_fixtures():
-    url = "https://www.thesportsdb.com/api/v1/json/3/eventsnextleague.php?id=4328"
-
-    try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-
-        events = data.get("events", [])
-
-        if not events:
-            return "No fixtures found."
-
-        message = "⚽ Upcoming Premier League Matches\n\n"
-
-        for match in events[:10]:
-            home = match.get("strHomeTeam", "Unknown")
-            away = match.get("strAwayTeam", "Unknown")
-            date = match.get("dateEvent", "Unknown")
-
-            message += f"{home} vs {away}\n📅 {date}\n\n"
-
-        return message
-
-    except Exception as e:
-        return str(e)
+TOKEN = "YOUR_REAL_BOTFATHER_TOKEN"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot is running!")
-
-async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(get_fixtures())
+    await update.message.reply_text("Bot works!")
 
 app = Application.builder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("fixtures", fixtures))
 
-print("Bot started")
+print("Starting bot...")
 
-app.run_polling()
+app.run_polling(
+    drop_pending_updates=True,
+    allowed_updates=[]
+)
