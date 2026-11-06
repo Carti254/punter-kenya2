@@ -1,46 +1,3 @@
-import os
-import requests
-
-from telegram import ReplyKeyboardMarkup, Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
-
-TOKEN = os.getenv("TOKEN")
-
-keyboard = [
-    ["⚽ Today's Matches"],
-    ["🏆 Top Leagues"],
-    ["📊 Analyze Match"],
-    ["ℹ️ Help"]
-]
-
-reply_markup = ReplyKeyboardMarkup(
-    keyboard,
-    resize_keyboard=True
-)
-
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🔥 PunterKenyaBot\n\nSelect an option:",
-        reply_markup=reply_markup
-    )
-
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Available features:\n\n"
-        "⚽ Today's Matches\n"
-        "🏆 Top Leagues\n"
-        "📊 Analyze Match"
-    )
-
-
 def get_fixtures():
     url = "https://www.thesportsdb.com/api/v1/json/123/eventsnextleague.php?id=4328"
 
@@ -55,4 +12,10 @@ def get_fixtures():
     message = "⚽ Upcoming Premier League Matches\n\n"
 
     for match in events[:10]:
-        home = match
+        home = match.get("strHomeTeam", "Unknown")
+        away = match.get("strAwayTeam", "Unknown")
+        date = match.get("dateEvent", "")
+
+        message += f"{home} vs {away}\n📅 {date}\n\n"
+
+    return message
