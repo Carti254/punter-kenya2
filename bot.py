@@ -504,7 +504,7 @@ def fetch_all_leagues():
     return collected
 
 
-def fetch_upcoming_fixture_rows(days=14):
+def fetch_upcoming_fixture_rows(days=14, league_id=None):
     """
     Use the documented date endpoint instead of scanning the first page
     of the entire fixtures database. Include yesterday for UTC/EAT boundary
@@ -520,9 +520,13 @@ def fetch_upcoming_fixture_rows(days=14):
         offset = 0
 
         for _ in range(20):
+            params = {"limit": limit, "offset": offset}
+            if league_id:
+                params["leagueId"] = str(league_id)
+
             payload = goal_request(
                 f"fixtures/date/{fixture_date.isoformat()}",
-                {"limit": limit, "offset": offset},
+                params,
             )
             rows = extract_fixtures(payload)
             if not rows:
@@ -763,6 +767,7 @@ async def start(
         "/diagnose — test GOAL API endpoints\n"
         "/leagues [SEARCH] — search the synced competition catalogue\n"
         "/syncleagues — download all available competitions\n"
+        "/leaguefixtures LEAGUE_ID — show fixtures for one competition\n"
         "/fixtures — show the nearest upcoming fixtures\n"
         "/syncfixtures — save upcoming fixtures\n"
         "/live — show live matches\n\n"
@@ -1033,6 +1038,71 @@ async def syncleagues(
         logger.exception("Full league catalogue sync failed")
         await reply(update, f"❌ LEAGUE SYNC FAILED\n\n{str(exc)[:800]}")
 
+
+async def leaguefixtures(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """Show the nearest fixtures for one user-selected competition."""
+    if not context.args:
+        await reply(
+            update,
+            "Usage: /leaguefixtures LEAGUE_ID\n"
+            "Find a competition ID with /leagues SEARCH.",
+        )
+        return
+
+    league_id = context.args[0].strip()
+    if not league_id:
+        await reply(update, "Enter a valid league ID.")
+        return
+
+    await reply(
+        update,
+        f"⚽ Fetching the next 14 days for league {league_id}...",
+    )
+
+    try:
+        raw_rows = await asyncio.to_thread(
+            fetch_upcoming_fixture_rows,
+            14,
+            league_id,
+        )
+        selected = upcoming_fixtures(raw_rows, limit=20)
+
+        if not selected:
+            await reply(
+                update,
+                "No upcoming fixtures were returned for this league "
+                "in the next 14 days. This may also mean the API has no "
+                "fixture coverage for the selected competition.",
+            )
+            return
+
+        lines = [f"⚽ LEAGUE FIXTURES — {len(selected)} shown", ""]
+        for _, item in selected:
+            kickoff = (
+                item["kickoff_at"]
+                .replace(tzinfo=timezone.utc)
+                .astimezone(EAT)
+            )
+            lines.append(
+                f"🏆 {item['competition'] or 'Competition unavailable'}\n"
+                f"🏠 {item['home_team']}\n"
+                f"🆚 {item['away_team']}\n"
+                f"🕒 {kickoff:%d %b %Y — %H:%M EAT}\n"
+            )
+
+        await reply(update, "\n".join(lines))
+
+    except Exception as exc:
+        logger.exception("League fixture retrieval failed")
+        await reply(
+            update,
+            f"❌ LEAGUE FIXTURE REQUEST FAILED\n\n{str(exc)[:700]}",
+        )
+
+
 # ============================================================
 # UPCOMING FIXTURES
 # ============================================================
@@ -1063,11 +1133,9 @@ async def fixtures(
 
             await reply(
                 update,
-                "No upcoming fixtures could be identified "
-                "in the first API page.\n"
-                f"Records received: {len(raw_rows)}\n"
-                "This does not prove there are no fixtures; "
-                "pagination and API date filters still need verification.",
+                "No upcoming fixtures were returned in the 14-day date search.\n"
+                f"Date records received: {len(raw_rows)}\n"
+                "Try again later or check the selected competition's coverage.",
             )
 
             return
@@ -1142,9 +1210,9 @@ async def syncfixtures(
 
             await reply(
                 update,
-                "⚠️ No upcoming fixtures were identified "
-                "on the first API page. Nothing was saved.\n"
-                f"Records received: {len(raw_rows)}",
+                "⚠️ No upcoming fixtures were returned by the 14-day date search. "
+                "Nothing was saved.\n"
+                f"Date records received: {len(raw_rows)}",
             )
 
             return
@@ -1435,6 +1503,7 @@ def main():
         ("diagnose", diagnose),
         ("leagues", leagues),
         ("syncleagues", syncleagues),
+        ("leaguefixtures", leaguefixtures),
         ("fixtures", fixtures),
         ("syncfixtures", syncfixtures),
         ("live", live),
