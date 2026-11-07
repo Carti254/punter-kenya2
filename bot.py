@@ -1147,6 +1147,7 @@ async def start(
         "/deepdive — full analysis with simple summary\n"
         "/value — compare supplied 1X2 odds with model estimates\n"
         "/topvalue — value scanner status\n"
+        "/record — historical forecast accuracy tracker\n"
         "/live — explain live-data availability\n\n"
         "TOOLS\n"
         "/calculator ODDS STAKE — calculate potential returns\n"
@@ -2424,6 +2425,176 @@ async def value_command(update, context):
 async def topvalue_command(update, context):
     await reply(update, "📊 TOP VALUE SCANNER\n\nNo verified bookmaker odds feed is connected. PUNTER cannot honestly rank value bets without current prices.\n\nUse /value TEAM A vs TEAM B HOME_ODDS DRAW_ODDS AWAY_ODDS to compare your supplied 1X2 prices with the model. No odds = no value verdict.")
 
+
+def ensure_prediction_records_table(cursor):
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS punter_prediction_records (
+            id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            fixture_key VARCHAR(500) NOT NULL UNIQUE,
+            league_shortcut VARCHAR(120) NOT NULL,
+            match_date DATE NOT NULL,
+            home_team VARCHAR(180) NOT NULL,
+            away_team VARCHAR(180) NOT NULL,
+            p_home DECIMAL(9,6) NOT NULL,
+            p_draw DECIMAL(9,6) NOT NULL,
+            p_away DECIMAL(9,6) NOT NULL,
+            p_over15 DECIMAL(9,6) NOT NULL,
+            p_over25 DECIMAL(9,6) NOT NULL,
+            predicted_home_goals INT NOT NULL,
+            predicted_away_goals INT NOT NULL,
+            actual_home_goals INT NULL,
+            actual_away_goals INT NULL,
+            status VARCHAR(12) NOT NULL DEFAULT 'PENDING',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            settled_at TIMESTAMP NULL,
+            INDEX idx_prediction_status (status),
+            INDEX idx_prediction_league (league_shortcut)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+
+
+def save_prediction_record(raw_fixture, fixture, prediction):
+    connection = get_connection()
+    try:
+        kickoff = fixture.get("kickoff_at")
+        if not kickoff:
+            raise RuntimeError("Fixture kickoff date is missing.")
+        match_date = kickoff.replace(tzinfo=timezone.utc).astimezone(EAT).date()
+        folder = str(raw_fixture.get("leagueShortcut") or "").strip()
+        if not folder:
+            raise RuntimeError("Competition reference is missing.")
+        key = "|".join([
+            folder, match_date.isoformat(),
+            canonical_team_key(fixture["home_team"]),
+            canonical_team_key(fixture["away_team"]),
+        ])
+        with connection.cursor() as cursor:
+            ensure_prediction_records_table(cursor)
+            cursor.execute("""
+                INSERT IGNORE INTO punter_prediction_records
+                (fixture_key, league_shortcut, match_date, home_team, away_team,
+                 p_home, p_draw, p_away, p_over15, p_over25,
+                 predicted_home_goals, predicted_away_goals)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (
+                key, folder, match_date, fixture["home_team"], fixture["away_team"],
+                prediction["home_win"], prediction["draw"], prediction["away_win"],
+                prediction["over_15"], prediction["over_25"],
+                prediction["score"][0], prediction["score"][1],
+            ))
+        return True
+    finally:
+        connection.close()
+
+
+def refresh_and_read_prediction_records():
+    connection = get_connection()
+    try:
+        with connection.cursor() as cursor:
+            ensure_prediction_records_table(cursor)
+            cursor.execute("""
+                SELECT id, league_shortcut, match_date, home_team, away_team,
+                       p_home, p_draw, p_away, p_over15, p_over25,
+                       actual_home_goals, actual_away_goals, status
+                FROM punter_prediction_records
+                ORDER BY match_date DESC
+            """)
+            records = cursor.fetchall()
+
+        pending_by_league = {}
+        for record in records:
+            if record["status"] == "PENDING":
+                pending_by_league.setdefault(record["league_shortcut"], []).append(record)
+
+        settled_now = 0
+        for folder, pending in pending_by_league.items():
+            try:
+                results = fetch_openmatchday_csv(folder, "results")
+            except Exception as exc:
+                logger.warning("Could not refresh prediction records for %s: %s", folder, exc)
+                continue
+            for record in pending:
+                for row in results:
+                    if str(row.get("date") or "").strip() != record["match_date"].isoformat():
+                        continue
+                    if not (team_name_matches_query(record["home_team"], str(row.get("home") or ""))
+                            and team_name_matches_query(record["away_team"], str(row.get("away") or ""))):
+                        continue
+                    try:
+                        hg, ag = int(row.get("ft_home")), int(row.get("ft_away"))
+                    except (TypeError, ValueError):
+                        continue
+                    with connection.cursor() as cursor:
+                        cursor.execute("""
+                            UPDATE punter_prediction_records
+                            SET actual_home_goals=%s, actual_away_goals=%s,
+                                status='SETTLED', settled_at=CURRENT_TIMESTAMP
+                            WHERE id=%s AND status='PENDING'
+                        """, (hg, ag, record["id"]))
+                    record["actual_home_goals"] = hg
+                    record["actual_away_goals"] = ag
+                    record["status"] = "SETTLED"
+                    settled_now += 1
+                    break
+
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT id, league_shortcut, match_date, home_team, away_team,
+                       p_home, p_draw, p_away, p_over15, p_over25,
+                       actual_home_goals, actual_away_goals, status
+                FROM punter_prediction_records
+                ORDER BY match_date DESC
+            """)
+            records = cursor.fetchall()
+        return records, settled_now
+    finally:
+        connection.close()
+
+
+async def record_command(update, context):
+    await reply(update, "📚 Updating PUNTER's prediction history from completed competition results...")
+    try:
+        records, settled_now = await asyncio.to_thread(refresh_and_read_prediction_records)
+        settled = [r for r in records if r["status"] == "SETTLED"]
+        pending = [r for r in records if r["status"] == "PENDING"]
+        if not settled:
+            await reply(update,
+                "📊 PUNTER PERFORMANCE RECORD\n\n"
+                f"Predictions stored: {len(records)}\nNewly settled: {settled_now}\nPending: {len(pending)}\n"
+                "Settled predictions: 0\n\n"
+                "No accuracy or profitability claim is possible yet. Run /deepdive on upcoming fixtures to save model forecasts. Results are matched against the competition's completed-results CSV.")
+            return
+        correct = 0
+        brier_total = 0.0
+        over15_correct = 0
+        over25_correct = 0
+        for r in settled:
+            hg, ag = int(r["actual_home_goals"]), int(r["actual_away_goals"])
+            actual = 0 if hg > ag else 1 if hg == ag else 2
+            probs = [float(r["p_home"]), float(r["p_draw"]), float(r["p_away"])]
+            predicted = max(range(3), key=lambda i: probs[i])
+            correct += predicted == actual
+            brier_total += sum((probs[i] - (1.0 if i == actual else 0.0)) ** 2 for i in range(3))
+            over15_correct += (float(r["p_over15"]) >= .5) == (hg + ag >= 2)
+            over25_correct += (float(r["p_over25"]) >= .5) == (hg + ag >= 3)
+        n = len(settled)
+        await reply(update,
+            "📊 PUNTER PERFORMANCE RECORD\n\n"
+            f"Forecasts stored: {len(records)}\nSettled: {n} | Pending: {len(pending)}\n"
+            f"Newly settled this check: {settled_now}\n\n"
+            f"1X2 top-outcome accuracy: {correct/n:.1%} ({correct}/{n})\n"
+            f"1X2 Brier score: {brier_total/n:.3f} (lower is better; 0 is perfect)\n"
+            f"Over 1.5 classification accuracy: {over15_correct/n:.1%}\n"
+            f"Over 2.5 classification accuracy: {over25_correct/n:.1%}\n\n"
+            "This measures model forecasts, not betting profit. No bookmaker odds or stake records are stored, so ROI and profit/loss are not calculated. Small samples are unreliable.")
+    except Exception as exc:
+        logger.exception("Prediction performance report failed")
+        await reply(update,
+            "⚠️ PREDICTION TRACKER UNAVAILABLE\n\n"
+            f"{str(exc)[:500]}\n\n"
+            "The tracker needs database table-creation/write permission. Existing match analysis remains available.")
+
+
 async def deepdive_command(update, context):
     result = await get_analysis(update, context)
     if not result: return
@@ -2452,6 +2623,12 @@ async def deepdive_command(update, context):
         "",
         "6. MODEL FORECAST"]
     if pred.get("available"):
+        try:
+            await asyncio.to_thread(save_prediction_record, raw, item, pred)
+            lines.append("Forecast saved to the historical performance tracker.")
+        except Exception as exc:
+            logger.warning("Could not save prediction record: %s", exc)
+            lines.append("Forecast tracking unavailable: database write access is required.")
         lines.extend([f"Expected goals: {pred['lambda_home']:.2f}-{pred['lambda_away']:.2f}",
             f"Most likely score: {pred['score'][0]}-{pred['score'][1]}",
             f"1X2: Home {pred['home_win']:.1%} | Draw {pred['draw']:.1%} | Away {pred['away_win']:.1%}",
@@ -3074,6 +3251,7 @@ def main():
         ("deepdive", deepdive_command),
         ("value", value_command),
         ("topvalue", topvalue_command),
+        ("record", record_command),
         ("fixtures", fixtures),
         ("syncfixtures", syncfixtures),
         ("live", live),
