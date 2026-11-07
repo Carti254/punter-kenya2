@@ -387,29 +387,51 @@ def goal_request(endpoint, params=None):
             body = (exc.response.text or "")[:500]
 
         rate_limit_details = ""
-        if status == 429:
+        if status == 429 and exc.response is not None:
+            response_headers = exc.response.headers
+            retry_after = response_headers.get("Retry-After")
+            reset_value = response_headers.get("X-RateLimit-Reset")
+            cooldown_seconds = GOAL_API_COOLDOWN_SECONDS
+
+            # Prefer the provider's explicit retry instruction. If absent,
+            # use its quota reset timestamp when available; never guess a
+            # multi-hour delay from the generic 429 body alone.
+            try:
+                if retry_after:
+                    cooldown_seconds = max(1, int(float(retry_after)))
+                elif reset_value:
+                    reset_timestamp = float(reset_value)
+                    cooldown_seconds = max(
+                        1,
+                        int(reset_timestamp - datetime.now(timezone.utc).timestamp())
+                    )
+            except (TypeError, ValueError, OverflowError):
+                cooldown_seconds = GOAL_API_COOLDOWN_SECONDS
+
             with GOAL_API_COOLDOWN_LOCK:
                 GOAL_API_COOLDOWN_UNTIL = (
                     datetime.now(timezone.utc)
-                    + timedelta(seconds=GOAL_API_COOLDOWN_SECONDS)
+                    + timedelta(seconds=cooldown_seconds)
                 )
 
-        if status == 429 and exc.response is not None:
-            response_headers = exc.response.headers
             header_values = {
                 "type": response_headers.get("X-RateLimit-Type"),
                 "remaining": response_headers.get("X-RateLimit-Remaining"),
                 "limit": response_headers.get("X-RateLimit-Limit"),
-                "reset": response_headers.get("X-RateLimit-Reset"),
-                "retry_after": response_headers.get("Retry-After"),
+                "reset": reset_value,
+                "retry_after": retry_after,
             }
             available = [
                 f"{key}={value}"
                 for key, value in header_values.items()
                 if value not in (None, "")
             ]
-            if available:
-                rate_limit_details = " | Rate-limit headers: " + ", ".join(available)
+            rate_limit_details = (
+                " | Rate-limit headers: " + ", ".join(available)
+                if available else
+                " | Provider returned no rate-limit headers; "
+                f"using {cooldown_seconds}s fallback cooldown"
+            )
 
         if stale_cached is not None:
             logger.warning("GOAL API HTTP %s; serving stale cache for %s", status, endpoint)
