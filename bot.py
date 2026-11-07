@@ -1209,8 +1209,8 @@ COMMAND_HELP = {
     "odds_help": "Send: /odds HOME TEAM vs AWAY TEAM [today|tomorrow]",
     "oddshistory_help": "Send: /oddshistory HOME TEAM vs AWAY TEAM",
     "calculator_help": "Send: /calculator DECIMAL_ODDS STAKE",
-    "aipicks": "AI fixture scanning is not yet enabled. The current prediction engine analyses one selected fixture with /deepdive. I will not invent picks or probabilities.",
-    "accumulator": "Accumulator builder is not yet enabled. Use individual fixture analysis first; do not combine unverified selections.",
+    "aipicks": "Run /aipicks [home|draw|away|over15|over25|safest] [today|tomorrow]. Scans fixtures against retrieved bookmaker prices.",
+    "accumulator": "Run /accumulator [target decimal odds]. Builds a cautious experimental combination only from selections passing scanner filters; it may return NO BET.",
 }
 
 def fullintel_keyboard():
