@@ -2631,7 +2631,8 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
 async def topvalue_command(update, context):
     args = [x.casefold() for x in (context.args or [])]
     market = args[0] if args and args[0] in ("home", "draw", "away", "over15", "over25", "safest") else "all"
-    day = args[1] if len(args) > 1 and args[1] in ("today", "tomorrow") else "both"
+    day_arg = next((x for x in args if x in ("today", "tomorrow")), "both")
+    day = day_arg
     days = (day,) if day != "both" else ("today", "tomorrow")
     await reply(update, "🔎 Scanning the available fixture catalogue and connected bookmaker prices. This may take a little while...")
     try:
