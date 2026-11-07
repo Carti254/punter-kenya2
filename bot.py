@@ -3205,6 +3205,58 @@ async def compare(
 # LIVE BOOKMAKER ODDS — READ-ONLY CONNECTORS
 # ============================================================
 
+def save_bookmaker_odds_snapshots(games):
+    """Persist timestamped prices for later movement review; fail safely."""
+    if not games:
+        return 0
+    connection = get_connection()
+    saved = 0
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS punter_odds_snapshots (
+                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    bookmaker VARCHAR(40) NOT NULL,
+                    event_id VARCHAR(100) NOT NULL,
+                    home_team VARCHAR(180) NOT NULL,
+                    away_team VARCHAR(180) NOT NULL,
+                    kickoff_eat VARCHAR(32) NULL,
+                    market_name VARCHAR(180) NOT NULL,
+                    selection_name VARCHAR(180) NOT NULL,
+                    handicap_value VARCHAR(80) NULL,
+                    decimal_odds DECIMAL(10,3) NOT NULL,
+                    fetched_at DATETIME NOT NULL,
+                    INDEX idx_odds_event (bookmaker, event_id),
+                    INDEX idx_odds_fixture (home_team, away_team),
+                    INDEX idx_odds_time (fetched_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            fetched_at = now_utc_naive()
+            for game in games:
+                for market in game.get("markets", []):
+                    cursor.execute("""
+                        INSERT INTO punter_odds_snapshots
+                        (bookmaker, event_id, home_team, away_team, kickoff_eat,
+                         market_name, selection_name, handicap_value, decimal_odds, fetched_at)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """, (
+                        str(game.get("bookmaker") or "Unknown")[:40],
+                        str(game.get("event_id") or "")[:100],
+                        str(game.get("home") or "Unknown")[:180],
+                        str(game.get("away") or "Unknown")[:180],
+                        str(game.get("kickoff_eat") or "")[:32] or None,
+                        str(market.get("market") or "Unknown")[:180],
+                        str(market.get("selection") or "Unknown")[:180],
+                        str(market.get("handicap"))[:80] if market.get("handicap") is not None else None,
+                        market.get("odds"),
+                        fetched_at,
+                    ))
+                    saved += 1
+        return saved
+    finally:
+        connection.close()
+
+
 async def bookmakers_command(update, context):
     from datetime import timedelta
     day = datetime.now(EAT).date()
@@ -3254,6 +3306,14 @@ async def bookmaker_odds_command(update, context):
     matches = exact or matches
     unique = {(g.get("bookmaker"), g.get("event_id")): g for g in matches}
     matches = list(unique.values())
+    snapshots_saved = 0
+    snapshot_error = None
+    if matches:
+        try:
+            snapshots_saved = await asyncio.to_thread(save_bookmaker_odds_snapshots, matches)
+        except Exception as exc:
+            snapshot_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+            logger.warning("Could not persist bookmaker odds snapshots: %s", snapshot_error)
     if not matches:
         errors = "; ".join(f"{k}: {v}" for k, v in result["errors"].items())
         await reply(update,
@@ -3276,6 +3336,9 @@ async def bookmaker_odds_command(update, context):
         if game.get("url"):
             lines.append(game["url"])
         lines.append("")
+    lines.append(f"Historical price observations saved: {snapshots_saved}.") if snapshots_saved else lines.append("Historical odds storage: not saved.")
+    if snapshot_error:
+        lines.append(f"Database storage warning: {snapshot_error}")
     lines.append("Prices are snapshots retrieved now and may change before placement. Check the bookmaker slip before betting. No bets are placed by this bot.")
     message = "\n".join(lines)
     for offset in range(0, len(message), 3700):
