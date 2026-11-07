@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import unicodedata
 import re
 import math
+import threading
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -41,15 +42,84 @@ logging.basicConfig(
 
 logger = logging.getLogger("punter_kenya")
 
+# Telegram Bot API embeds the bot token in request URLs. Keep HTTP client
+# access logs quiet so credentials are never written to Railway logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+POLLING_LOCK_NAME = "punter_kenya_telegram_polling"
+_polling_lock_connection = None
+_polling_lock_keepalive_stop = threading.Event()
+_polling_lock_keepalive_thread = None
+
+
+def acquire_polling_lock():
+    """Ensure only one Railway/local process polls Telegram for this bot."""
+    global _polling_lock_connection, _polling_lock_keepalive_thread
+
+    connection = get_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT GET_LOCK(%s, %s) AS acquired", (POLLING_LOCK_NAME, 10))
+            row = cursor.fetchone()
+        acquired = row.get("acquired") if isinstance(row, dict) else None
+        if acquired != 1:
+            raise RuntimeError(
+                "Another Punter Kenya process already owns the Telegram polling lock. "
+                "Stop the duplicate Railway replica or local bot process."
+            )
+        _polling_lock_connection = connection
+    except Exception:
+        connection.close()
+        raise
+
+    def keep_lock_alive():
+        while not _polling_lock_keepalive_stop.wait(45):
+            try:
+                # The connection is dedicated to the advisory lock.
+                _polling_lock_connection.ping(reconnect=False)
+            except Exception:
+                logger.critical(
+                    "Telegram polling lock database connection was lost; "
+                    "stopping this process to avoid competing pollers.",
+                    exc_info=True,
+                )
+                os._exit(1)
+
+    _polling_lock_keepalive_thread = threading.Thread(
+        target=keep_lock_alive,
+        name="telegram-polling-lock-keepalive",
+        daemon=True,
+    )
+    _polling_lock_keepalive_thread.start()
+    logger.info("Telegram polling singleton lock acquired.")
+
+
+def release_polling_lock():
+    global _polling_lock_connection
+    _polling_lock_keepalive_stop.set()
+    connection = _polling_lock_connection
+    _polling_lock_connection = None
+    if connection is None:
+        return
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT RELEASE_LOCK(%s)", (POLLING_LOCK_NAME,))
+    except Exception:
+        logger.warning("Could not explicitly release Telegram polling lock.", exc_info=True)
+    finally:
+        connection.close()
+
+
 # Reuse HTTP connections and retry temporary upstream failures.
 HTTP = requests.Session()
 
 _RETRY = Retry(
-    total=3,
-    connect=3,
-    read=2,
-    status=3,
-    backoff_factor=0.6,
+    total=1,
+    connect=1,
+    read=1,
+    status=1,
+    backoff_factor=0.25,
     status_forcelist=(429, 500, 502, 503, 504),
     allowed_methods=frozenset(["GET"]),
     respect_retry_after_header=True,
@@ -214,7 +284,7 @@ def goal_request(endpoint, params=None):
             url,
             headers=headers,
             params=params or {},
-            timeout=(10, 35),
+            timeout=(5, 12),
         )
 
         response.raise_for_status()
@@ -1888,11 +1958,29 @@ async def matchintel(
 
         # Most requested matches are today or within the next day. Search that
         # short window first; only expand to 14 days if no match is found.
-        raw_rows = await asyncio.to_thread(fetch_upcoming_fixture_rows, 1)
-        candidates = find_candidates(raw_rows)
-        if not candidates:
-            raw_rows = await asyncio.to_thread(fetch_upcoming_fixture_rows, 14)
+        try:
+            raw_rows = await asyncio.wait_for(
+                asyncio.to_thread(fetch_upcoming_fixture_rows, 1),
+                timeout=35,
+            )
             candidates = find_candidates(raw_rows)
+            if not candidates:
+                await reply(
+                    update,
+                    "🔎 No match in the short fixture window. Expanding the search to 14 days...",
+                )
+                raw_rows = await asyncio.wait_for(
+                    asyncio.to_thread(fetch_upcoming_fixture_rows, 14),
+                    timeout=45,
+                )
+                candidates = find_candidates(raw_rows)
+        except asyncio.TimeoutError:
+            await reply(
+                update,
+                "⏱ Fixture search timed out while the provider was responding. "
+                "Please retry in a moment; the bot is still running.",
+            )
+            return
 
         if not candidates:
             await reply(
@@ -1937,6 +2025,8 @@ async def matchintel(
             f"🕒 {local_time:%d %b %Y — %H:%M EAT}" if local_time else "🕒 Kick-off time unavailable",
             f"📍 Status: {item['status'] or 'Scheduled'}",
         ]
+
+        await reply(update, "✅ Fixture found. Checking lineups, statistics, odds and match events...")
 
         endpoint_results = await asyncio.gather(
             asyncio.to_thread(goal_request, f"fixtures/{fixture_id}", {}),
@@ -1990,6 +2080,7 @@ async def matchintel(
             output.extend(event_lines or ["• No events published yet."])
 
         output.extend(["", "🧠 PRE-MATCH PREDICTION"])
+        await reply(update, "📊 Match data retrieved. Building the pre-match forecast...")
         try:
             prediction = await asyncio.to_thread(build_pre_match_prediction, raw, item)
         except Exception as prediction_error:
@@ -2214,6 +2305,8 @@ def main():
             "GOAL API commands will fail until configured."
         )
 
+    acquire_polling_lock()
+
     app = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -2253,10 +2346,13 @@ def main():
         "PUNTER KENYA starting; Telegram polling enabled."
     )
 
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES,
-    )
+    try:
+        app.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
+        )
+    finally:
+        release_polling_lock()
 
 
 if __name__ == "__main__":
