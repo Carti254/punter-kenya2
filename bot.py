@@ -1163,7 +1163,7 @@ async def start(
 
 async FULLINTEL_MENUS = {
     "fixtures": ("📅 FIXTURES & LEAGUES", [
-        [("Upcoming fixtures", "fixtures"), ("Today's fixtures", "fixtures_today")],
+        [("Upcoming fixtures", "fixtures_list"), ("Today's fixtures", "fixtures_today")],
         [("Tomorrow's fixtures", "fixtures_tomorrow"), ("League catalogue", "leagues")],
         [("Sync leagues", "syncleagues"), ("Sync fixtures", "syncfixtures")],
     ]),
@@ -1235,6 +1235,19 @@ async def fullintel_command(update, context):
         reply_markup=fullintel_keyboard(),
     )
 
+async def aipicks_status_command(update, context):
+    await reply(update,
+        "🧠 AI PICKS — NOT YET ENABLED\n\n"
+        "The current model can analyse a selected fixture with /deepdive and save forecasts for later evaluation. "
+        "It does not yet scan the full fixture catalogue, rank all markets, or issue calibrated daily picks. "
+        "No fabricated picks: when the scanner is not ready, PUNTER says so.")
+
+async def accumulator_status_command(update, context):
+    await reply(update,
+        "🧮 ACCUMULATOR BUILDER — NOT YET ENABLED\n\n"
+        "PUNTER does not yet build or optimise accumulators. Analyse each fixture separately with /deepdive. "
+        "Do not assume multiplying individual model probabilities gives a reliable combined probability.")
+
 async def fullintel_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -1249,8 +1262,8 @@ async def fullintel_callback(update, context):
         title, _ = FULLINTEL_MENUS[key]
         await query.edit_message_text(title + "\n\nChoose a command:", reply_markup=fullintel_submenu_keyboard(key))
         return
-    if key in ("fixtures_today", "fixtures_tomorrow"):
-        command = "/fixtures today" if key.endswith("today") else "/fixtures tomorrow"
+    if key in ("fixtures_today", "fixtures_tomorrow", "fixtures_list"):
+        command = "/fixtures today" if key.endswith("today") else "/fixtures tomorrow" if key.endswith("tomorrow") else "/fixtures"
         await query.edit_message_text("Run this command in the chat:\n" + command, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Main menu", callback_data="fi:home")]]))
         return
     if key in ("leagues", "syncleagues", "syncfixtures", "bookies", "record", "live", "about", "topvalue"):
@@ -3553,6 +3566,8 @@ def main():
         ("bookies", bookmakers_command),
         ("odds", bookmaker_odds_command),
         ("oddshistory", odds_history_command),
+        ("aipicks", aipicks_status_command),
+        ("accumulator", accumulator_status_command),
     ]
 
     for command, callback in handlers:
