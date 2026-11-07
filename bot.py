@@ -753,7 +753,7 @@ def openmatchday_index():
     )
     response.raise_for_status()
     rows = []
-    pattern = re.compile(r"^\|\s*`([^\`]+)`\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|")
+    pattern = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|")
     for line in response.text.splitlines():
         match = pattern.match(line.strip())
         if not match:
