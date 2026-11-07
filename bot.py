@@ -2135,7 +2135,7 @@ async def matchintel(
             return
 
         raw, item = candidates[0]
-        fixture_id = first_value(raw, "id", "fixtureId", "matchId", "match_id")
+        fixture_id = first_value(raw, "id", "fixtureId", "matchId", "matchID", "match_id")
         if fixture_id is None:
             await reply(update, "⚠️ The fixture was found, but the provider did not supply a match ID.")
             return
