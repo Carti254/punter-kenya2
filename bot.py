@@ -1124,22 +1124,22 @@ async def start(
 
     await reply(
         update,
-        "⚽ PUNTER KENYA — FOOTBALL INTELLIGENCE\\n\\n"
-        "Free football fixtures and pre-match research.\\n\\n"
-        "FIXTURES & COMPETITIONS\\n"
-        "/leagues [SEARCH] — search the 75-competition catalogue\\n"
-        "/syncleagues — refresh the competition catalogue\\n"
-        "/fixtures [PAGE] — browse upcoming fixtures\\n"
-        "/leaguefixtures LEAGUE [today|tomorrow] — choose a league and day\\n"
-        "/syncfixtures — save upcoming fixtures to the database\\n\\n"
-        "MATCH ANALYSIS\\n"
-        "/matchintel HOME vs AWAY — recent-form forecast\\n"
-        "/live — explain live-data availability\\n\\n"
-        "TOOLS\\n"
-        "/calculator ODDS STAKE — calculate potential returns\\n"
-        "/dbtest — test the database connection\\n"
-        "/about — data source and project information\\n"
-        "/help — show this message\\n\\n"
+        "⚽ PUNTER KENYA — FOOTBALL INTELLIGENCE\n\n"
+        "Free football fixtures and pre-match research.\n\n"
+        "FIXTURES & COMPETITIONS\n"
+        "/leagues [SEARCH] — search the 75-competition catalogue\n"
+        "/syncleagues — refresh the competition catalogue\n"
+        "/fixtures [PAGE] — browse upcoming fixtures\n"
+        "/leaguefixtures LEAGUE [today|tomorrow] — choose a league and day\n"
+        "/syncfixtures — save upcoming fixtures to the database\n\n"
+        "MATCH ANALYSIS\n"
+        "/matchintel HOME vs AWAY — recent-form forecast\n"
+        "/live — explain live-data availability\n\n"
+        "TOOLS\n"
+        "/calculator ODDS STAKE — calculate potential returns\n"
+        "/dbtest — test the database connection\n"
+        "/about — data source and project information\n"
+        "/help — show this message\n\n"
         "Data is refreshed daily, not live. Forecasts are estimates; "
         "the bot does not provide guaranteed picks or verified bookmaker odds."
     )
@@ -2661,7 +2661,6 @@ def main():
         ("start", start),
         ("help", help_command),
         ("about", about),
-        ("diagnose", diagnose),
         ("leagues", leagues),
         ("syncleagues", syncleagues),
         ("leaguefixtures", leaguefixtures),
@@ -2670,9 +2669,6 @@ def main():
         ("syncfixtures", syncfixtures),
         ("live", live),
         ("dbtest", dbtest),
-        ("odds", odds),
-        ("bookmakers", bookmakers),
-        ("compare", compare),
         ("calculator", calculator),
     ]
 
