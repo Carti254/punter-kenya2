@@ -18,10 +18,11 @@ from zoneinfo import ZoneInfo
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 from database import get_connection, test_connection
+from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find_bookmaker_event
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -1160,65 +1161,172 @@ async def start(
     )
 
 
-async def fullintel_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    """Display the PUNTER KENYA Full Intelligence Centre (v4)."""
-    await reply(
-        update,
-        "⚽ PUNTER KENYA — FULL INTELLIGENCE CENTRE\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "VERSION 4  |  MASTER COMMAND DIRECTORY\n\n"
-        "Your control centre for fixtures, team research, match predictions, "
-        "betting analysis and forecast tracking. Choose a command below and "
-        "add the two team names where shown.\n\n"
-        "📅 1. FIXTURES & COMPETITIONS\n"
-        "/fixtures — browse upcoming fixtures\n"
-        "/fixtures today — today's fixtures\n"
-        "/fixtures tomorrow — tomorrow's fixtures\n"
-        "/leaguefixtures LEAGUE — fixtures by competition\n"
-        "/leagues [SEARCH] — find competitions in the catalogue\n"
-        "/syncleagues — refresh the league catalogue\n"
-        "/syncfixtures — sync available fixture records\n\n"
-        "📊 2. TEAM FORM & PERFORMANCE\n"
-        "/form TEAM A vs TEAM B — recent results, form and points rate\n"
-        "/goals TEAM A vs TEAM B — goals for/against and scoring rates\n"
-        "/homeaway TEAM A vs TEAM B — home and away records\n"
-        "/strength TEAM A vs TEAM B — attack, defence and consistency\n"
-        "/halves TEAM A vs TEAM B — half-time data availability\n\n"
-        "⚔️ 3. MATCHUP & HISTORY\n"
-        "/h2h TEAM A vs TEAM B — previous meetings in the dataset\n"
-        "/matchup TEAM A vs TEAM B — attack-versus-defence comparison\n"
-        "/scenarios TEAM A vs TEAM B — possible statistical match scenarios\n"
-        "/risk TEAM A vs TEAM B — uncertainty and warning flags\n\n"
-        "🧠 4. PREDICTIONS & BETTING ANALYSIS\n"
-        "/matchintel TEAM A vs TEAM B — match information and model forecast\n"
-        "/markets TEAM A vs TEAM B — supported model market probabilities\n"
-        "/deepdive TEAM A vs TEAM B — combined report and final assessment\n"
-        "/value TEAM A vs TEAM B HOME DRAW AWAY — compare supplied 1X2 odds\n"
-        "/topvalue — value-scanner status\n\n"
-        "📚 5. TRACKING & UTILITIES\n"
-        "/record — evaluate saved forecasts against completed results\n"
-        "/calculator ODDS STAKE — calculate returns and implied probability\n"
-        "/live — current live-data availability\n"
-        "/about — data provider and project information\n"
-        "/dbtest — test database connection\n"
-        "/start or /help — show the main help menu\n\n"
-        "🚀 QUICK START\n"
-        "1. Find a fixture with /fixtures or /leaguefixtures.\n"
-        "2. Run /deepdive TEAM A vs TEAM B for the full analysis.\n"
-        "3. Use individual commands above to inspect specific evidence.\n"
-        "4. Use /value with actual bookmaker prices to assess 1X2 value.\n"
-        "5. Use /record to review forecast performance.\n\n"
-        "⚠️ DATA & SAFETY NOTES\n"
-        "Fixture and results data comes from open-matchday and is refreshed "
-        "daily, not live. Confirmed lineups, live events, half-time statistics "
-        "and verified bookmaker odds are not currently supplied. /value uses "
-        "prices entered by you; verify them with the bookmaker. Missing data "
-        "is not invented. Model probabilities are estimates, not guarantees. "
-        "A NO BET decision is valid when evidence or odds are insufficient."
+FULLINTEL_MENUS = {
+    "fixtures": ("📅 FIXTURES & LEAGUES", [
+        [("Upcoming fixtures", "fixtures_list"), ("Today's fixtures", "fixtures_today")],
+        [("Tomorrow's fixtures", "fixtures_tomorrow"), ("League catalogue", "leagues")],
+        [("Sync leagues", "syncleagues"), ("Sync fixtures", "syncfixtures")],
+    ]),
+    "teams": ("📊 TEAM INTELLIGENCE", [
+        [("Recent form", "form"), ("Goals analysis", "goals")],
+        [("Home / away", "homeaway"), ("Team strength", "strength")],
+        [("Half-time stats", "halves")],
+    ]),
+    "matchup": ("⚔️ MATCH INTELLIGENCE", [
+        [("Head-to-head", "h2h"), ("Matchup analysis", "matchup")],
+        [("Match scenarios", "scenarios"), ("Risk analysis", "risk")],
+        [("Full match deepdive", "deepdive"), ("Match forecast", "matchintel")],
+        [("Market probabilities", "markets")],
+    ]),
+    "betting": ("🧠 BETTING & VALUE", [
+        [("Value check", "value"), ("Top value status", "topvalue")],
+        [("AI picks status", "aipicks"), ("Accumulator guide", "accumulator")],
+    ]),
+    "bookies": ("💹 BOOKMAKER CENTRE", [
+        [("Check bookmaker feeds", "bookies")],
+        [("Retrieve match odds", "odds_help"), ("Odds history", "oddshistory_help")],
+    ]),
+    "tracking": ("📚 TRACKING & TOOLS", [
+        [("Forecast performance", "record"), ("Odds calculator", "calculator_help")],
+        [("Live-data status", "live"), ("About PUNTER", "about")],
+    ]),
+}
+
+COMMAND_HELP = {
+    "form": "Send: /form HOME TEAM vs AWAY TEAM",
+    "goals": "Send: /goals HOME TEAM vs AWAY TEAM",
+    "homeaway": "Send: /homeaway HOME TEAM vs AWAY TEAM",
+    "strength": "Send: /strength HOME TEAM vs AWAY TEAM",
+    "halves": "Send: /halves HOME TEAM vs AWAY TEAM",
+    "h2h": "Send: /h2h HOME TEAM vs AWAY TEAM",
+    "matchup": "Send: /matchup HOME TEAM vs AWAY TEAM",
+    "scenarios": "Send: /scenarios HOME TEAM vs AWAY TEAM",
+    "risk": "Send: /risk HOME TEAM vs AWAY TEAM",
+    "deepdive": "Send: /deepdive HOME TEAM vs AWAY TEAM",
+    "matchintel": "Send: /matchintel HOME TEAM vs AWAY TEAM",
+    "markets": "Send: /markets HOME TEAM vs AWAY TEAM",
+    "value": "Send: /value HOME TEAM vs AWAY TEAM HOME_ODDS DRAW_ODDS AWAY_ODDS",
+    "odds_help": "Send: /odds HOME TEAM vs AWAY TEAM [today|tomorrow]",
+    "oddshistory_help": "Send: /oddshistory HOME TEAM vs AWAY TEAM",
+    "calculator_help": "Send: /calculator DECIMAL_ODDS STAKE",
+    "aipicks": "Run /aipicks [home|draw|away|over15|over25|safest] [today|tomorrow]. Scans fixtures against retrieved bookmaker prices.",
+    "accumulator": "Run /accumulator [target decimal odds]. Builds a cautious experimental combination only from selections passing scanner filters; it may return NO BET.",
+}
+
+def fullintel_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Fixtures & Leagues", callback_data="fi:fixtures"),
+         InlineKeyboardButton("📊 Team Intelligence", callback_data="fi:teams")],
+        [InlineKeyboardButton("⚔️ Match Intelligence", callback_data="fi:matchup"),
+         InlineKeyboardButton("🧠 Betting & Value", callback_data="fi:betting")],
+        [InlineKeyboardButton("💹 Bookmaker Centre", callback_data="fi:bookies"),
+         InlineKeyboardButton("📚 Tracking & Tools", callback_data="fi:tracking")],
+    ])
+
+def fullintel_submenu_keyboard(key):
+    title, rows = FULLINTEL_MENUS[key]
+    keyboard = [[InlineKeyboardButton(label, callback_data=f"fi:{command}") for label, command in row] for row in rows]
+    keyboard.append([InlineKeyboardButton("⬅️ Main menu", callback_data="fi:home")])
+    return InlineKeyboardMarkup(keyboard)
+
+async def fullintel_command(update, context):
+    await update.effective_message.reply_text(
+        "⚽ PUNTER KENYA — INTELLIGENCE CENTRE\n\nChoose a section. Each section opens its own commands.",
+        reply_markup=fullintel_keyboard(),
     )
+
+async def aipicks_status_command(update, context):
+    """Run the same transparent fixture-wide statistical and price scan."""
+    await topvalue_command(update, context)
+
+
+async def accumulator_status_command(update, context):
+    """Build a cautious combination only from scanner-qualified selections."""
+    args = [str(x).strip() for x in (context.args or [])]
+    target = 3.0
+    if args:
+        try:
+            target = float(args[0])
+            if not 1.50 <= target <= 50:
+                raise ValueError
+        except ValueError:
+            await reply(update, "Usage: /accumulator [target decimal odds, 1.50–50]. Example: /accumulator 3.00")
+            return
+
+    await reply(update, "🔎 Scanning today's and tomorrow's fixtures and retrieved bookmaker prices...")
+    try:
+        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "safest")
+    except Exception as exc:
+        logger.exception("Accumulator scan failed")
+        await reply(update, f"❌ ACCUMULATOR SCAN FAILED: {type(exc).__name__}: {str(exc)[:250]}")
+        return
+
+    chosen, combined, used = [], 1.0, set()
+    for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
+        fixture_key = (item["home"], item["away"])
+        if fixture_key in used or item["probability"] < 0.62 or item["ev"] < 0.03:
+            continue
+        chosen.append(item)
+        used.add(fixture_key)
+        combined *= item["odds"]
+        if combined >= target or len(chosen) >= 6:
+            break
+
+    if not chosen or combined < target:
+        await reply(update,
+            f"🚫 NO ACCUMULATOR RECOMMENDED\n\n"
+            f"Could not reach {target:.2f} using selections that passed the minimum probability (62%) "
+            "and estimated expected-value (+3%) filters. PUNTER will not add weak legs just to reach a target. "
+            + ("Feed notes: " + "; ".join(diagnostics[:3]) if diagnostics else ""))
+        return
+
+    probability_product = math.prod(item["probability"] for item in chosen)
+    lines = [
+        "🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR",
+        f"Target: {target:.2f} | Combined decimal odds: {combined:.2f}",
+        "",
+    ]
+    for number, item in enumerate(chosen, 1):
+        lines.extend([
+            f"{number}. {item['home']} vs {item['away']} — {item['league']}",
+            f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item['bookmaker']})",
+            f"   Model probability: {item['probability']:.1%} | Estimated EV: {item['ev']:+.1%}",
+        ])
+    lines.extend([
+        "",
+        f"Naive independent-leg probability product: {probability_product:.2%}",
+        "This assumes independence. Correlation is not modelled, so this is NOT a calibrated accumulator probability.",
+        "Experimental estimates only. Confirm every price and market with the bookmaker. No BTTS or Under 2.5.",
+    ])
+    await reply(update, "\n".join(lines))
+
+
+async def fullintel_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    key = (query.data or "").split(":", 1)[-1]
+    if key == "home":
+        await query.edit_message_text(
+            "⚽ PUNTER KENYA — INTELLIGENCE CENTRE\n\nChoose a section.",
+            reply_markup=fullintel_keyboard(),
+        )
+        return
+    if key in FULLINTEL_MENUS:
+        title, _ = FULLINTEL_MENUS[key]
+        await query.edit_message_text(title + "\n\nChoose a command:", reply_markup=fullintel_submenu_keyboard(key))
+        return
+    if key in ("fixtures_today", "fixtures_tomorrow", "fixtures_list"):
+        command = "/fixtures today" if key.endswith("today") else "/fixtures tomorrow" if key.endswith("tomorrow") else "/fixtures"
+        await query.edit_message_text("Run this command in the chat:\n" + command, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Main menu", callback_data="fi:home")]]))
+        return
+    if key in ("leagues", "syncleagues", "syncfixtures", "bookies", "record", "live", "about", "topvalue"):
+        await query.edit_message_text("Run this command in the chat:\n/" + key, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Main menu", callback_data="fi:home")]]))
+        return
+    if key in COMMAND_HELP:
+        await query.edit_message_text(COMMAND_HELP[key], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Main menu", callback_data="fi:home")]]))
+        return
+    await query.edit_message_text("Command not available.", reply_markup=fullintel_keyboard())
+
 
 
 async def help_command(
@@ -2484,8 +2592,178 @@ async def value_command(update, context):
     lines.extend(["", "Odds are user-supplied and have not been independently verified. Model probabilities are uncalibrated estimates; positive EV is not proof of a profitable bet."])
     await reply(update, "\n".join(lines))
 
+def _market_probability(prediction, market_key):
+    if market_key == "home": return prediction["home_win"]
+    if market_key == "draw": return prediction["draw"]
+    if market_key == "away": return prediction["away_win"]
+    if market_key == "over15": return prediction["over_15"]
+    if market_key == "over25": return prediction["over_25"]
+    return None
+
+
+def _odds_market_key(market):
+    name = re.sub(r"[^a-z0-9]+", " ", str(market or "").casefold()).strip()
+    if any(x in name for x in ("both teams", "btts", "correct score", "double chance", "draw no bet", "handicap")):
+        return None
+    if name in ("1x2", "match result", "full time result", "fulltime result", "regular time result"):
+        return "1x2"
+    if "over under" in name or "total goals" in name or name == "goals":
+        return "goals"
+    return None
+
+
+def _selection_probability_key(market_key, selection, handicap=None):
+    value = re.sub(r"[^a-z0-9.]+", " ", str(selection or "").casefold()).strip()
+    if market_key == "1x2":
+        if value in ("1", "home", "home win", "1st"): return "home"
+        if value in ("x", "draw", "tie"): return "draw"
+        if value in ("2", "away", "away win", "2nd"): return "away"
+    if market_key == "goals":
+        line = str(handicap or "")
+        if "1.5" in value or "1.5" in line:
+            return "over15" if "over" in value else None
+        if "2.5" in value or "2.5" in line:
+            return "over25" if "over" in value else None
+    return None
+
+
+def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"):
+    """Scan the public fixture catalogue against retrieved bookmaker prices."""
+    candidates, diagnostics = [], []
+    for day_filter in day_filters:
+        raw_fixtures = fetch_openmatchday_fixture_rows(14, None, day_filter)
+        fixtures = upcoming_fixtures(raw_fixtures)
+        if not fixtures:
+            diagnostics.append(f"{day_filter}: no fixtures from open-matchday")
+            continue
+        target_day = datetime.now(EAT).date() + (timedelta(days=1) if day_filter == "tomorrow" else timedelta())
+        odds_result = fetch_bookmaker_odds(target_day)
+        priced_games = []
+        for provider in odds_result.get("bookmakers", {}).values():
+            priced_games.extend(provider.get("games", []))
+        for raw, fixture in fixtures:
+            prediction = build_openmatchday_prediction(raw, fixture)
+            if not prediction.get("available"):
+                continue
+            matches = find_bookmaker_event(priced_games, fixture["home_team"], fixture["away_team"])
+            for game in matches:
+                for row in game.get("markets", []):
+                    mk = _odds_market_key(row.get("market"))
+                    if not mk: continue
+                    selection_key = _selection_probability_key(mk, row.get("selection"), row.get("handicap"))
+                    if not selection_key: continue
+                    if market_filter not in ("all", "safest", selection_key): continue
+                    probability = _market_probability(prediction, selection_key)
+                    odds = row.get("odds")
+                    if probability is None or not odds or odds <= 1: continue
+                    ev = probability * odds - 1
+                    min_probability = 0.60 if selection_key in ("over15", "over25") else 0.42
+                    if probability < min_probability or ev < 0.03: continue
+                    candidates.append({
+                        "home": fixture["home_team"], "away": fixture["away_team"],
+                        "league": fixture.get("competition") or fixture.get("leagueName") or "Competition",
+                        "day": day_filter, "bookmaker": game.get("bookmaker"),
+                        "market": row.get("market"), "selection": row.get("selection"),
+                        "market_key": selection_key, "odds": odds, "probability": probability,
+                        "ev": ev, "fair_odds": 1 / probability,
+                        "kickoff": game.get("kickoff_eat") or fixture.get("kickoffUtc"),
+                        "url": game.get("url"),
+                    })
+        for name, error in odds_result.get("errors", {}).items():
+            diagnostics.append(f"{day_filter} {name}: {error[:100]}")
+    candidates.sort(key=lambda x: (x["ev"], x["probability"]), reverse=True)
+    # Deduplicate same fixture/market across provider variants only after preserving best price.
+    best = {}
+    for item in candidates:
+        key = (item["home"], item["away"], item["market_key"], item["selection"])
+        if key not in best or item["odds"] > best[key]["odds"]:
+            best[key] = item
+    return sorted(best.values(), key=lambda x: (x["ev"], x["probability"]), reverse=True), diagnostics
+
+
 async def topvalue_command(update, context):
-    await reply(update, "📊 TOP VALUE SCANNER\n\nNo verified bookmaker odds feed is connected. PUNTER cannot honestly rank value bets without current prices.\n\nUse /value TEAM A vs TEAM B HOME_ODDS DRAW_ODDS AWAY_ODDS to compare your supplied 1X2 prices with the model. No odds = no value verdict.")
+    args = [x.casefold() for x in (context.args or [])]
+    market = args[0] if args and args[0] in ("home", "draw", "away", "over15", "over25", "safest") else "all"
+    day_arg = next((x for x in args if x in ("today", "tomorrow")), "both")
+    day = day_arg
+    days = (day,) if day != "both" else ("today", "tomorrow")
+    await reply(update, "🔎 Scanning the available fixture catalogue and connected bookmaker prices. This may take a little while...")
+    try:
+        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, days, market)
+    except Exception as exc:
+        logger.exception("Value scanner failed")
+        await reply(update, f"❌ VALUE SCAN FAILED: {type(exc).__name__}: {str(exc)[:250]}")
+        return
+    if market == "safest":
+        rows.sort(key=lambda x: (x["probability"], x["ev"]), reverse=True)
+    if not rows:
+        await reply(update,
+            "🚫 NO QUALIFYING VALUE PICKS\n\n"
+            "No selection met the minimum probability and positive expected-value filters using the odds actually retrieved. "
+            "This is a NO BET result, not a reason to lower the filters.\n\n"
+            + ("Feed notes: " + "; ".join(diagnostics[:4]) if diagnostics else "No usable bookmaker prices were matched."))
+        return
+    lines = ["🧠 PUNTER KENYA — VALUE SCANNER", f"Market: {market.upper()} | Dates: {', '.join(days)}",
+             "Filters: model probability ≥ 42% (1X2) / ≥ 60% (goals); estimated EV ≥ +3%", ""]
+    for n, item in enumerate(rows[:12], 1):
+        lines.append(f"{n}. {item['home']} vs {item['away']} — {item['league']}")
+        lines.append(f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item['bookmaker']})")
+        lines.append(f"   Model: {item['probability']:.1%} | Fair odds: {item['fair_odds']:.2f} | Est. EV: {item['ev']:+.1%}")
+        lines.append(f"   Kick-off: {item['kickoff'] or 'Not supplied'}")
+        if item.get("url"): lines.append(f"   {item['url']}")
+        lines.append("")
+    lines.append("Important: this is an experimental, uncalibrated Poisson model. Historical results are not xG or lineup-adjusted. Positive estimated EV is not proof of an edge. Verify price and market rules before betting. No BTTS or Under 2.5 picks are included.")
+    message = "\n".join(lines)
+    for offset in range(0, len(message), 3600):
+        await reply(update, message[offset:offset+3600])
+
+
+async def aipicks_status_command(update, context):
+    # Reuse the same transparent catalogue + price scan; no separate unverified AI claim.
+    context.args = list(context.args or [])
+    await topvalue_command(update, context)
+
+
+async def accumulator_status_command(update, context):
+    args = [x.casefold() for x in (context.args or [])]
+    target = 3.0
+    if args:
+        try:
+            target = float(args[0])
+            if target < 1.5 or target > 50: raise ValueError
+        except ValueError:
+            await reply(update, "Usage: /accumulator [target decimal odds, 1.50–50]. Example: /accumulator 3.00")
+            return
+    await reply(update, "🔎 Finding independent fixture candidates for a conservative accumulator...")
+    try:
+        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "safest")
+    except Exception as exc:
+        await reply(update, f"Accumulator scan failed: {type(exc).__name__}: {str(exc)[:200]}")
+        return
+    chosen, combined = [], 1.0
+    used = set()
+    for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
+        fixture_key = (item["home"], item["away"])
+        if fixture_key in used or item["probability"] < 0.62 or item["ev"] < 0.03:
+            continue
+        if any(x["home"] == item["home"] and x["away"] == item["away"] for x in chosen):
+            continue
+        chosen.append(item); used.add(fixture_key); combined *= item["odds"]
+        if combined >= target: break
+        if len(chosen) >= 6: break
+    if not chosen or combined < target:
+        await reply(update, f"🚫 NO ACCUMULATOR RECOMMENDED\\n\\nCould not reach {target:.2f} using selections that passed the minimum probability (62%) and estimated EV (+3%) filters. PUNTER will not add weak legs just to reach a target.")
+        return
+    probability_product = math.prod(x["probability"] for x in chosen)
+    lines = ["🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR", f"Target: {target:.2f} | Combined decimal odds: {combined:.2f}", ""]
+    for i, item in enumerate(chosen, 1):
+        lines.append(f"{i}. {item['home']} vs {item['away']}")
+        lines.append(f"   {item['selection']} @ {item['odds']:.2f} — {item['bookmaker']}")
+        lines.append(f"   Model probability: {item['probability']:.1%} | Est. EV: {item['ev']:+.1%}")
+    lines.extend(["", f"Naive independent-leg probability product: {probability_product:.2%}",
+        "This product assumes independence and may be materially wrong. Selections may be correlated; this is not a calibrated accumulator probability.",
+        "All legs are experimental estimates, not guarantees. Check every market and price with the bookmaker. No BTTS or Under 2.5 selections."])
+    await reply(update, "\\n".join(lines))
 
 
 def ensure_prediction_records_table(cursor):
@@ -3199,6 +3477,194 @@ async def compare(
     )
 
 
+
+# ============================================================
+# LIVE BOOKMAKER ODDS — READ-ONLY CONNECTORS
+# ============================================================
+
+def save_bookmaker_odds_snapshots(games):
+    """Persist timestamped prices for later movement review; fail safely."""
+    if not games:
+        return 0
+    connection = get_connection()
+    saved = 0
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS punter_odds_snapshots (
+                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    bookmaker VARCHAR(40) NOT NULL,
+                    event_id VARCHAR(100) NOT NULL,
+                    home_team VARCHAR(180) NOT NULL,
+                    away_team VARCHAR(180) NOT NULL,
+                    kickoff_eat VARCHAR(32) NULL,
+                    market_name VARCHAR(180) NOT NULL,
+                    selection_name VARCHAR(180) NOT NULL,
+                    handicap_value VARCHAR(80) NULL,
+                    decimal_odds DECIMAL(10,3) NOT NULL,
+                    fetched_at DATETIME NOT NULL,
+                    INDEX idx_odds_event (bookmaker, event_id),
+                    INDEX idx_odds_fixture (home_team, away_team),
+                    INDEX idx_odds_time (fetched_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            fetched_at = now_utc_naive()
+            for game in games:
+                for market in game.get("markets", []):
+                    cursor.execute("""
+                        INSERT INTO punter_odds_snapshots
+                        (bookmaker, event_id, home_team, away_team, kickoff_eat,
+                         market_name, selection_name, handicap_value, decimal_odds, fetched_at)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """, (
+                        str(game.get("bookmaker") or "Unknown")[:40],
+                        str(game.get("event_id") or "")[:100],
+                        str(game.get("home") or "Unknown")[:180],
+                        str(game.get("away") or "Unknown")[:180],
+                        str(game.get("kickoff_eat") or "")[:32] or None,
+                        str(market.get("market") or "Unknown")[:180],
+                        str(market.get("selection") or "Unknown")[:180],
+                        str(market.get("handicap"))[:80] if market.get("handicap") is not None else None,
+                        market.get("odds"),
+                        fetched_at,
+                    ))
+                    saved += 1
+        return saved
+    finally:
+        connection.close()
+
+
+async def bookmakers_command(update, context):
+    from datetime import timedelta
+    day = datetime.now(EAT).date()
+    await reply(update, f"🔎 Checking Betika and BetPawa public odds feeds for {day:%d %b %Y}...")
+    result = await asyncio.to_thread(fetch_bookmaker_odds, day)
+    lines = ["🏦 BOOKMAKER FEED CHECK", f"Date: {day:%d %b %Y} (EAT)", ""]
+    for name in ("Betika", "BetPawa"):
+        item = result["bookmakers"].get(name)
+        if item:
+            lines.append(f"✅ {name}: {item['events']} events | {item['priced_events']} with markets")
+        else:
+            lines.append(f"⚠️ {name}: " + result["errors"].get(name, "No response"))
+    lines.extend(["", "These are read-only public feed checks. A successful response confirms data retrieval, not guaranteed continuous availability."])
+    await reply(update, "\n".join(lines))
+
+
+async def bookmaker_odds_command(update, context):
+    from datetime import timedelta
+    raw_query = " ".join(context.args).strip()
+    if not raw_query:
+        await reply(update,
+            "💹 BOOKMAKER ODDS COMPARISON\n\n"
+            "Usage: /odds HOME TEAM vs AWAY TEAM [today|tomorrow]\n"
+            "Example: /odds Brighton vs Brentford today\n\n"
+            "Compares retrieved Betika and BetPawa prices. Only markets actually returned by the feeds are shown.")
+        return
+    day = datetime.now(EAT).date()
+    lowered = raw_query.casefold()
+    if lowered.endswith(" tomorrow"):
+        day += timedelta(days=1)
+        raw_query = raw_query[:-9].strip()
+    elif lowered.endswith(" today"):
+        raw_query = raw_query[:-6].strip()
+    if " vs " not in raw_query.casefold():
+        await reply(update, "Please provide both teams: /odds HOME TEAM vs AWAY TEAM [today|tomorrow]")
+        return
+    home, away = re.split(r"\s+vs\s+", raw_query, maxsplit=1, flags=re.IGNORECASE)
+    await reply(update, f"🔎 Retrieving bookmaker prices for {home.strip()} vs {away.strip()} on {day:%d %b}...")
+    result = await asyncio.to_thread(fetch_bookmaker_odds, day)
+    matches = []
+    for name, item in result["bookmakers"].items():
+        matches.extend(find_bookmaker_event(item["games"], home.strip(), away.strip()))
+    # Keep exact fixture orientation separate; don't silently reverse home/away markets.
+    exact = [g for g in matches
+             if " ".join(str(g.get("home") or "").casefold().split()) == " ".join(home.casefold().split())
+             and " ".join(str(g.get("away") or "").casefold().split()) == " ".join(away.casefold().split())]
+    matches = exact or matches
+    unique = {(g.get("bookmaker"), g.get("event_id")): g for g in matches}
+    matches = list(unique.values())
+    snapshots_saved = 0
+    snapshot_error = None
+    if matches:
+        try:
+            snapshots_saved = await asyncio.to_thread(save_bookmaker_odds_snapshots, matches)
+        except Exception as exc:
+            snapshot_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+            logger.warning("Could not persist bookmaker odds snapshots: %s", snapshot_error)
+    if not matches:
+        errors = "; ".join(f"{k}: {v}" for k, v in result["errors"].items())
+        await reply(update,
+            "❌ No confidently matched bookmaker event was found.\n"
+            "The fixture may not be listed by these bookmakers, or team names may differ."
+            + (f"\nFeed errors: {errors}" if errors else ""))
+        return
+    lines = ["💹 BOOKMAKER ODDS COMPARISON",
+             f"{home.strip()} vs {away.strip()}",
+             f"Date: {day:%d %b %Y} (EAT)", ""]
+    for game in matches[:4]:
+        lines.append(f"🏦 {game['bookmaker']} — {game.get('home')} vs {game.get('away')}")
+        lines.append(f"Kick-off: {game.get('kickoff_eat') or 'Not supplied'}")
+        if not game.get("markets"):
+            lines.append("No usable prices returned.")
+        else:
+            for market in game["markets"][:35]:
+                handicap = f" ({market['handicap']})" if market.get("handicap") not in (None, "") else ""
+                lines.append(f"• {market['market']}: {market['selection']}{handicap} @ {market['odds']:.2f}")
+        if game.get("url"):
+            lines.append(game["url"])
+        lines.append("")
+    lines.append(f"Historical price observations saved: {snapshots_saved}.") if snapshots_saved else lines.append("Historical odds storage: not saved.")
+    if snapshot_error:
+        lines.append(f"Database storage warning: {snapshot_error}")
+    lines.append("Prices are snapshots retrieved now and may change before placement. Check the bookmaker slip before betting. No bets are placed by this bot.")
+    message = "\n".join(lines)
+    for offset in range(0, len(message), 3700):
+        await reply(update, message[offset:offset + 3700])
+
+
+async def odds_history_command(update, context):
+    """Show recent stored price observations for a precisely named fixture."""
+    raw_query = " ".join(context.args).strip()
+    if " vs " not in raw_query.casefold():
+        await reply(update, "Usage: /oddshistory HOME TEAM vs AWAY TEAM")
+        return
+    home, away = re.split(r"\s+vs\s+", raw_query, maxsplit=1, flags=re.IGNORECASE)
+    connection = None
+    try:
+        connection = get_connection()
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT bookmaker, market_name, selection_name, handicap_value,
+                       decimal_odds, fetched_at
+                FROM punter_odds_snapshots
+                WHERE LOWER(home_team)=LOWER(%s) AND LOWER(away_team)=LOWER(%s)
+                ORDER BY fetched_at DESC
+                LIMIT 40
+            """, (home.strip(), away.strip()))
+            rows = cursor.fetchall()
+    except Exception as exc:
+        await reply(update, "Historical odds are unavailable. Run /odds for this exact fixture first.\n"
+                     f"Database message: {type(exc).__name__}: {str(exc)[:180]}")
+        return
+    finally:
+        if connection:
+            connection.close()
+    if not rows:
+        await reply(update, "No stored price history found for that exact home/away team spelling. Run /odds first; each successful retrieval adds a timestamped snapshot.")
+        return
+    lines = [f"📈 STORED ODDS OBSERVATIONS", f"{home.strip()} vs {away.strip()}", ""]
+    for row in rows:
+        handicap = f" ({row['handicap_value']})" if row.get("handicap_value") else ""
+        lines.append(
+            f"{row['bookmaker']} | {row['market_name']} — {row['selection_name']}{handicap} "
+            f"@ {float(row['decimal_odds']):.2f} | {row['fetched_at']}"
+        )
+    lines.append("\nThese are observations captured by PUNTER KENYA, not a complete continuous price history.")
+    message = "\n".join(lines)
+    for offset in range(0, len(message), 3700):
+        await reply(update, message[offset:offset + 3700])
+
+
 # ============================================================
 # ODDS CALCULATOR
 # ============================================================
@@ -3320,6 +3786,11 @@ def main():
         ("live", live),
         ("dbtest", dbtest),
         ("calculator", calculator),
+        ("bookies", bookmakers_command),
+        ("odds", bookmaker_odds_command),
+        ("oddshistory", odds_history_command),
+        ("aipicks", aipicks_status_command),
+        ("accumulator", accumulator_status_command),
     ]
 
     for command, callback in handlers:
@@ -3331,6 +3802,8 @@ def main():
             )
         )
 
+    app.add_handler(CallbackQueryHandler(fullintel_callback, pattern=r"^fi:"))
+    
     app.add_error_handler(error_handler)
 
     logger.info(
