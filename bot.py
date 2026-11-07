@@ -1053,21 +1053,40 @@ async def leaguefixtures(
         return
 
     try:
+        # Accept the exact display format emitted by /leagues:
+        # "Competition Name | Region". Keep provider IDs internal.
+        parts = [part.strip() for part in query.split("|", 1)]
+        competition_name = parts[0]
+        competition_region = parts[1] if len(parts) == 2 else None
+
         def find_league():
             connection = get_connection()
             try:
                 with connection.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT provider_league_id, name, region
-                        FROM leagues
-                        WHERE provider = %s AND
-                              (LOWER(TRIM(name)) = LOWER(TRIM(%s))
-                               OR provider_league_id = %s)
-                        ORDER BY name LIMIT 100
-                        """,
-                        (PROVIDER_NAME, query, query),
-                    )
+                    if competition_region:
+                        cursor.execute(
+                            """
+                            SELECT provider_league_id, name, region
+                            FROM leagues
+                            WHERE provider = %s
+                              AND LOWER(TRIM(name)) = LOWER(TRIM(%s))
+                              AND LOWER(TRIM(COALESCE(region, ''))) = LOWER(TRIM(%s))
+                            ORDER BY name LIMIT 100
+                            """,
+                            (PROVIDER_NAME, competition_name, competition_region),
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            SELECT provider_league_id, name, region
+                            FROM leagues
+                            WHERE provider = %s AND
+                                  (LOWER(TRIM(name)) = LOWER(TRIM(%s))
+                                   OR provider_league_id = %s)
+                            ORDER BY name LIMIT 100
+                            """,
+                            (PROVIDER_NAME, competition_name, query),
+                        )
                     matches = cursor.fetchall()
                     if not matches:
                         cursor.execute(
@@ -1077,7 +1096,7 @@ async def leaguefixtures(
                             WHERE provider = %s AND name LIKE %s
                             ORDER BY name LIMIT 100
                             """,
-                            (PROVIDER_NAME, f"%{query}%"),
+                            (PROVIDER_NAME, f"%{competition_name}%"),
                         )
                         matches = cursor.fetchall()
                     return matches
