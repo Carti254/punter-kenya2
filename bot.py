@@ -22,6 +22,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from database import get_connection, test_connection
+from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find_bookmaker_event
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -3199,6 +3200,88 @@ async def compare(
     )
 
 
+
+# ============================================================
+# LIVE BOOKMAKER ODDS — READ-ONLY CONNECTORS
+# ============================================================
+
+async def bookmakers_command(update, context):
+    from datetime import timedelta
+    day = datetime.now(EAT).date()
+    await reply(update, f"🔎 Checking Betika and BetPawa public odds feeds for {day:%d %b %Y}...")
+    result = await asyncio.to_thread(fetch_bookmaker_odds, day)
+    lines = ["🏦 BOOKMAKER FEED CHECK", f"Date: {day:%d %b %Y} (EAT)", ""]
+    for name in ("Betika", "BetPawa"):
+        item = result["bookmakers"].get(name)
+        if item:
+            lines.append(f"✅ {name}: {item['events']} events | {item['priced_events']} with markets")
+        else:
+            lines.append(f"⚠️ {name}: " + result["errors"].get(name, "No response"))
+    lines.extend(["", "These are read-only public feed checks. A successful response confirms data retrieval, not guaranteed continuous availability."])
+    await reply(update, "\n".join(lines))
+
+
+async def bookmaker_odds_command(update, context):
+    from datetime import timedelta
+    raw_query = " ".join(context.args).strip()
+    if not raw_query:
+        await reply(update,
+            "💹 BOOKMAKER ODDS COMPARISON\n\n"
+            "Usage: /odds HOME TEAM vs AWAY TEAM [today|tomorrow]\n"
+            "Example: /odds Brighton vs Brentford today\n\n"
+            "Compares retrieved Betika and BetPawa prices. Only markets actually returned by the feeds are shown.")
+        return
+    day = datetime.now(EAT).date()
+    lowered = raw_query.casefold()
+    if lowered.endswith(" tomorrow"):
+        day += timedelta(days=1)
+        raw_query = raw_query[:-9].strip()
+    elif lowered.endswith(" today"):
+        raw_query = raw_query[:-6].strip()
+    if " vs " not in raw_query.casefold():
+        await reply(update, "Please provide both teams: /odds HOME TEAM vs AWAY TEAM [today|tomorrow]")
+        return
+    home, away = re.split(r"\s+vs\s+", raw_query, maxsplit=1, flags=re.IGNORECASE)
+    await reply(update, f"🔎 Retrieving bookmaker prices for {home.strip()} vs {away.strip()} on {day:%d %b}...")
+    result = await asyncio.to_thread(fetch_bookmaker_odds, day)
+    matches = []
+    for name, item in result["bookmakers"].items():
+        matches.extend(find_bookmaker_event(item["games"], home.strip(), away.strip()))
+    # Keep exact fixture orientation separate; don't silently reverse home/away markets.
+    exact = [g for g in matches
+             if " ".join(str(g.get("home") or "").casefold().split()) == " ".join(home.casefold().split())
+             and " ".join(str(g.get("away") or "").casefold().split()) == " ".join(away.casefold().split())]
+    matches = exact or matches
+    unique = {(g.get("bookmaker"), g.get("event_id")): g for g in matches}
+    matches = list(unique.values())
+    if not matches:
+        errors = "; ".join(f"{k}: {v}" for k, v in result["errors"].items())
+        await reply(update,
+            "❌ No confidently matched bookmaker event was found.\n"
+            "The fixture may not be listed by these bookmakers, or team names may differ."
+            + (f"\nFeed errors: {errors}" if errors else ""))
+        return
+    lines = ["💹 BOOKMAKER ODDS COMPARISON",
+             f"{home.strip()} vs {away.strip()}",
+             f"Date: {day:%d %b %Y} (EAT)", ""]
+    for game in matches[:4]:
+        lines.append(f"🏦 {game['bookmaker']} — {game.get('home')} vs {game.get('away')}")
+        lines.append(f"Kick-off: {game.get('kickoff_eat') or 'Not supplied'}")
+        if not game.get("markets"):
+            lines.append("No usable prices returned.")
+        else:
+            for market in game["markets"][:35]:
+                handicap = f" ({market['handicap']})" if market.get("handicap") not in (None, "") else ""
+                lines.append(f"• {market['market']}: {market['selection']}{handicap} @ {market['odds']:.2f}")
+        if game.get("url"):
+            lines.append(game["url"])
+        lines.append("")
+    lines.append("Prices are snapshots retrieved now and may change before placement. Check the bookmaker slip before betting. No bets are placed by this bot.")
+    message = "\n".join(lines)
+    for offset in range(0, len(message), 3700):
+        await reply(update, message[offset:offset + 3700])
+
+
 # ============================================================
 # ODDS CALCULATOR
 # ============================================================
@@ -3320,6 +3403,8 @@ def main():
         ("live", live),
         ("dbtest", dbtest),
         ("calculator", calculator),
+        ("bookies", bookmakers_command),
+        ("odds", bookmaker_odds_command),
     ]
 
     for command, callback in handlers:
