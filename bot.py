@@ -203,34 +203,39 @@ def parse_datetime(value):
 
 
 def extract_list(payload, preferred_keys=()):
-    """Read list payloads without assuming one exact response envelope."""
-
+    """Extract a list from GOAL API envelopes, including nested data objects."""
     if isinstance(payload, list):
         return payload
-
     if not isinstance(payload, dict):
         return []
 
-    candidates = list(preferred_keys) + [
-        "items",
-        "results",
-        "data",
+    preferred = list(preferred_keys) + [
+        "items", "results", "fixtures", "matches",
+        "leagues", "competitions", "data",
     ]
+    visited = set()
 
-    for key in candidates:
-        value = payload.get(key)
-
+    def walk(value, depth=0):
         if isinstance(value, list):
             return value
+        if not isinstance(value, dict) or depth > 5 or id(value) in visited:
+            return []
+        visited.add(id(value))
 
-        if isinstance(value, dict):
-            for inner_key in candidates:
-                inner = value.get(inner_key)
+        # Prefer known collection keys before inspecting other nested objects.
+        for key in preferred:
+            if key in value:
+                found = walk(value[key], depth + 1)
+                if found:
+                    return found
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                found = walk(child, depth + 1)
+                if found:
+                    return found
+        return []
 
-                if isinstance(inner, list):
-                    return inner
-
-    return []
+    return walk(payload)
 
 
 def extract_fixtures(payload):
@@ -655,10 +660,19 @@ def fetch_upcoming_fixture_rows(days=14, league_id=None):
             if not rows:
                 break
 
-            for raw in rows:
+            for index, raw in enumerate(rows):
                 item = normalise_fixture(raw)
-                if item and item["provider_match_id"] not in seen:
-                    seen.add(item["provider_match_id"])
+                # Keep raw provider rows even when their schema has changed.
+                # Dropping them here made the command falsely report zero API
+                # fixtures and hid the actual payload shape from diagnostics.
+                fixture_key = (
+                    item["provider_match_id"]
+                    if item
+                    else str(first_value(raw, "id", "fixtureId", "matchId", "match_id")
+                             or f"{offset}:{index}:{hash(json.dumps(raw, sort_keys=True, default=str))}")
+                )
+                if fixture_key not in seen:
+                    seen.add(fixture_key)
                     collected.append(raw)
 
             meta = response_metadata(payload)
