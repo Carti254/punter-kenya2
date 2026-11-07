@@ -587,6 +587,49 @@ def fetch_all_leagues():
     return collected
 
 
+def fetch_matchintel_fixture_rows(days=14):
+    """
+    Fast first-pass fixture lookup for /matchintel.
+    Use the provider's date-range endpoint and pagination first; the broader
+    date-by-date catalogue scan is reserved as a fallback when no match is found.
+    """
+    first_day = datetime.now(EAT).date() - timedelta(days=1)
+    last_day = first_day + timedelta(days=days + 1)
+    collected = []
+    seen = set()
+    offset = 0
+    limit = 100
+
+    for _ in range(10):
+        payload = goal_request("fixtures", {
+            "from": first_day.isoformat(),
+            "to": last_day.isoformat(),
+            "limit": limit,
+            "offset": offset,
+        })
+        rows = extract_fixtures(payload)
+        if not rows:
+            break
+        for raw in rows:
+            item = normalise_fixture(raw)
+            if item and item["provider_match_id"] not in seen:
+                seen.add(item["provider_match_id"])
+                collected.append(raw)
+        meta = response_metadata(payload)
+        if meta.get("hasMore") is False:
+            break
+        total = safe_int(meta.get("total"))
+        current_offset = safe_int(meta.get("offset"))
+        page_limit = safe_int(meta.get("limit")) or limit
+        next_offset = (current_offset if current_offset is not None else offset) + len(rows)
+        if (total is not None and next_offset >= total) or next_offset <= offset:
+            break
+        if len(rows) < page_limit and meta.get("hasMore") is not True:
+            break
+        offset, limit = next_offset, page_limit
+    return collected
+
+
 def fetch_upcoming_fixture_rows(days=14, league_id=None):
     """
     Fetch a date range through GOAL API's documented /fixtures endpoint.
@@ -1956,31 +1999,36 @@ async def matchintel(
                     found.append((raw, item))
             return found
 
-        # Most requested matches are today or within the next day. Search that
-        # short window first; only expand to 14 days if no match is found.
+        # Fast path: one paginated date-range query. Only run the heavier
+        # date-by-date catalogue scan if the range endpoint fails or finds no match.
         try:
             raw_rows = await asyncio.wait_for(
-                asyncio.to_thread(fetch_upcoming_fixture_rows, 1),
-                timeout=35,
+                asyncio.to_thread(fetch_matchintel_fixture_rows, 14),
+                timeout=20,
             )
             candidates = find_candidates(raw_rows)
-            if not candidates:
-                await reply(
-                    update,
-                    "🔎 No match in the short fixture window. Expanding the search to 14 days...",
-                )
-                raw_rows = await asyncio.wait_for(
-                    asyncio.to_thread(fetch_upcoming_fixture_rows, 14),
-                    timeout=45,
-                )
-                candidates = find_candidates(raw_rows)
         except asyncio.TimeoutError:
+            raw_rows = []
+            candidates = []
+
+        if not candidates:
             await reply(
                 update,
-                "⏱ Fixture search timed out while the provider was responding. "
-                "Please retry in a moment; the bot is still running.",
+                "🔎 Checking the full date-by-date fixture feed...",
             )
-            return
+            try:
+                raw_rows = await asyncio.wait_for(
+                    asyncio.to_thread(fetch_upcoming_fixture_rows, 14),
+                    timeout=30,
+                )
+                candidates = find_candidates(raw_rows)
+            except asyncio.TimeoutError:
+                await reply(
+                    update,
+                    "⏱ The fixture provider did not respond in time. "
+                    "Try again shortly; Telegram is still connected.",
+                )
+                return
 
         if not candidates:
             await reply(
