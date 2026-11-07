@@ -3351,7 +3351,7 @@ async def odds_history_command(update, context):
     if " vs " not in raw_query.casefold():
         await reply(update, "Usage: /oddshistory HOME TEAM vs AWAY TEAM")
         return
-    home, away = re.split(r"\\s+vs\\s+", raw_query, maxsplit=1, flags=re.IGNORECASE)
+    home, away = re.split(r"\s+vs\s+", raw_query, maxsplit=1, flags=re.IGNORECASE)
     connection = None
     try:
         connection = get_connection()
