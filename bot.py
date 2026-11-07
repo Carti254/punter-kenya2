@@ -1161,7 +1161,7 @@ async def start(
     )
 
 
-async FULLINTEL_MENUS = {
+FULLINTEL_MENUS = {
     "fixtures": ("📅 FIXTURES & LEAGUES", [
         [("Upcoming fixtures", "fixtures_list"), ("Today's fixtures", "fixtures_today")],
         [("Tomorrow's fixtures", "fixtures_tomorrow"), ("League catalogue", "leagues")],
