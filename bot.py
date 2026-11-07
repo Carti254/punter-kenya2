@@ -767,7 +767,7 @@ async def start(
         "/diagnose — test GOAL API endpoints\n"
         "/leagues [SEARCH] — search the synced competition catalogue\n"
         "/syncleagues — download all available competitions\n"
-        "/leaguefixtures LEAGUE_ID — show fixtures for one competition\n"
+        "/leaguefixtures LEAGUE NAME — show fixtures for one competition\n"
         "/fixtures — show the nearest upcoming fixtures\n"
         "/syncfixtures — save upcoming fixtures\n"
         "/live — show live matches\n\n"
@@ -1043,26 +1043,72 @@ async def leaguefixtures(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    """Show the nearest fixtures for one user-selected competition."""
-    if not context.args:
+    """Show fixtures by competition name; resolve the provider ID internally."""
+    query = " ".join(context.args).strip()
+    if not query:
         await reply(
             update,
-            "Usage: /leaguefixtures LEAGUE_ID\n"
-            "Find a competition ID with /leagues SEARCH.",
+            "Usage: /leaguefixtures La Liga\n"
+            "Enter the competition name as shown by /leagues.",
         )
         return
 
-    league_id = context.args[0].strip()
-    if not league_id:
-        await reply(update, "Enter a valid league ID.")
-        return
-
-    await reply(
-        update,
-        f"⚽ Fetching the next 14 days for league {league_id}...",
-    )
-
     try:
+        def find_league():
+            connection = get_connection()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT provider_league_id, name, region
+                        FROM leagues
+                        WHERE provider = %s AND
+                              (LOWER(name) = LOWER(%s) OR provider_league_id = %s)
+                        ORDER BY name LIMIT 10
+                        """,
+                        (PROVIDER_NAME, query, query),
+                    )
+                    matches = cursor.fetchall()
+                    if not matches:
+                        cursor.execute(
+                            """
+                            SELECT provider_league_id, name, region
+                            FROM leagues
+                            WHERE provider = %s AND name LIKE %s
+                            ORDER BY name LIMIT 10
+                            """,
+                            (PROVIDER_NAME, f"%{query}%"),
+                        )
+                        matches = cursor.fetchall()
+                    return matches
+            finally:
+                connection.close()
+
+        matches = await asyncio.to_thread(find_league)
+        if not matches:
+            await reply(
+                update,
+                f"🏆 I couldn't find a competition matching “{query}”.\n"
+                "Search the catalogue with /leagues SEARCH.",
+            )
+            return
+
+        if len(matches) > 1:
+            choices = [
+                f"• {row['name']} | {row.get('region') or 'Region unavailable'}"
+                for row in matches
+            ]
+            await reply(
+                update,
+                "Several competitions match that name. Be more specific:\n\n"
+                + "\n".join(choices),
+            )
+            return
+
+        league_id = matches[0]["provider_league_id"]
+        league_name = matches[0]["name"]
+        await reply(update, f"⚽ Fetching the next 14 days of {league_name} fixtures...")
+
         raw_rows = await asyncio.to_thread(
             fetch_upcoming_fixture_rows,
             14,
@@ -1073,13 +1119,13 @@ async def leaguefixtures(
         if not selected:
             await reply(
                 update,
-                "No upcoming fixtures were returned for this league "
+                f"No upcoming fixtures were returned for {league_name} "
                 "in the next 14 days. This may also mean the API has no "
                 "fixture coverage for the selected competition.",
             )
             return
 
-        lines = [f"⚽ LEAGUE FIXTURES — {len(selected)} shown", ""]
+        lines = [f"⚽ {league_name.upper()} FIXTURES — {len(selected)} shown", ""]
         for _, item in selected:
             kickoff = (
                 item["kickoff_at"]
@@ -1087,7 +1133,7 @@ async def leaguefixtures(
                 .astimezone(EAT)
             )
             lines.append(
-                f"🏆 {item['competition'] or 'Competition unavailable'}\n"
+                f"🏆 {item['competition'] or league_name}\n"
                 f"🏠 {item['home_team']}\n"
                 f"🆚 {item['away_team']}\n"
                 f"🕒 {kickoff:%d %b %Y — %H:%M EAT}\n"
@@ -1102,10 +1148,6 @@ async def leaguefixtures(
             f"❌ LEAGUE FIXTURE REQUEST FAILED\n\n{str(exc)[:700]}",
         )
 
-
-# ============================================================
-# UPCOMING FIXTURES
-# ============================================================
 
 async def fixtures(
     update: Update,
