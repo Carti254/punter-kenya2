@@ -509,30 +509,25 @@ def fetch_all_leagues():
 
 def fetch_upcoming_fixture_rows(days=14, league_id=None):
     """
-    Fetch each calendar day's fixtures concurrently with bounded workers.
-    Pagination remains sequential within each date to respect API metadata.
+    Fetch a date range through GOAL API's documented /fixtures endpoint.
+    This avoids requesting every calendar date separately and ensures the
+    search is not limited to whichever competitions happen to be in one
+    date-endpoint page. Fall back to the date endpoint if range listing fails
+    or returns no usable rows.
     """
     first_day = datetime.now(EAT).date() - timedelta(days=1)
-    dates = [
-        first_day + timedelta(days=day_number)
-        for day_number in range(days + 2)
-    ]
+    last_day = first_day + timedelta(days=days + 1)
 
-    def fetch_one_date(fixture_date):
+    def collect_pages(endpoint, base_params):
         collected = []
         seen = set()
         offset = 0
         limit = 100
 
-        for _ in range(20):
-            params = {"limit": limit, "offset": offset}
-            if league_id:
-                params["leagueId"] = str(league_id)
-
-            payload = goal_request(
-                f"fixtures/date/{fixture_date.isoformat()}",
-                params,
-            )
+        for _ in range(50):
+            params = dict(base_params)
+            params.update({"limit": limit, "offset": offset})
+            payload = goal_request(endpoint, params)
             rows = extract_fixtures(payload)
             if not rows:
                 break
@@ -550,7 +545,9 @@ def fetch_upcoming_fixture_rows(days=14, league_id=None):
             total = safe_int(meta.get("total"))
             current_offset = safe_int(meta.get("offset"))
             page_limit = safe_int(meta.get("limit")) or limit
-            next_offset = (current_offset if current_offset is not None else offset) + len(rows)
+            next_offset = (
+                current_offset if current_offset is not None else offset
+            ) + len(rows)
 
             if total is not None and next_offset >= total:
                 break
@@ -560,15 +557,57 @@ def fetch_upcoming_fixture_rows(days=14, league_id=None):
                 break
 
             offset = next_offset
+            limit = page_limit
 
         return collected
+
+    range_params = {
+        "from": first_day.isoformat(),
+        "to": last_day.isoformat(),
+    }
+    if league_id:
+        range_params["leagueId"] = str(league_id)
+
+    try:
+        range_rows = collect_pages("fixtures", range_params)
+        if range_rows:
+            return range_rows
+    except Exception:
+        logger.warning(
+            "GOAL API date-range fixture request failed; falling back to "
+            "per-date fixture retrieval.",
+            exc_info=True,
+        )
+
+    # Compatibility fallback for providers/accounts where /fixtures range
+    # filters are unavailable or return no rows.
+    dates = [
+        first_day + timedelta(days=day_number)
+        for day_number in range(days + 2)
+    ]
+
+    def fetch_one_date(fixture_date):
+        params = {"limit": 100, "offset": 0}
+        if league_id:
+            params["leagueId"] = str(league_id)
+        try:
+            return collect_pages(
+                f"fixtures/date/{fixture_date.isoformat()}",
+                params,
+            )
+        except Exception:
+            logger.warning(
+                "Fixture retrieval failed for %s",
+                fixture_date.isoformat(),
+                exc_info=True,
+            )
+            return []
 
     collected = []
     with ThreadPoolExecutor(max_workers=8) as executor:
         for date_rows in executor.map(fetch_one_date, dates):
             collected.extend(date_rows)
 
-    # Remove duplicates that may appear on adjacent UTC/local date boundaries.
     unique = {}
     for raw in collected:
         item = normalise_fixture(raw)
