@@ -36,6 +36,11 @@ PROVIDER_NAME = "goal_api"
 EAT = ZoneInfo("Africa/Nairobi")
 FIXTURE_RESPONSE_DIAGNOSTICS = []
 
+# Stop every bot command from repeatedly hitting GOAL API after a 429.
+GOAL_API_COOLDOWN_UNTIL = None
+GOAL_API_COOLDOWN_LOCK = threading.Lock()
+GOAL_API_COOLDOWN_SECONDS = 60
+
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -271,6 +276,21 @@ def response_metadata(payload):
 # ============================================================
 
 def goal_request(endpoint, params=None):
+    global GOAL_API_COOLDOWN_UNTIL
+
+    with GOAL_API_COOLDOWN_LOCK:
+        cooldown_until = GOAL_API_COOLDOWN_UNTIL
+        if cooldown_until and datetime.now(timezone.utc) < cooldown_until:
+            remaining = max(
+                1,
+                int((cooldown_until - datetime.now(timezone.utc)).total_seconds())
+            )
+            raise RuntimeError(
+                f"GOAL API is temporarily paused after a rate-limit response. "
+                f"Try again in about {remaining} seconds."
+            )
+        if cooldown_until and datetime.now(timezone.utc) >= cooldown_until:
+            GOAL_API_COOLDOWN_UNTIL = None
 
     if not GOAL_API_KEY:
         raise RuntimeError(
@@ -309,6 +329,13 @@ def goal_request(endpoint, params=None):
             body = (exc.response.text or "")[:500]
 
         rate_limit_details = ""
+        if status == 429:
+            with GOAL_API_COOLDOWN_LOCK:
+                GOAL_API_COOLDOWN_UNTIL = (
+                    datetime.now(timezone.utc)
+                    + timedelta(seconds=GOAL_API_COOLDOWN_SECONDS)
+                )
+
         if status == 429 and exc.response is not None:
             response_headers = exc.response.headers
             header_values = {
