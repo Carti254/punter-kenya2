@@ -578,19 +578,19 @@ def fetch_upcoming_fixture_rows(days=14, league_id=None):
     if league_id:
         range_params["leagueId"] = str(league_id)
 
+    # The range endpoint can return a partial first page without an error.
+    # Always supplement it with date-scoped results so fixtures in other
+    # competitions are not silently missed.
+    range_rows = []
     try:
         range_rows = collect_pages("fixtures", range_params)
-        if range_rows:
-            return range_rows
     except Exception:
         logger.warning(
-            "GOAL API date-range fixture request failed; falling back to "
-            "per-date fixture retrieval.",
+            "GOAL API date-range fixture request failed; using date-scoped "
+            "fixture retrieval.",
             exc_info=True,
         )
 
-    # Compatibility fallback for providers/accounts where /fixtures range
-    # filters are unavailable or return no rows.
     dates = [
         first_day + timedelta(days=day_number)
         for day_number in range(days + 2)
@@ -613,7 +613,7 @@ def fetch_upcoming_fixture_rows(days=14, league_id=None):
             )
             return []
 
-    collected = []
+    collected = list(range_rows)
     with ThreadPoolExecutor(max_workers=8) as executor:
         for date_rows in executor.map(fetch_one_date, dates):
             collected.extend(date_rows)
