@@ -1312,6 +1312,11 @@ async def process_slip_flow(update, context):
     return False
 
 
+async def cancel_slip_command(update, context):
+    context.user_data.pop("slip_flow", None)
+    await reply(update, "Cancelled. Your existing slips have not been changed.")
+
+
 async def my_slips_command(update, context):
     try:
         rows = await asyncio.to_thread(list_slips, update.effective_user.id, 15)
@@ -3998,6 +4003,7 @@ def main():
         ("aipicks", aipicks_status_command),
         ("accumulator", accumulator_status_command),
         ("myslips", my_slips_command),
+        ("cancel", cancel_slip_command),
     ]
 
     for command, callback in handlers:
