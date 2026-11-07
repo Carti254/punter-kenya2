@@ -176,14 +176,30 @@ def fetch_betpawa(day: date | None = None):
             "skip": 0, "take": 50,
         }]
     }
+    # BetPawa's web API is undocumented and is sensitive to the browser
+    # request profile. Mirror the headers used by the maintained OddsPro
+    # adapter rather than sending a generic Python-client request.
     headers = {
-        "devicetype": "web", "referer": "https://www.betpawa.co.ke/events",
-        "x-pawa-brand": "betpawa-kenya", "x-pawa-language": "en",
+        "Accept": "application/json",
+        "devicetype": "web",
+        "dnt": "1",
+        "referer": "https://www.betpawa.co.ke/events?marketId=1X2&categoryId=2&day=tomorrow",
+        "sec-ch-ua": '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "traceid": "ff308908-c15d-4119-b6d3-60ed992a19e0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "vuejs": "true",
+        "x-pawa-brand": "betpawa-kenya",
+        "x-pawa-language": "en",
     }
+    # Keep BetPawa failures isolated from Betika and expose the underlying
+    # transport/status cause so diagnostics are actionable.
     payload = _get(
         BETPAWA_BASE + "/events/lists/by-queries",
         params={"q": __import__("json").dumps(query, separators=(",", ":"))},
         headers=headers,
+        timeout=(10, 30),
     )
     responses = payload.get("responses") if isinstance(payload, dict) else None
     if not isinstance(responses, list):
