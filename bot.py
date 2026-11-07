@@ -2,7 +2,7 @@
 import os
 import logging
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -239,6 +239,9 @@ def goal_request(endpoint, params=None):
             f"{exc.__class__.__name__}: {exc}"
         ) from None
 
+    if response.status_code == 204:
+        return {"success": True, "data": [], "pagination": {"hasMore": False}}
+
     try:
         payload = response.json()
 
@@ -446,27 +449,114 @@ def upcoming_fixtures(raw_fixtures, limit=20):
 
     now = now_utc_naive()
     valid = []
+    seen = set()
 
     for raw in raw_fixtures:
-
         item = normalise_fixture(raw)
+        if not item:
+            continue
 
-        if (
-            item
-            and item["kickoff_at"]
-            and item["kickoff_at"] >= now
-        ):
-            valid.append(
-                (item["kickoff_at"], raw, item)
-            )
+        fixture_id = item["provider_match_id"]
+        if fixture_id in seen:
+            continue
+        seen.add(fixture_id)
+
+        if item["kickoff_at"] and item["kickoff_at"] >= now:
+            valid.append((item["kickoff_at"], raw, item))
 
     valid.sort(key=lambda row: row[0])
+    return [(raw, item) for _, raw, item in valid[:limit]]
 
-    return [
-        (raw, item)
-        for _, raw, item in valid[:limit]
-    ]
 
+def fetch_all_leagues():
+    """Fetch every page of the GOAL API league catalogue."""
+    collected = []
+    offset = 0
+    limit = 100
+
+    for _ in range(50):
+        payload = goal_request("leagues", {"limit": limit, "offset": offset})
+        rows = extract_leagues(payload)
+        if not rows:
+            break
+
+        collected.extend(rows)
+        meta = response_metadata(payload)
+        if meta.get("hasMore") is False:
+            break
+
+        total = safe_int(meta.get("total"))
+        current_offset = safe_int(meta.get("offset"))
+        page_limit = safe_int(meta.get("limit")) or limit
+        next_offset = (current_offset if current_offset is not None else offset) + len(rows)
+
+        if total is not None and next_offset >= total:
+            break
+        if next_offset <= offset:
+            break
+
+        offset = next_offset
+        limit = page_limit
+
+        if len(rows) < limit and meta.get("hasMore") is not True:
+            break
+
+    return collected
+
+
+def fetch_upcoming_fixture_rows(days=14, league_id=None):
+    """
+    Use the documented date endpoint instead of scanning the first page
+    of the entire fixtures database. Include yesterday for UTC/EAT boundary
+    coverage and paginate each date where the API reports more records.
+    """
+    first_day = datetime.now(EAT).date() - timedelta(days=1)
+    collected = []
+    seen = set()
+    limit = 100
+
+    for day_number in range(days + 2):
+        fixture_date = first_day + timedelta(days=day_number)
+        offset = 0
+
+        for _ in range(20):
+            params = {"limit": limit, "offset": offset}
+            if league_id:
+                params["leagueId"] = str(league_id)
+
+            payload = goal_request(
+                f"fixtures/date/{fixture_date.isoformat()}",
+                params,
+            )
+            rows = extract_fixtures(payload)
+            if not rows:
+                break
+
+            for raw in rows:
+                item = normalise_fixture(raw)
+                if item and item["provider_match_id"] not in seen:
+                    seen.add(item["provider_match_id"])
+                    collected.append(raw)
+
+            meta = response_metadata(payload)
+            if meta.get("hasMore") is False:
+                break
+
+            total = safe_int(meta.get("total"))
+            current_offset = safe_int(meta.get("offset"))
+            page_limit = safe_int(meta.get("limit")) or limit
+            next_offset = (current_offset if current_offset is not None else offset) + len(rows)
+
+            if total is not None and next_offset >= total:
+                break
+            if next_offset <= offset:
+                break
+            if len(rows) < page_limit and meta.get("hasMore") is not True:
+                break
+
+            offset = next_offset
+
+    return collected
 
 # ============================================================
 # DATABASE STORAGE
@@ -488,6 +578,38 @@ def get_table_columns(cursor, table_name):
         row["COLUMN_NAME"]
         for row in cursor.fetchall()
     }
+
+
+def save_leagues_to_database(raw_leagues):
+    """Upsert the complete provider league catalogue into the leagues table."""
+    connection = get_connection()
+    saved = 0
+    skipped = 0
+
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                INSERT INTO leagues
+                    (provider, provider_league_id, name, region)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    name = VALUES(name),
+                    region = VALUES(region)
+            """
+            for raw in raw_leagues:
+                item = normalise_league(raw)
+                if not item or not item["id"]:
+                    skipped += 1
+                    continue
+                cursor.execute(
+                    sql,
+                    (PROVIDER_NAME, item["id"], item["name"], item["country"]),
+                )
+                saved += 1
+
+        return {"received": len(raw_leagues), "saved": saved, "skipped": skipped}
+    finally:
+        connection.close()
 
 
 def save_fixtures_to_database(raw_fixtures):
@@ -643,8 +765,10 @@ async def start(
         "Football data collection and research system.\n\n"
         "DATA COMMANDS\n"
         "/diagnose — test GOAL API endpoints\n"
-        "/leagues — inspect available competitions\n"
-        "/fixtures — show upcoming fixtures\n"
+        "/leagues [SEARCH] — search the synced competition catalogue\n"
+        "/syncleagues — download all available competitions\n"
+        "/leaguefixtures LEAGUE_ID — show fixtures for one competition\n"
+        "/fixtures — show the nearest upcoming fixtures\n"
         "/syncfixtures — save upcoming fixtures\n"
         "/live — show live matches\n\n"
         "SYSTEM COMMANDS\n"
@@ -814,89 +938,168 @@ async def leagues(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    """Search the locally synced full league catalogue."""
+    query = " ".join(context.args).strip()
+
+    try:
+        connection = await asyncio.to_thread(get_connection)
+        try:
+            with connection.cursor() as cursor:
+                if query:
+                    pattern = f"%{query}%"
+                    cursor.execute(
+                        """
+                        SELECT provider_league_id, name, region
+                        FROM leagues
+                        WHERE provider = %s AND (name LIKE %s OR region LIKE %s)
+                        ORDER BY name LIMIT 35
+                        """,
+                        (PROVIDER_NAME, pattern, pattern),
+                    )
+                    rows = cursor.fetchall()
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS total FROM leagues
+                        WHERE provider = %s AND (name LIKE %s OR region LIKE %s)
+                        """,
+                        (PROVIDER_NAME, pattern, pattern),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT provider_league_id, name, region
+                        FROM leagues WHERE provider = %s
+                        ORDER BY name LIMIT 35
+                        """,
+                        (PROVIDER_NAME,),
+                    )
+                    rows = cursor.fetchall()
+                    cursor.execute(
+                        "SELECT COUNT(*) AS total FROM leagues WHERE provider = %s",
+                        (PROVIDER_NAME,),
+                    )
+                count_row = cursor.fetchone()
+                total = count_row["total"] if count_row else 0
+        finally:
+            connection.close()
+
+        if not total:
+            await reply(
+                update,
+                "🏆 The local league catalogue is empty. Run /syncleagues first "
+                "to download all available competitions.",
+            )
+            return
+
+        heading = (
+            f"🏆 LEAGUE SEARCH — {total} matches"
+            if query else f"🏆 LEAGUE CATALOGUE — {total} competitions"
+        )
+        output = [heading, ""]
+        for row in rows:
+            output.append(
+                f"• {row['name']} | {row.get('region') or 'Region unavailable'} "
+                f"| ID: {row['provider_league_id']}"
+            )
+        if total > len(rows):
+            output.extend(["", f"Showing {len(rows)}. Narrow the search with /leagues SEARCH."])
+        await reply(update, "\n".join(output))
+
+    except Exception as exc:
+        logger.exception("League catalogue lookup failed")
+        await reply(update, f"❌ LEAGUE LOOKUP FAILED\n\n{str(exc)[:700]}")
+
+
+async def syncleagues(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    await reply(
+        update,
+        "🔄 Downloading the complete GOAL API league catalogue. "
+        "This may take several API requests...",
+    )
+    try:
+        raw_rows = await asyncio.to_thread(fetch_all_leagues)
+        if not raw_rows:
+            await reply(update, "⚠️ GOAL API returned no league records. Nothing was saved.")
+            return
+
+        stats = await asyncio.to_thread(save_leagues_to_database, raw_rows)
+        await reply(
+            update,
+            "✅ FULL LEAGUE CATALOGUE SYNC COMPLETE\n\n"
+            f"API records collected: {len(raw_rows)}\n"
+            f"Valid leagues saved/updated: {stats['saved']}\n"
+            f"Records skipped: {stats['skipped']}\n\n"
+            "Search any synced competition using /leagues SEARCH.",
+        )
+    except Exception as exc:
+        logger.exception("Full league catalogue sync failed")
+        await reply(update, f"❌ LEAGUE SYNC FAILED\n\n{str(exc)[:800]}")
+
+
+async def leaguefixtures(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """Show the nearest fixtures for one user-selected competition."""
+    if not context.args:
+        await reply(
+            update,
+            "Usage: /leaguefixtures LEAGUE_ID\n"
+            "Find a competition ID with /leagues SEARCH.",
+        )
+        return
+
+    league_id = context.args[0].strip()
+    if not league_id:
+        await reply(update, "Enter a valid league ID.")
+        return
 
     await reply(
         update,
-        "🏆 Fetching the first page of the GOAL API league catalogue...",
+        f"⚽ Fetching the next 14 days for league {league_id}...",
     )
 
     try:
-
-        payload = await asyncio.to_thread(
-            goal_request,
-            "leagues",
-            {"limit": 100, "offset": 0},
+        raw_rows = await asyncio.to_thread(
+            fetch_upcoming_fixture_rows,
+            14,
+            league_id,
         )
+        selected = upcoming_fixtures(raw_rows, limit=20)
 
-        rows = extract_leagues(payload)
-
-        if not rows:
-
-            keys = (
-                ", ".join(payload.keys())
-                if isinstance(payload, dict)
-                else type(payload).__name__
-            )
-
+        if not selected:
             await reply(
                 update,
-                "⚠️ The /leagues request succeeded, "
-                "but I could not identify a league list.\n"
-                f"Response structure: {keys}\n"
-                "Run /diagnose and share its result so "
-                "we can map the exact response format.",
+                "No upcoming fixtures were returned for this league "
+                "in the next 14 days. This may also mean the API has no "
+                "fixture coverage for the selected competition.",
             )
-
             return
 
-        meta = response_metadata(payload)
-
-        output = [
-            f"🏆 LEAGUE CATALOGUE — {len(rows)} records on this page",
-            "",
-        ]
-
-        for raw in rows[:35]:
-
-            item = normalise_league(raw)
-
-            if item:
-
-                output.append(
-                    f"• {item['name']} | "
-                    f"{item['country']} | "
-                    f"ID: {item['id'] or '—'}"
-                )
-
-        output.append("")
-        output.append(
-            "Pagination: "
-            + (
-                str(meta)[:500]
-                if meta
-                else "metadata not supplied"
+        lines = [f"⚽ LEAGUE FIXTURES — {len(selected)} shown", ""]
+        for _, item in selected:
+            kickoff = (
+                item["kickoff_at"]
+                .replace(tzinfo=timezone.utc)
+                .astimezone(EAT)
             )
-        )
+            lines.append(
+                f"🏆 {item['competition'] or 'Competition unavailable'}\n"
+                f"🏠 {item['home_team']}\n"
+                f"🆚 {item['away_team']}\n"
+                f"🕒 {kickoff:%d %b %Y — %H:%M EAT}\n"
+            )
 
-        output.append(
-            "This is the first page only; "
-            "full-catalogue pagination is a separate next step."
-        )
-
-        await reply(
-            update,
-            "\n".join(output),
-        )
+        await reply(update, "\n".join(lines))
 
     except Exception as exc:
-
-        logger.exception(
-            "League catalogue request failed"
-        )
-
+        logger.exception("League fixture retrieval failed")
         await reply(
             update,
-            f"❌ LEAGUE CATALOGUE FAILED\n\n{str(exc)[:700]}",
+            f"❌ LEAGUE FIXTURE REQUEST FAILED\n\n{str(exc)[:700]}",
         )
 
 
@@ -916,13 +1119,10 @@ async def fixtures(
 
     try:
 
-        payload = await asyncio.to_thread(
-            goal_request,
-            "fixtures",
-            {"limit": 100, "offset": 0},
+        raw_rows = await asyncio.to_thread(
+            fetch_upcoming_fixture_rows,
+            14,
         )
-
-        raw_rows = extract_fixtures(payload)
 
         selected = upcoming_fixtures(
             raw_rows,
@@ -933,11 +1133,9 @@ async def fixtures(
 
             await reply(
                 update,
-                "No upcoming fixtures could be identified "
-                "in the first API page.\n"
-                f"Records received: {len(raw_rows)}\n"
-                "This does not prove there are no fixtures; "
-                "pagination and API date filters still need verification.",
+                "No upcoming fixtures were returned in the 14-day date search.\n"
+                f"Date records received: {len(raw_rows)}\n"
+                "Try again later or check the selected competition's coverage.",
             )
 
             return
@@ -995,19 +1193,16 @@ async def syncfixtures(
 
     try:
 
-        payload = await asyncio.to_thread(
-            goal_request,
-            "fixtures",
-            {"limit": 100, "offset": 0},
+        raw_rows = await asyncio.to_thread(
+            fetch_upcoming_fixture_rows,
+            14,
         )
-
-        raw_rows = extract_fixtures(payload)
 
         selected = [
             raw
             for raw, _ in upcoming_fixtures(
                 raw_rows,
-                limit=100,
+                limit=1000,
             )
         ]
 
@@ -1015,9 +1210,9 @@ async def syncfixtures(
 
             await reply(
                 update,
-                "⚠️ No upcoming fixtures were identified "
-                "on the first API page. Nothing was saved.\n"
-                f"Records received: {len(raw_rows)}",
+                "⚠️ No upcoming fixtures were returned by the 14-day date search. "
+                "Nothing was saved.\n"
+                f"Date records received: {len(raw_rows)}",
             )
 
             return
@@ -1034,8 +1229,8 @@ async def syncfixtures(
             f"Future fixtures selected: {len(selected)}\n"
             f"Valid records saved/updated: {stats['saved']}\n"
             f"Invalid records skipped: {stats['skipped']}\n\n"
-            "Note: this command currently processes "
-            "the first API page only.",
+            "Coverage: date-based retrieval across the next 14 days, "
+            "with pagination and duplicate removal.",
         )
 
     except Exception as exc:
@@ -1307,6 +1502,8 @@ def main():
         ("help", help_command),
         ("diagnose", diagnose),
         ("leagues", leagues),
+        ("syncleagues", syncleagues),
+        ("leaguefixtures", leaguefixtures),
         ("fixtures", fixtures),
         ("syncfixtures", syncfixtures),
         ("live", live),
