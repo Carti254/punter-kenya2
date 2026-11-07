@@ -1635,7 +1635,7 @@ async def fixtures(
             if len(args) != 1 or not str(args[0]).isdigit():
                 await reply(
                     update,
-                    "Usage: /fixtures [today|tomorrow] [PAGE]\\n"
+                    "Usage: /fixtures [today|tomorrow] [PAGE]\n"
                     "Examples: /fixtures today | /fixtures tomorrow | /fixtures 2",
                 )
                 return
@@ -1674,7 +1674,7 @@ async def fixtures(
         if page > total_pages:
             await reply(
                 update,
-                f"Only {total} unique fixtures were found across {total_pages} page(s).\\n"
+                f"Only {total} unique fixtures were found across {total_pages} page(s).\n"
                 f"Use /fixtures {day_filter + ' ' if day_filter else ''}{total_pages} for the last page.",
             )
             return
@@ -1683,7 +1683,7 @@ async def fixtures(
         selected = all_selected[start_index:start_index + page_size]
         lines = format_fixture_list(
             selected,
-            f"⚽ PUNTER KENYA  ·  {label} FIXTURES\\n🏟 {total} unique matches",
+            f"⚽ PUNTER KENYA  ·  {label} FIXTURES\n🏟 {total} unique matches",
             page=page,
             total_pages=total_pages,
             total=total,
@@ -1692,11 +1692,11 @@ async def fixtures(
             lines.extend(["", f"➡️ NEXT PAGE  /fixtures {day_filter + ' ' if day_filter else ''}{page + 1}"])
         if page > 1:
             lines.append(f"⬅️ PREVIOUS PAGE  /fixtures {day_filter + ' ' if day_filter else ''}{page - 1}")
-        await reply(update, "\\n".join(lines))
+        await reply(update, "\n".join(lines))
 
     except Exception as exc:
         logger.exception("Fixture retrieval failed")
-        await reply(update, f"❌ FIXTURE REQUEST FAILED\\n\\n{str(exc)[:700]}")
+        await reply(update, f"❌ FIXTURE REQUEST FAILED\n\n{str(exc)[:700]}")
 
 
 # FIXTURE DATABASE SYNC
