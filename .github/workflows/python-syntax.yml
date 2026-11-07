@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - feature/bookmaker-odds-engine
   pull_request:
     branches:
       - main
