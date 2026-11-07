@@ -251,11 +251,80 @@ def fetch_betpawa(day: date | None = None):
     return games
 
 
-def fetch_all(day: date | None = None):
-    """Return per-bookmaker results and isolated errors; never fake empty success."""
+
+SPORTYBET_BASE = "https://www.sportybet.com/api/ke"
+
+
+def fetch_sportybet(day: date | None = None, max_pages=30):
+    """Fetch SportyBet Kenya football 1X2 prices from its public web JSON feed."""
+    day = day or datetime.now(EAT).date()
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Current-Country": "KE",
+        "Referer": "https://www.sportybet.com/ke/sport/football",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/134.0.0.0 Safari/537.36",
+    }
+    games, seen = [], set()
+    for page in range(1, max_pages + 1):
+        payload = _get(
+            SPORTYBET_BASE + "/factsCenter/pcUpcomingEvents",
+            params={"sportId": "sr:sport:1", "marketId": "1", "pageSize": 100,
+                    "pageNum": page, "option": 2, "_t": int(time.time() * 1000)},
+            headers=headers, timeout=(8, 20),
+        )
+        if not isinstance(payload, dict) or int(payload.get("bizCode", 0) or 0) != 10000:
+            code = payload.get("bizCode") if isinstance(payload, dict) else "invalid"
+            raise ValueError(f"SportyBet rejected the public feed (bizCode={code}).")
+        data = payload.get("data") or {}
+        tournaments = data.get("tournaments", []) if isinstance(data, dict) else []
+        if not isinstance(tournaments, list):
+            raise ValueError("SportyBet returned an unexpected event catalogue.")
+        page_events = 0
+        for tournament in tournaments:
+            if not isinstance(tournament, dict):
+                continue
+            for event in tournament.get("events", []) or []:
+                if not isinstance(event, dict):
+                    continue
+                event_id = event.get("eventId")
+                if not event_id or str(event_id) in seen:
+                    continue
+                seen.add(str(event_id))
+                page_events += 1
+                kickoff = _eat_time(event.get("estimateStartTime"))
+                if not kickoff or kickoff[:10] != day.isoformat():
+                    continue
+                markets = []
+                for market in event.get("markets", []) or []:
+                    if not isinstance(market, dict) or str(market.get("id")) != "1":
+                        continue
+                    for outcome in market.get("outcomes", []) or []:
+                        if not isinstance(outcome, dict) or int(outcome.get("isActive", 0) or 0) != 1:
+                            continue
+                        selection = {"1": "Home", "2": "Draw", "3": "Away"}.get(str(outcome.get("id")))
+                        item = _market("SportyBet", "Match Result (1X2)", selection, outcome.get("odds")) if selection else None
+                        if item:
+                            markets.append(item)
+                if markets:
+                    games.append({
+                        "bookmaker": "SportyBet", "event_id": str(event_id),
+                        "home": event.get("homeTeamName"), "away": event.get("awayTeamName"),
+                        "competition": tournament.get("name") or tournament.get("categoryName"),
+                        "kickoff_eat": kickoff, "markets": markets,
+                        "url": "https://www.sportybet.com/ke/sport/football",
+                        "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    })
+        total = int(data.get("totalNum", 0) or 0) if isinstance(data, dict) else 0
+        if not tournaments or page_events == 0 or (total and len(seen) >= total):
+            break
+        time.sleep(0.25)
+    return games
+
+\ndef fetch_all(day: date | None = None):
+    """Fetch only providers with an implemented read-only adapter."""
     day = day or datetime.now(EAT).date()
     result = {"date": day.isoformat(), "bookmakers": {}, "errors": {}}
-    for name, fetcher in (("Betika", fetch_betika), ("BetPawa", fetch_betpawa)):
+    for name, fetcher in (("Betika", fetch_betika), ("SportyBet", fetch_sportybet)):
         try:
             games = fetcher(day)
             result["bookmakers"][name] = {
@@ -265,7 +334,13 @@ def fetch_all(day: date | None = None):
             }
         except Exception as exc:
             LOG.exception("%s odds fetch failed", name)
-            result["errors"][name] = f"{type(exc).__name__}: {str(exc)[:220]}"
+            result["errors"][name] = f"{type(exc).__name__}: {str(exc).split('?', 1)[0][:180]}"
+    result["unavailable"] = {
+        "BetPawa": "Disabled: repeated public-feed connection failures.",
+        "SportPesa": "Not integrated: the available open-source feed is obsolete and EPL-only.",
+        "Odibets": "Not integrated: no dependable free public feed verified.",
+        "Mozzart Bet": "Not integrated: no dependable free public feed verified.",
+    }
     return result
 
 
