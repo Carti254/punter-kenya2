@@ -2,6 +2,7 @@
 import os
 import logging
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import unicodedata
 import re
 from datetime import datetime, timezone, timedelta
@@ -508,18 +509,20 @@ def fetch_all_leagues():
 
 def fetch_upcoming_fixture_rows(days=14, league_id=None):
     """
-    Use the documented date endpoint instead of scanning the first page
-    of the entire fixtures database. Include yesterday for UTC/EAT boundary
-    coverage and paginate each date where the API reports more records.
+    Fetch each calendar day's fixtures concurrently with bounded workers.
+    Pagination remains sequential within each date to respect API metadata.
     """
     first_day = datetime.now(EAT).date() - timedelta(days=1)
-    collected = []
-    seen = set()
-    limit = 100
+    dates = [
+        first_day + timedelta(days=day_number)
+        for day_number in range(days + 2)
+    ]
 
-    for day_number in range(days + 2):
-        fixture_date = first_day + timedelta(days=day_number)
+    def fetch_one_date(fixture_date):
+        collected = []
+        seen = set()
         offset = 0
+        limit = 100
 
         for _ in range(20):
             params = {"limit": limit, "offset": offset}
@@ -558,7 +561,21 @@ def fetch_upcoming_fixture_rows(days=14, league_id=None):
 
             offset = next_offset
 
-    return collected
+        return collected
+
+    collected = []
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        for date_rows in executor.map(fetch_one_date, dates):
+            collected.extend(date_rows)
+
+    # Remove duplicates that may appear on adjacent UTC/local date boundaries.
+    unique = {}
+    for raw in collected:
+        item = normalise_fixture(raw)
+        if item:
+            unique[item["provider_match_id"]] = raw
+
+    return list(unique.values())
 
 # ============================================================
 # DATABASE STORAGE
