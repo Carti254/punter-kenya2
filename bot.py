@@ -2050,16 +2050,16 @@ async def matchintel(
                 for row in valid_rows[:8]
             ]
             diagnostic = (
-                "\\n\\nProvider fixtures received: "
+                "\n\nProvider fixtures received: "
                 + str(len(raw_rows))
-                + "\\nFixtures successfully parsed: "
+                + "\nFixtures successfully parsed: "
                 + str(len(valid_rows))
             )
             if sample_lines:
-                diagnostic += "\\n\\nSample fixtures returned:\\n" + "\\n".join(sample_lines)
+                diagnostic += "\n\nSample fixtures returned:\n" + "\n".join(sample_lines)
             else:
                 diagnostic += (
-                    "\\n\\nThe provider returned no fixtures the bot could parse. "
+                    "\n\nThe provider returned no fixtures the bot could parse. "
                     "This points to an API response/coverage issue, not your team spelling."
                 )
 
@@ -2067,7 +2067,7 @@ async def matchintel(
                 update,
                 "❌ The requested fixture was not found in the provider feed."
                 + diagnostic
-                + "\\n\\nUse /fixtures to compare the provider's current fixture list.",
+                + "\n\nUse /fixtures to compare the provider's current fixture list.",
             )
             return
 
