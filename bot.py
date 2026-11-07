@@ -674,7 +674,6 @@ def fetch_matchintel_fixture_rows(days=14):
 
 
 def fetch_upcoming_fixture_rows(days=14, league_id=None):
-    FIXTURE_RESPONSE_DIAGNOSTICS.clear()
     """
     Fetch a date range through GOAL API's documented /fixtures endpoint.
     This avoids requesting every calendar date separately and ensures the
@@ -682,6 +681,7 @@ def fetch_upcoming_fixture_rows(days=14, league_id=None):
     date-endpoint page. Fall back to the date endpoint if range listing fails
     or returns no usable rows.
     """
+    FIXTURE_RESPONSE_DIAGNOSTICS.clear()
     first_day = datetime.now(EAT).date() - timedelta(days=1)
     last_day = first_day + timedelta(days=days + 1)
 
@@ -1470,7 +1470,7 @@ async def fixtures(
             diagnostic.append(
                 "This diagnostic shows the raw response envelope, not just extracted fixtures."
             )
-            await reply(update, "\\n".join(diagnostic))
+            await reply(update, "\n".join(diagnostic))
             return
 
         lines = [
