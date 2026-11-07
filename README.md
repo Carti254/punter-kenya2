@@ -20,7 +20,8 @@ PUNTER KENYA is an independent project and is not affiliated with open-matchday.
 - `/about` — show provider attribution.
 - `/leagues` — search the synced competition catalogue.
 - `/syncleagues` — refresh the competition catalogue.
-- `/fixtures` — browse upcoming fixtures.
+- `/fixtures` — browse today's and tomorrow's fixtures.
+- `/fixtures today` or `/fixtures tomorrow` — filter the global fixture list by day.
 - `/leaguefixtures COMPETITION` — show fixtures for a competition today and tomorrow.
 - `/leaguefixtures COMPETITION today` — show today's fixtures.
 - `/leaguefixtures COMPETITION tomorrow` — show tomorrow's fixtures.
