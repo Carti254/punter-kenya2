@@ -1162,9 +1162,9 @@ async def about(
     """Display data-provider attribution and project information."""
     await reply(
         update,
-        "ℹ️ ABOUT PUNTER KENYA\\n\\n"
-        "Fixture data provider: open-matchday\\n"
-        "Repository: https://github.com/oladeeayo/open-matchday\\n\\n"
+        "ℹ️ ABOUT PUNTER KENYA\n\n"
+        "Fixture data provider: open-matchday\n"
+        "Repository: https://github.com/oladeeayo/open-matchday\n\n"
         "PUNTER KENYA is an independent project and is not affiliated with the data provider.",
     )
 
