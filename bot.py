@@ -1471,15 +1471,46 @@ async def live(
 
 
 def team_name_matches_query(query_name, actual_name):
-    """Accent-insensitive, token-based team matching (e.g. Atletico Madrid)."""
-    def tokens(value):
+    """
+    Match full and abbreviated provider team names.
+    Examples: Atletico Madrid <-> Atl. Madrid; Athletic Bilbao <-> Ath Bilbao.
+    """
+    def normalised(value):
         value = unicodedata.normalize("NFKD", str(value or ""))
         value = "".join(ch for ch in value if not unicodedata.combining(ch))
-        return set(re.findall(r"[a-z0-9]+", value.casefold()))
+        words = re.findall(r"[a-z0-9]+", value.casefold())
+        phrase = " ".join(words)
 
-    wanted = tokens(query_name)
-    actual = tokens(actual_name)
-    return bool(wanted) and wanted.issubset(actual)
+        aliases = {
+            "atl madrid": "atletico madrid",
+            "atletico de madrid": "atletico madrid",
+            "ath bilbao": "athletic bilbao",
+            "athletic club": "athletic bilbao",
+            "dep la coruna": "deportivo la coruna",
+            "deportivo coruna": "deportivo la coruna",
+        }
+        phrase = aliases.get(phrase, phrase)
+        return set(phrase.split())
+
+    wanted = normalised(query_name)
+    actual = normalised(actual_name)
+    if not wanted or not actual:
+        return False
+    if wanted.issubset(actual) or actual.issubset(wanted):
+        return True
+
+    # Allow common provider short forms when all remaining words agree.
+    abbreviations = {
+        "atletico": {"atl"},
+        "athletic": {"ath"},
+        "deportivo": {"dep"},
+    }
+    for full, short_forms in abbreviations.items():
+        if full in wanted and (short_forms & actual):
+            wanted = (wanted - {full}) | (short_forms & actual)
+        if full in actual and (short_forms & wanted):
+            actual = (actual - {full}) | (short_forms & wanted)
+    return wanted == actual
 
 
 # ============================================================
