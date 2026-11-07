@@ -1,4 +1,3 @@
-
 import os
 import logging
 import asyncio
@@ -18,7 +17,7 @@ from database import get_connection, test_connection
 
 # ==========================================================
 # PUNTER KENYA - ODDS INTELLIGENCE AI
-# Version 3.0 - GOAL API + TiDB fixture storage
+# Version 3.1 - filtered and sorted upcoming fixtures
 # ==========================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -266,6 +265,40 @@ def normalise_fixture(fixture):
     }
 
 
+def select_upcoming_fixtures(fixtures, limit=None):
+    """
+    Keep only fixtures with a valid kickoff time in the future.
+    GOAL API timestamps are normalised to naive UTC by parse_kickoff().
+    Sort nearest kickoff first.
+    """
+
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    selected = []
+
+    for raw_fixture in fixtures:
+        normalised = normalise_fixture(raw_fixture)
+
+        if not normalised:
+            continue
+
+        kickoff = normalised["kickoff_at"]
+
+        if kickoff is None or kickoff < now_utc:
+            continue
+
+        selected.append((kickoff, raw_fixture))
+
+    selected.sort(key=lambda item: item[0])
+
+    selected = [raw for _, raw in selected]
+
+    if limit is not None:
+        selected = selected[:limit]
+
+    return selected
+
+
 # ==========================================================
 # DATABASE FIXTURE STORAGE
 # ==========================================================
@@ -418,6 +451,7 @@ def save_fixtures_to_database(fixtures):
                         datetime.utcnow(),
                     ),
                 )
+
         except Exception:
             logger.exception("Could not record failed sync.")
 
@@ -463,21 +497,27 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "⚽ Fetching upcoming fixtures from GOAL API..."
+        "⚽ Fetching and checking upcoming fixtures from GOAL API..."
     )
 
     try:
         result = await asyncio.to_thread(
             goal_request,
             "fixtures",
-            {"limit": 20, "offset": 0},
+            {"limit": 100, "offset": 0},
         )
 
-        matches = extract_fixtures(result)
+        returned_matches = extract_fixtures(result)
 
-        if not matches:
+        upcoming_matches = select_upcoming_fixtures(
+            returned_matches
+        )
+
+        if not upcoming_matches:
             await update.message.reply_text(
-                "No fixtures were returned by GOAL API."
+                "No valid future fixtures were found in the GOAL API response.\n\n"
+                f"Records received: {len(returned_matches)}\n"
+                "No fixtures were saved. The provider response may need investigation."
             )
             return
 
@@ -486,22 +526,16 @@ async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "",
         ]
 
-        for match in matches[:15]:
+        for match in upcoming_matches[:15]:
             normalised = normalise_fixture(match)
-
-            if not normalised:
-                continue
 
             kickoff = normalised["kickoff_at"]
 
-            if kickoff:
-                kickoff_text = (
-                    kickoff.replace(tzinfo=timezone.utc)
-                    .astimezone(EAT)
-                    .strftime("%d %b %Y - %H:%M EAT")
-                )
-            else:
-                kickoff_text = "Kickoff time unavailable"
+            kickoff_text = (
+                kickoff.replace(tzinfo=timezone.utc)
+                .astimezone(EAT)
+                .strftime("%d %b %Y - %H:%M EAT")
+            )
 
             competition = (
                 normalised["competition"] or "Competition unavailable"
@@ -518,27 +552,26 @@ async def fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "\n".join(output)[:4000]
         )
 
-        # Automatically store the returned fixtures.
         try:
             stats = await asyncio.to_thread(
                 save_fixtures_to_database,
-                matches,
+                upcoming_matches,
             )
 
             await update.message.reply_text(
                 "✅ DATABASE FIXTURE SYNC\n\n"
-                f"Fixtures received: {stats['received']}\n"
+                f"API records received: {len(returned_matches)}\n"
+                f"Future fixtures selected: {len(upcoming_matches)}\n"
                 f"Fixtures saved/updated: {stats['saved']}\n"
                 f"Fixtures skipped: {stats['skipped']}\n\n"
-                "Existing fixtures are updated instead of duplicated."
+                "Only valid future fixtures from this API response were saved."
             )
 
         except Exception as db_error:
             logger.exception("Automatic fixture storage failed.")
 
             await update.message.reply_text(
-                "⚠️ Fixtures were retrieved from GOAL API, "
-                "but database storage failed.\n\n"
+                "⚠️ Fixtures were retrieved, but database storage failed.\n\n"
                 f"Error: {str(db_error)[:700]}"
             )
 
@@ -568,7 +601,7 @@ async def syncfixtures(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     await update.message.reply_text(
-        "🔄 Fetching fixtures and saving them into TiDB..."
+        "🔄 Fetching, filtering and saving upcoming fixtures into TiDB..."
     )
 
     try:
@@ -578,25 +611,32 @@ async def syncfixtures(
             {"limit": 100, "offset": 0},
         )
 
-        matches = extract_fixtures(result)
+        returned_matches = extract_fixtures(result)
 
-        if not matches:
+        upcoming_matches = select_upcoming_fixtures(
+            returned_matches
+        )
+
+        if not upcoming_matches:
             await update.message.reply_text(
-                "No fixtures returned. Nothing was saved."
+                "No valid future fixtures were found.\n"
+                f"API records received: {len(returned_matches)}\n"
+                "Nothing was saved."
             )
             return
 
         stats = await asyncio.to_thread(
             save_fixtures_to_database,
-            matches,
+            upcoming_matches,
         )
 
         await update.message.reply_text(
             "✅ FIXTURE SYNC COMPLETED\n\n"
-            f"Received: {stats['received']}\n"
+            f"API records received: {len(returned_matches)}\n"
+            f"Future fixtures selected: {len(upcoming_matches)}\n"
             f"Saved/updated: {stats['saved']}\n"
             f"Skipped: {stats['skipped']}\n\n"
-            "Your matches table has been updated."
+            "Fixtures are sorted by nearest kickoff before selection."
         )
 
     except Exception as error:
@@ -768,6 +808,7 @@ async def odds(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "An odds API key is present in Railway.\n"
             "Actual bookmaker odds collection is not yet connected."
         )
+
     else:
         message = (
             "⚠️ ODDS API KEY NOT CONFIGURED\n\n"
@@ -844,10 +885,17 @@ async def calculator(
 
     try:
         decimal_odds = float(context.args[0])
-        stake = float(context.args[1]) if len(context.args) > 1 else 100
+
+        stake = (
+            float(context.args[1])
+            if len(context.args) > 1
+            else 100
+        )
 
         if decimal_odds <= 1 or stake <= 0:
-            raise ValueError("Odds must exceed 1 and stake must be positive.")
+            raise ValueError(
+                "Odds must exceed 1 and stake must be positive."
+            )
 
         potential_return = decimal_odds * stake
         potential_profit = potential_return - stake
@@ -889,7 +937,9 @@ async def error_handler(
 
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN is missing in Railway variables.")
+        raise RuntimeError(
+            "BOT_TOKEN is missing in Railway variables."
+        )
 
     if not GOAL_API_KEY:
         logger.warning(
