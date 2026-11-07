@@ -18,8 +18,8 @@ from zoneinfo import ZoneInfo
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 from database import get_connection, test_connection
 from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find_bookmaker_event
@@ -1161,72 +1161,106 @@ async def start(
     )
 
 
-async def fullintel_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    """Display the PUNTER KENYA Full Intelligence Centre (v4)."""
-    await reply(
-        update,
-        "⚽ PUNTER KENYA — FULL INTELLIGENCE CENTRE\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "VERSION 4  |  MASTER COMMAND DIRECTORY\n\n"
-        "Your control centre for fixtures, team research, match predictions, "
-        "betting analysis and forecast tracking. Choose a command below and "
-        "add the two team names where shown.\n\n"
-        "📅 1. FIXTURES & COMPETITIONS\n"
-        "/fixtures — browse upcoming fixtures\n"
-        "/fixtures today — today's fixtures\n"
-        "/fixtures tomorrow — tomorrow's fixtures\n"
-        "/leaguefixtures LEAGUE — fixtures by competition\n"
-        "/leagues [SEARCH] — find competitions in the catalogue\n"
-        "/syncleagues — refresh the league catalogue\n"
-        "/syncfixtures — sync available fixture records\n\n"
-        "📊 2. TEAM FORM & PERFORMANCE\n"
-        "/form TEAM A vs TEAM B — recent results, form and points rate\n"
-        "/goals TEAM A vs TEAM B — goals for/against and scoring rates\n"
-        "/homeaway TEAM A vs TEAM B — home and away records\n"
-        "/strength TEAM A vs TEAM B — attack, defence and consistency\n"
-        "/halves TEAM A vs TEAM B — half-time data availability\n\n"
-        "⚔️ 3. MATCHUP & HISTORY\n"
-        "/h2h TEAM A vs TEAM B — previous meetings in the dataset\n"
-        "/matchup TEAM A vs TEAM B — attack-versus-defence comparison\n"
-        "/scenarios TEAM A vs TEAM B — possible statistical match scenarios\n"
-        "/risk TEAM A vs TEAM B — uncertainty and warning flags\n\n"
-        "🧠 4. PREDICTIONS & BETTING ANALYSIS\n"
-        "/matchintel TEAM A vs TEAM B — match information and model forecast\n"
-        "/markets TEAM A vs TEAM B — supported model market probabilities\n"
-        "/deepdive TEAM A vs TEAM B — combined report and final assessment\n"
-        "/value TEAM A vs TEAM B HOME DRAW AWAY — compare supplied 1X2 odds\n"
-        "/topvalue — value-scanner status\n"
-        "/bookies — check Betika and BetPawa feed response\n"
-        "/odds HOME vs AWAY [today|tomorrow] — retrieve available bookmaker prices\n"
-        "/oddshistory HOME vs AWAY — review saved timestamped price observations\n\n"
-        "📚 5. TRACKING & UTILITIES\n"
-        "/record — evaluate saved forecasts against completed results\n"
-        "/calculator ODDS STAKE — calculate returns and implied probability\n"
-        "/live — current live-data availability\n"
-        "/about — data provider and project information\n"
-        "/dbtest — test database connection\n"
-        "/start or /help — show the main help menu\n\n"
-        "🚀 QUICK START\n"
-        "1. Find a fixture with /fixtures or /leaguefixtures.\n"
-        "2. Run /deepdive TEAM A vs TEAM B for the full analysis.\n"
-        "3. Use individual commands above to inspect specific evidence.\n"
-        "4. Use /value with actual bookmaker prices to assess 1X2 value.\n"
-        "5. Use /record to review forecast performance.\n\n"
-        "⚠️ DATA & SAFETY NOTES\n"
-        "Fixture and results data comes from open-matchday and is refreshed "
-        "daily, not live. Confirmed lineups, live events, half-time statistics "
-        "and independently verified bookmaker APIs are not currently supplied. "
-        "/bookies and /odds attempt read-only Betika/BetPawa public endpoints; "
-        "these are experimental and may fail or return incomplete markets. "
-        "/odds saves timestamped observations when database access permits; "
-        "/oddshistory displays saved observations. /value uses prices entered "
-        "by you; verify them with the bookmaker. Missing data "
-        "is not invented. Model probabilities are estimates, not guarantees. "
-        "A NO BET decision is valid when evidence or odds are insufficient."
+async FULLINTEL_MENUS = {
+    "fixtures": ("📅 FIXTURES & LEAGUES", [
+        [("Upcoming fixtures", "fixtures"), ("Today's fixtures", "fixtures_today")],
+        [("Tomorrow's fixtures", "fixtures_tomorrow"), ("League catalogue", "leagues")],
+        [("Sync leagues", "syncleagues"), ("Sync fixtures", "syncfixtures")],
+    ]),
+    "teams": ("📊 TEAM INTELLIGENCE", [
+        [("Recent form", "form"), ("Goals analysis", "goals")],
+        [("Home / away", "homeaway"), ("Team strength", "strength")],
+        [("Half-time stats", "halves")],
+    ]),
+    "matchup": ("⚔️ MATCH INTELLIGENCE", [
+        [("Head-to-head", "h2h"), ("Matchup analysis", "matchup")],
+        [("Match scenarios", "scenarios"), ("Risk analysis", "risk")],
+        [("Full match deepdive", "deepdive"), ("Match forecast", "matchintel")],
+        [("Market probabilities", "markets")],
+    ]),
+    "betting": ("🧠 BETTING & VALUE", [
+        [("Value check", "value"), ("Top value status", "topvalue")],
+        [("AI picks status", "aipicks"), ("Accumulator guide", "accumulator")],
+    ]),
+    "bookies": ("💹 BOOKMAKER CENTRE", [
+        [("Check bookmaker feeds", "bookies")],
+        [("Retrieve match odds", "odds_help"), ("Odds history", "oddshistory_help")],
+    ]),
+    "tracking": ("📚 TRACKING & TOOLS", [
+        [("Forecast performance", "record"), ("Odds calculator", "calculator_help")],
+        [("Live-data status", "live"), ("About PUNTER", "about")],
+    ]),
+}
+
+COMMAND_HELP = {
+    "form": "Send: /form HOME TEAM vs AWAY TEAM",
+    "goals": "Send: /goals HOME TEAM vs AWAY TEAM",
+    "homeaway": "Send: /homeaway HOME TEAM vs AWAY TEAM",
+    "strength": "Send: /strength HOME TEAM vs AWAY TEAM",
+    "halves": "Send: /halves HOME TEAM vs AWAY TEAM",
+    "h2h": "Send: /h2h HOME TEAM vs AWAY TEAM",
+    "matchup": "Send: /matchup HOME TEAM vs AWAY TEAM",
+    "scenarios": "Send: /scenarios HOME TEAM vs AWAY TEAM",
+    "risk": "Send: /risk HOME TEAM vs AWAY TEAM",
+    "deepdive": "Send: /deepdive HOME TEAM vs AWAY TEAM",
+    "matchintel": "Send: /matchintel HOME TEAM vs AWAY TEAM",
+    "markets": "Send: /markets HOME TEAM vs AWAY TEAM",
+    "value": "Send: /value HOME TEAM vs AWAY TEAM HOME_ODDS DRAW_ODDS AWAY_ODDS",
+    "odds_help": "Send: /odds HOME TEAM vs AWAY TEAM [today|tomorrow]",
+    "oddshistory_help": "Send: /oddshistory HOME TEAM vs AWAY TEAM",
+    "calculator_help": "Send: /calculator DECIMAL_ODDS STAKE",
+    "aipicks": "AI fixture scanning is not yet enabled. The current prediction engine analyses one selected fixture with /deepdive. I will not invent picks or probabilities.",
+    "accumulator": "Accumulator builder is not yet enabled. Use individual fixture analysis first; do not combine unverified selections.",
+}
+
+def fullintel_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Fixtures & Leagues", callback_data="fi:fixtures"),
+         InlineKeyboardButton("📊 Team Intelligence", callback_data="fi:teams")],
+        [InlineKeyboardButton("⚔️ Match Intelligence", callback_data="fi:matchup"),
+         InlineKeyboardButton("🧠 Betting & Value", callback_data="fi:betting")],
+        [InlineKeyboardButton("💹 Bookmaker Centre", callback_data="fi:bookies"),
+         InlineKeyboardButton("📚 Tracking & Tools", callback_data="fi:tracking")],
+    ])
+
+def fullintel_submenu_keyboard(key):
+    title, rows = FULLINTEL_MENUS[key]
+    keyboard = [[InlineKeyboardButton(label, callback_data=f"fi:{command}") for label, command in row] for row in rows]
+    keyboard.append([InlineKeyboardButton("⬅️ Main menu", callback_data="fi:home")])
+    return InlineKeyboardMarkup(keyboard)
+
+async def fullintel_command(update, context):
+    await update.effective_message.reply_text(
+        "⚽ PUNTER KENYA — INTELLIGENCE CENTRE\n\nChoose a section. Each section opens its own commands.",
+        reply_markup=fullintel_keyboard(),
     )
+
+async def fullintel_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    key = (query.data or "").split(":", 1)[-1]
+    if key == "home":
+        await query.edit_message_text(
+            "⚽ PUNTER KENYA — INTELLIGENCE CENTRE\n\nChoose a section.",
+            reply_markup=fullintel_keyboard(),
+        )
+        return
+    if key in FULLINTEL_MENUS:
+        title, _ = FULLINTEL_MENUS[key]
+        await query.edit_message_text(title + "\n\nChoose a command:", reply_markup=fullintel_submenu_keyboard(key))
+        return
+    if key in ("fixtures_today", "fixtures_tomorrow"):
+        command = "/fixtures today" if key.endswith("today") else "/fixtures tomorrow"
+        await query.edit_message_text("Run this command in the chat:\n" + command, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Main menu", callback_data="fi:home")]]))
+        return
+    if key in ("leagues", "syncleagues", "syncfixtures", "bookies", "record", "live", "about", "topvalue"):
+        await query.edit_message_text("Run this command in the chat:\n/" + key, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Main menu", callback_data="fi:home")]]))
+        return
+    if key in COMMAND_HELP:
+        await query.edit_message_text(COMMAND_HELP[key], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Main menu", callback_data="fi:home")]]))
+        return
+    await query.edit_message_text("Command not available.", reply_markup=fullintel_keyboard())
+
 
 
 async def help_command(
@@ -3530,6 +3564,8 @@ def main():
             )
         )
 
+    app.add_handler(CallbackQueryHandler(fullintel_callback, pattern=r"^fi:"))
+    
     app.add_error_handler(error_handler)
 
     logger.info(
