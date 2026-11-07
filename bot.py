@@ -1054,7 +1054,8 @@ async def leaguefixtures(
 
     try:
         # Accept the exact display format emitted by /leagues:
-        # "Competition Name | Region". Keep provider IDs internal.
+        # "Competition Name | Region". Resolve the region in Python so
+        # database collation/whitespace differences cannot trigger a broad fallback.
         parts = [part.strip() for part in query.split("|", 1)]
         competition_name = parts[0]
         competition_region = parts[1] if len(parts) == 2 else None
@@ -1070,11 +1071,17 @@ async def leaguefixtures(
                             FROM leagues
                             WHERE provider = %s
                               AND LOWER(TRIM(name)) = LOWER(TRIM(%s))
-                              AND LOWER(TRIM(COALESCE(region, ''))) = LOWER(TRIM(%s))
-                            ORDER BY name LIMIT 100
+                            ORDER BY name, region
+                            LIMIT 500
                             """,
-                            (PROVIDER_NAME, competition_name, competition_region),
+                            (PROVIDER_NAME, competition_name),
                         )
+                        candidates = cursor.fetchall()
+                        wanted_region = competition_region.casefold().strip()
+                        matches = [
+                            row for row in candidates
+                            if (row.get("region") or "").casefold().strip() == wanted_region
+                        ]
                     else:
                         cursor.execute(
                             """
@@ -1083,25 +1090,31 @@ async def leaguefixtures(
                             WHERE provider = %s AND
                                   (LOWER(TRIM(name)) = LOWER(TRIM(%s))
                                    OR provider_league_id = %s)
-                            ORDER BY name LIMIT 100
+                            ORDER BY name, region LIMIT 100
                             """,
                             (PROVIDER_NAME, competition_name, query),
                         )
-                    matches = cursor.fetchall()
-                    if not matches:
-                        cursor.execute(
-                            """
-                            SELECT provider_league_id, name, region
-                            FROM leagues
-                            WHERE provider = %s AND name LIKE %s
-                            ORDER BY name LIMIT 100
-                            """,
-                            (PROVIDER_NAME, f"%{competition_name}%"),
-                        )
                         matches = cursor.fetchall()
-                    return matches
+                        if not matches:
+                            cursor.execute(
+                                """
+                                SELECT provider_league_id, name, region
+                                FROM leagues
+                                WHERE provider = %s AND name LIKE %s
+                                ORDER BY name, region LIMIT 100
+                                """,
+                                (PROVIDER_NAME, f"%{competition_name}%"),
+                            )
+                            matches = cursor.fetchall()
+
+                    # Remove duplicate database rows without exposing provider IDs.
+                    unique = {}
+                    for row in matches:
+                        unique[row["provider_league_id"]] = row
+                    return list(unique.values())
             finally:
                 connection.close()
+
 
         matches = await asyncio.to_thread(find_league)
         if not matches:
