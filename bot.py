@@ -755,11 +755,20 @@ def fetch_upcoming_fixture_rows(days=14, league_id=None):
         for date_rows in executor.map(fetch_one_date, dates):
             collected.extend(date_rows)
 
+    # Deduplicate without discarding provider rows that the current
+    # normaliser cannot yet understand. The previous final filter silently
+    # erased every raw row whenever field mapping changed.
     unique = {}
-    for raw in collected:
+    for index, raw in enumerate(collected):
         item = normalise_fixture(raw)
-        if item:
-            unique[item["provider_match_id"]] = raw
+        fixture_key = (
+            item["provider_match_id"]
+            if item
+            else str(first_value(
+                raw, "id", "fixtureId", "matchId", "match_id"
+            ) or f"raw:{index}:{hash(repr(raw))}")
+        )
+        unique.setdefault(fixture_key, raw)
 
     return list(unique.values())
 
