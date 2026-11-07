@@ -18,8 +18,8 @@ from zoneinfo import ZoneInfo
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
 from database import get_connection, test_connection
 from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find_bookmaker_event
@@ -1118,47 +1118,82 @@ async def reply(update: Update, message: str):
 # START AND HELP
 # ============================================================
 
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    await reply(
-        update,
-        "⚽ PUNTER KENYA — FOOTBALL INTELLIGENCE\n\n"
-        "Free football fixtures and pre-match research.\n\n"
-        "FIXTURES & COMPETITIONS\n"
-        "/leagues [SEARCH] — search the 75-competition catalogue\n"
-        "/syncleagues — refresh the competition catalogue\n"
-        "/fixtures [PAGE] — browse upcoming fixtures\n"
-        "/leaguefixtures LEAGUE [today|tomorrow] — choose a league and day\n"
-        "/syncfixtures — save upcoming fixtures to the database\n\n"
-        "MATCH ANALYSIS\n"
-        "/fullintel — open the Full Intelligence Centre v4\n"
-        "/matchintel HOME vs AWAY — initial match assessment\n"
-        "/form — recent form and points rate\n"
-        "/goals — goals scored/conceded and scoring rates\n"
-        "/homeaway — venue-specific performance\n"
-        "/halves — half-time data availability\n"
-        "/h2h — head-to-head results\n"
-        "/strength — attack, defence and consistency\n"
-        "/matchup — attack-versus-defence comparison\n"
-        "/markets — model probability estimates\n"
-        "/risk — uncertainty and risk flags\n"
-        "/scenarios — possible match scripts\n"
-        "/deepdive — full analysis with simple summary\n"
-        "/value — compare supplied 1X2 odds with model estimates\n"
-        "/topvalue — value scanner status\n"
-        "/record — historical forecast accuracy tracker\n"
-        "/live — explain live-data availability\n\n"
-        "TOOLS\n"
-        "/calculator ODDS STAKE — calculate potential returns\n"
-        "/dbtest — test the database connection\n"
-        "/about — data source and project information\n"
-        "/help — show this message\n\n"
-        "Data is refreshed daily, not live. Forecasts are estimates; "
-        "the bot does not provide guaranteed picks or verified bookmaker odds."
+def main_menu_keyboard():
+    """Persistent Telegram menu inspired by the reference layout."""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🔄 Convert bet code")],
+            [KeyboardButton("✏️ Edit slip"), KeyboardButton("🔗 Merge slips"), KeyboardButton("✂️ Split slip")],
+            [KeyboardButton("🤖 Build a slip")],
+            [KeyboardButton("📋 Bookies & regions"), KeyboardButton("❓ Contact support")],
+            [KeyboardButton("⚽ Match intelligence"), KeyboardButton("📅 Fixtures & leagues")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Pick an option…",
     )
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = (
+        "⚽ PUNTER KENYA\n"
+        "FOOTBALL INTELLIGENCE & BETTING CENTRE\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "Research matches, compare available bookmaker prices and review potential value.\n\n"
+        "🎟️ SLIP MANAGEMENT\n"
+        "Convert, edit, merge and split booking codes are shown in the menu; these provider-specific tools are not connected yet.\n\n"
+        "🧠 INTELLIGENCE\n"
+        "/fullintel — all research and analysis commands\n"
+        "/deepdive HOME vs AWAY — full match report\n"
+        "/topvalue — bookmaker value scan\n"
+        "/accumulator [TARGET] — qualifying-leg accumulator scan\n"
+        "/bookies — bookmaker feed status\n"
+        "/odds HOME vs AWAY — compare retrieved prices\n"
+        "/fixtures — upcoming fixtures\n\n"
+        "⚠️ Estimates are not guarantees. Prices must be checked with the bookmaker. "
+        "PUNTER KENYA does not place bets."
+    )
+    await update.effective_message.reply_text(
+        message,
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route persistent menu buttons to working commands or honest capability notes."""
+    choice = (update.effective_message.text or "").strip()
+    if choice == "📋 Bookies & regions":
+        await bookmakers_command(update, context)
+    elif choice == "🤖 Build a slip":
+        await accumulator_status_command(update, context)
+    elif choice == "⚽ Match intelligence":
+        await fullintel_command(update, context)
+    elif choice == "📅 Fixtures & leagues":
+        await reply(update,
+            "📅 FIXTURES & LEAGUES\n\n"
+            "/fixtures — browse upcoming fixtures\n"
+            "/leagues SEARCH — find a competition\n"
+            "/leaguefixtures LEAGUE [today|tomorrow] — league fixtures\n"
+            "/syncleagues — refresh the catalogue")
+    elif choice == "❓ Contact support":
+        await reply(update,
+            "❓ PUNTER KENYA SUPPORT\n\n"
+            "For technical issues, use the project repository: "
+            "https://github.com/Carti254/punter-kenya2\n"
+            "Do not send bookmaker passwords, account credentials or private tokens.")
+    elif choice in ("🔄 Convert bet code", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip"):
+        feature = {
+            "🔄 Convert bet code": "booking-code conversion",
+            "✏️ Edit slip": "slip editing",
+            "🔗 Merge slips": "slip merging",
+            "✂️ Split slip": "slip splitting",
+        }[choice]
+        await reply(update,
+            f"🛠️ {feature.upper()}\n\n"
+            "This feature is not connected yet. It requires a verified bookmaker-specific "
+            "integration and supported code format. I won't generate fake booking codes or "
+            "claim a slip was changed when it was not.")
+
 
 
 FULLINTEL_MENUS = {
@@ -3797,6 +3832,7 @@ def main():
         )
 
     app.add_handler(CallbackQueryHandler(fullintel_callback, pattern=r"^fi:"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_text_handler))
     
     app.add_error_handler(error_handler)
 
