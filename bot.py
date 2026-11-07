@@ -1133,6 +1133,7 @@ async def start(
         "/leaguefixtures LEAGUE [today|tomorrow] — choose a league and day\n"
         "/syncfixtures — save upcoming fixtures to the database\n\n"
         "MATCH ANALYSIS\n"
+        "/fullintel — open the Full Intelligence Centre v4\n"
         "/matchintel HOME vs AWAY — initial match assessment\n"
         "/form — recent form and points rate\n"
         "/goals — goals scored/conceded and scoring rates\n"
