@@ -78,7 +78,7 @@ def _market(provider, market, selection, price, handicap=None):
     }
 
 
-def fetch_betika(day: date | None = None, max_pages=12):
+def fetch_betika(day: date | None = None, max_pages=2):
     """Fetch Betika football pre-match markets for one EAT calendar day."""
     day = day or datetime.now(EAT).date()
     today = datetime.now(EAT).date()
@@ -173,7 +173,7 @@ def fetch_betpawa(day: date | None = None):
                 "startTime": {"gte": start.isoformat(), "lt": end.isoformat()},
             },
             "view": {"marketTypes": ["3743", "28000810", "28000850", "4693", "1096755", "3795"]},
-            "skip": 0, "take": 100,
+            "skip": 0, "take": 50,
         }]
     }
     headers = {
@@ -260,14 +260,36 @@ def canonical_team(value):
     return " ".join(part for part in value.split() if part not in ignored)
 
 
+def _team_match_score(left, right):
+    """Return a conservative similarity score for two team names."""
+    a, b = canonical_team(left), canonical_team(right)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    at, bt = set(a.split()), set(b.split())
+    if not at or not bt:
+        return 0.0
+    overlap = len(at & bt) / len(at | bt)
+    # Substring matches are useful for known suffixes, but never for tiny names.
+    if min(len(a), len(b)) >= 8 and (a in b or b in a):
+        overlap = max(overlap, 0.88)
+    return overlap
+
+
 def find_event(games, home, away):
-    """Conservative exact/containment matcher; ambiguous matches are not guessed."""
-    h, a = canonical_team(home), canonical_team(away)
-    matches = []
+    """Match only the requested home/away orientation; reject ambiguous matches."""
+    ranked = []
     for game in games:
-        gh, ga = canonical_team(game.get("home")), canonical_team(game.get("away"))
-        direct = (gh == h and ga == a) or (gh in h or h in gh) and (ga in a or a in ga)
-        reverse = (gh == a and ga == h) or (gh in a or a in gh) and (ga in h or h in ga)
-        if direct or reverse:
-            matches.append(game)
-    return matches
+        home_score = _team_match_score(game.get("home"), home)
+        away_score = _team_match_score(game.get("away"), away)
+        # Both sides must be a strong match. Reversed fixtures are deliberately rejected.
+        if home_score >= 0.80 and away_score >= 0.80:
+            ranked.append((min(home_score, away_score) + (home_score + away_score) / 2, game))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    if not ranked:
+        return []
+    # If the top two candidates are effectively tied, do not guess.
+    if len(ranked) > 1 and ranked[0][0] - ranked[1][0] < 0.04:
+        return []
+    return [ranked[0][1]]
