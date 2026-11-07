@@ -1126,7 +1126,7 @@ async def start(
         "/syncleagues — download all available competitions\n"
         "/leaguefixtures LEAGUE NAME — show fixtures for one competition\n"
         "/matchintel HOME vs AWAY — match intelligence report\n"
-        "/fixtures — show the nearest upcoming fixtures\n"
+        "/fixtures [PAGE] — browse upcoming fixtures (20 per page)\n"
         "/syncfixtures — save upcoming fixtures\n"
         "/live — show live matches\n\n"
         "SYSTEM COMMANDS\n"
