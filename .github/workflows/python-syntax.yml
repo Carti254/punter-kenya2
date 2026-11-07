@@ -19,4 +19,4 @@ jobs:
         with:
           python-version: "3.13"
       - name: Compile application modules
-        run: python -m py_compile bot.py database.py
+        run: python -m py_compile bot.py database.py bookmaker_odds.py
