@@ -3345,6 +3345,49 @@ async def bookmaker_odds_command(update, context):
         await reply(update, message[offset:offset + 3700])
 
 
+async def odds_history_command(update, context):
+    """Show recent stored price observations for a precisely named fixture."""
+    raw_query = " ".join(context.args).strip()
+    if " vs " not in raw_query.casefold():
+        await reply(update, "Usage: /oddshistory HOME TEAM vs AWAY TEAM")
+        return
+    home, away = re.split(r"\\s+vs\\s+", raw_query, maxsplit=1, flags=re.IGNORECASE)
+    connection = None
+    try:
+        connection = get_connection()
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT bookmaker, market_name, selection_name, handicap_value,
+                       decimal_odds, fetched_at
+                FROM punter_odds_snapshots
+                WHERE LOWER(home_team)=LOWER(%s) AND LOWER(away_team)=LOWER(%s)
+                ORDER BY fetched_at DESC
+                LIMIT 40
+            """, (home.strip(), away.strip()))
+            rows = cursor.fetchall()
+    except Exception as exc:
+        await reply(update, "Historical odds are unavailable. Run /odds for this exact fixture first.\n"
+                     f"Database message: {type(exc).__name__}: {str(exc)[:180]}")
+        return
+    finally:
+        if connection:
+            connection.close()
+    if not rows:
+        await reply(update, "No stored price history found for that exact home/away team spelling. Run /odds first; each successful retrieval adds a timestamped snapshot.")
+        return
+    lines = [f"📈 STORED ODDS OBSERVATIONS", f"{home.strip()} vs {away.strip()}", ""]
+    for row in rows:
+        handicap = f" ({row['handicap_value']})" if row.get("handicap_value") else ""
+        lines.append(
+            f"{row['bookmaker']} | {row['market_name']} — {row['selection_name']}{handicap} "
+            f"@ {float(row['decimal_odds']):.2f} | {row['fetched_at']}"
+        )
+    lines.append("\nThese are observations captured by PUNTER KENYA, not a complete continuous price history.")
+    message = "\n".join(lines)
+    for offset in range(0, len(message), 3700):
+        await reply(update, message[offset:offset + 3700])
+
+
 # ============================================================
 # ODDS CALCULATOR
 # ============================================================
@@ -3468,6 +3511,7 @@ def main():
         ("calculator", calculator),
         ("bookies", bookmakers_command),
         ("odds", bookmaker_odds_command),
+        ("oddshistory", odds_history_command),
     ]
 
     for command, callback in handlers:
