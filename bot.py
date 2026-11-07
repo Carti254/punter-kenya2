@@ -669,7 +669,7 @@ def fetch_upcoming_fixture_rows(days=14, league_id=None):
                     item["provider_match_id"]
                     if item
                     else str(first_value(raw, "id", "fixtureId", "matchId", "match_id")
-                             or f"{offset}:{index}:{hash(json.dumps(raw, sort_keys=True, default=str))}")
+                             or f"{offset}:{index}:{hash(repr(raw))}")
                 )
                 if fixture_key not in seen:
                     seen.add(fixture_key)
