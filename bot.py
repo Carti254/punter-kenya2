@@ -3437,25 +3437,17 @@ async def bookmakers(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-
-    names = [
-        "BetPawa",
-        "SportyBet",
-        "SportPesa",
-        "Odibets",
-        "Mozzart Bet",
-        "1xBet",
-    ]
-
     await reply(
         update,
-        "🏦 INITIAL BOOKMAKER REGISTRY\n\n"
-        + "\n".join(
-            f"• {name}"
-            for name in names
-        )
-        + "\n\nThese are registry names only; "
-        "live feeds are not yet verified.",
+        "🏦 PUNTER KENYA BOOKMAKER REGISTRY\n\n"
+        "✅ Betika — public odds adapter active\n"
+        "🧪 SportyBet Kenya — public odds adapter added; live feed verification pending\n"
+        "⏸️ SportPesa — no current dependable free feed verified\n"
+        "⏸️ Odibets — no current dependable free feed verified\n"
+        "⏸️ Mozzart Bet — no current dependable free feed verified\n"
+        "⏸️ BetPawa — disabled after repeated connection failures\n\n"
+        "Only feeds that return real prices are used for odds comparisons. "
+        "No international bookmakers are included.",
     )
 
 
