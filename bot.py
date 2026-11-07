@@ -2008,6 +2008,14 @@ async def matchintel(
             )
             candidates = find_candidates(raw_rows)
         except asyncio.TimeoutError:
+            logger.warning("Fast matchintel fixture range search timed out.")
+            raw_rows = []
+            candidates = []
+        except Exception as fast_search_error:
+            logger.warning(
+                "Fast matchintel fixture range search failed: %s",
+                fast_search_error,
+            )
             raw_rows = []
             candidates = []
 
