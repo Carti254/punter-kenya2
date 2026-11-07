@@ -1709,7 +1709,7 @@ async def syncfixtures(
 
     await reply(
         update,
-        "🔄 Retrieving upcoming fixtures and saving valid records to TiDB...",
+        "🔄 Retrieving upcoming fixtures and saving valid records to the database...",
     )
 
     try:
@@ -1746,7 +1746,7 @@ async def syncfixtures(
         await reply(
             update,
             "✅ FIXTURE DATABASE SYNC COMPLETE\n\n"
-            f"API records received: {len(raw_rows)}\n"
+            f"open-matchday records received: {len(raw_rows)}\n"
             f"Future fixtures selected: {len(selected)}\n"
             f"Valid records saved/updated: {stats['saved']}\n"
             f"Invalid records skipped: {stats['skipped']}\n\n"
