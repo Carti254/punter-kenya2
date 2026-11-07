@@ -1623,43 +1623,59 @@ async def fixtures(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    """Show upcoming fixtures in pages of 20. Usage: /fixtures [page]."""
+    """Browse today's and tomorrow's fixtures. Usage: /fixtures [today|tomorrow] [page]."""
     try:
+        args = list(context.args or [])
+        day_filter = None
+        if args and args[0].casefold() in ("today", "tomorrow"):
+            day_filter = args.pop(0).casefold()
+
         page = 1
-        if context.args:
-            if len(context.args) != 1 or not str(context.args[0]).isdigit():
-                await reply(update, "Usage: /fixtures [PAGE]\nExample: /fixtures 2")
+        if args:
+            if len(args) != 1 or not str(args[0]).isdigit():
+                await reply(
+                    update,
+                    "Usage: /fixtures [today|tomorrow] [PAGE]\\n"
+                    "Examples: /fixtures today | /fixtures tomorrow | /fixtures 2",
+                )
                 return
-            page = int(context.args[0])
+            page = int(args[0])
             if page < 1 or page > 1000:
                 await reply(update, "Enter a page number between 1 and 1000.")
                 return
 
-        await reply(
-            update,
-            f"⚽ Fetching upcoming fixtures — page {page} — from open-matchday...",
-        )
-        raw_rows = await asyncio.to_thread(fetch_upcoming_fixture_rows, 14)
-        all_selected = upcoming_fixtures(raw_rows)
+        selected_days = [day_filter] if day_filter else ["today", "tomorrow"]
+        label = day_filter.upper() if day_filter else "TODAY & TOMORROW"
+        await reply(update, f"⚽ Fetching {label.lower()} fixtures from open-matchday...")
+
+        raw_rows = []
+        for selected_day in selected_days:
+            rows = await asyncio.to_thread(
+                fetch_openmatchday_fixture_rows,
+                14,
+                None,
+                selected_day,
+            )
+            raw_rows.extend(rows)
+
+        all_selected = upcoming_fixtures(raw_rows, include_past=True)
         page_size = 20
         total = len(all_selected)
         total_pages = max(1, math.ceil(total / page_size))
 
         if not total:
-            diagnostic = [
-                "No upcoming fixtures could be displayed from the 14-day search.",
-                f"Raw provider records received: {len(raw_rows)}",
-            ]
-            if FIXTURE_RESPONSE_DIAGNOSTICS:
-                diagnostic.extend(FIXTURE_RESPONSE_DIAGNOSTICS)
-            await reply(update, "\n".join(diagnostic))
+            await reply(
+                update,
+                f"No fixtures were returned for {label.lower()}. "
+                "Try /fixtures tomorrow or choose a competition with /leaguefixtures.",
+            )
             return
 
         if page > total_pages:
             await reply(
                 update,
-                f"Only {total} unique upcoming fixtures were found across {total_pages} page(s).\n"
-                f"Use /fixtures {total_pages} for the last page.",
+                f"Only {total} unique fixtures were found across {total_pages} page(s).\\n"
+                f"Use /fixtures {day_filter + ' ' if day_filter else ''}{total_pages} for the last page.",
             )
             return
 
@@ -1667,20 +1683,20 @@ async def fixtures(
         selected = all_selected[start_index:start_index + page_size]
         lines = format_fixture_list(
             selected,
-            f"⚽ PUNTER KENYA  ·  UPCOMING FIXTURES\n🏟 {total} unique matches in the next 14 days",
+            f"⚽ PUNTER KENYA  ·  {label} FIXTURES\\n🏟 {total} unique matches",
             page=page,
             total_pages=total_pages,
             total=total,
         )
         if page < total_pages:
-            lines.extend(["", f"➡️ NEXT PAGE  /fixtures {page + 1}"])
+            lines.extend(["", f"➡️ NEXT PAGE  /fixtures {day_filter + ' ' if day_filter else ''}{page + 1}"])
         if page > 1:
-            lines.append(f"⬅️ PREVIOUS PAGE  /fixtures {page - 1}")
-        await reply(update, "\n".join(lines))
+            lines.append(f"⬅️ PREVIOUS PAGE  /fixtures {day_filter + ' ' if day_filter else ''}{page - 1}")
+        await reply(update, "\\n".join(lines))
 
     except Exception as exc:
         logger.exception("Fixture retrieval failed")
-        await reply(update, f"❌ FIXTURE REQUEST FAILED\n\n{str(exc)[:700]}")
+        await reply(update, f"❌ FIXTURE REQUEST FAILED\\n\\n{str(exc)[:700]}")
 
 
 # FIXTURE DATABASE SYNC
