@@ -82,9 +82,11 @@ def fetch_betika(day: date | None = None, max_pages=12):
     """Fetch Betika football pre-match markets for one EAT calendar day."""
     day = day or datetime.now(EAT).date()
     today = datetime.now(EAT).date()
-    period = (day - today).days
-    if period < -1 or period > 7:
+    day_offset = (day - today).days
+    if day_offset < 0 or day_offset > 7:
         return []
+    # Betika uses period_id=-1 for today, then 1..7 for future days.
+    period = -1 if day_offset == 0 else day_offset
     headers = {
         "origin": "https://www.betika.com",
         "referer": "https://www.betika.com/",
