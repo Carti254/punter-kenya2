@@ -2539,8 +2539,177 @@ async def value_command(update, context):
     lines.extend(["", "Odds are user-supplied and have not been independently verified. Model probabilities are uncalibrated estimates; positive EV is not proof of a profitable bet."])
     await reply(update, "\n".join(lines))
 
+def _market_probability(prediction, market_key):
+    if market_key == "home": return prediction["home_win"]
+    if market_key == "draw": return prediction["draw"]
+    if market_key == "away": return prediction["away_win"]
+    if market_key == "over15": return prediction["over_15"]
+    if market_key == "over25": return prediction["over_25"]
+    return None
+
+
+def _odds_market_key(market):
+    name = re.sub(r"[^a-z0-9]+", " ", str(market or "").casefold()).strip()
+    if any(x in name for x in ("both teams", "btts", "correct score", "double chance", "draw no bet", "handicap")):
+        return None
+    if name in ("1x2", "match result", "full time result", "fulltime result", "regular time result"):
+        return "1x2"
+    if "over under" in name or "total goals" in name or name == "goals":
+        return "goals"
+    return None
+
+
+def _selection_probability_key(market_key, selection, handicap=None):
+    value = re.sub(r"[^a-z0-9.]+", " ", str(selection or "").casefold()).strip()
+    if market_key == "1x2":
+        if value in ("1", "home", "home win", "1st"): return "home"
+        if value in ("x", "draw", "tie"): return "draw"
+        if value in ("2", "away", "away win", "2nd"): return "away"
+    if market_key == "goals":
+        line = str(handicap or "")
+        if "1.5" in value or "1.5" in line:
+            return "over15" if "over" in value else None
+        if "2.5" in value or "2.5" in line:
+            return "over25" if "over" in value else None
+    return None
+
+
+def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"):
+    """Scan the public fixture catalogue against retrieved bookmaker prices."""
+    candidates, diagnostics = [], []
+    for day_filter in day_filters:
+        raw_fixtures = fetch_openmatchday_fixture_rows(14, None, day_filter)
+        fixtures = upcoming_fixtures(raw_fixtures, include_past=True)
+        if not fixtures:
+            diagnostics.append(f"{day_filter}: no fixtures from open-matchday")
+            continue
+        target_day = datetime.now(EAT).date() + (timedelta(days=1) if day_filter == "tomorrow" else timedelta())
+        odds_result = fetch_bookmaker_odds(target_day)
+        priced_games = []
+        for provider in odds_result.get("bookmakers", {}).values():
+            priced_games.extend(provider.get("games", []))
+        for raw, fixture in fixtures:
+            prediction = build_openmatchday_prediction(raw, fixture)
+            if not prediction.get("available"):
+                continue
+            matches = find_bookmaker_event(priced_games, fixture["home_team"], fixture["away_team"])
+            for game in matches:
+                for row in game.get("markets", []):
+                    mk = _odds_market_key(row.get("market"))
+                    if not mk: continue
+                    selection_key = _selection_probability_key(mk, row.get("selection"), row.get("handicap"))
+                    if not selection_key: continue
+                    if market_filter not in ("all", "safest", selection_key): continue
+                    probability = _market_probability(prediction, selection_key)
+                    odds = row.get("odds")
+                    if probability is None or not odds or odds <= 1: continue
+                    ev = probability * odds - 1
+                    min_probability = 0.60 if selection_key in ("over15", "over25") else 0.42
+                    if probability < min_probability or ev < 0.03: continue
+                    candidates.append({
+                        "home": fixture["home_team"], "away": fixture["away_team"],
+                        "league": fixture.get("competition") or fixture.get("leagueName") or "Competition",
+                        "day": day_filter, "bookmaker": game.get("bookmaker"),
+                        "market": row.get("market"), "selection": row.get("selection"),
+                        "market_key": selection_key, "odds": odds, "probability": probability,
+                        "ev": ev, "fair_odds": 1 / probability,
+                        "kickoff": game.get("kickoff_eat") or fixture.get("kickoffUtc"),
+                        "url": game.get("url"),
+                    })
+        for name, error in odds_result.get("errors", {}).items():
+            diagnostics.append(f"{day_filter} {name}: {error[:100]}")
+    candidates.sort(key=lambda x: (x["ev"], x["probability"]), reverse=True)
+    # Deduplicate same fixture/market across provider variants only after preserving best price.
+    best = {}
+    for item in candidates:
+        key = (item["home"], item["away"], item["market_key"], item["selection"])
+        if key not in best or item["odds"] > best[key]["odds"]:
+            best[key] = item
+    return sorted(best.values(), key=lambda x: (x["ev"], x["probability"]), reverse=True), diagnostics
+
+
 async def topvalue_command(update, context):
-    await reply(update, "📊 TOP VALUE SCANNER\n\nNo verified bookmaker odds feed is connected. PUNTER cannot honestly rank value bets without current prices.\n\nUse /value TEAM A vs TEAM B HOME_ODDS DRAW_ODDS AWAY_ODDS to compare your supplied 1X2 prices with the model. No odds = no value verdict.")
+    args = [x.casefold() for x in (context.args or [])]
+    market = args[0] if args and args[0] in ("home", "draw", "away", "over15", "over25", "safest") else "all"
+    day = args[1] if len(args) > 1 and args[1] in ("today", "tomorrow") else "both"
+    days = (day,) if day != "both" else ("today", "tomorrow")
+    await reply(update, "🔎 Scanning the available fixture catalogue and connected bookmaker prices. This may take a little while...")
+    try:
+        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, days, market)
+    except Exception as exc:
+        logger.exception("Value scanner failed")
+        await reply(update, f"❌ VALUE SCAN FAILED: {type(exc).__name__}: {str(exc)[:250]}")
+        return
+    if market == "safest":
+        rows.sort(key=lambda x: (x["probability"], x["ev"]), reverse=True)
+    if not rows:
+        await reply(update,
+            "🚫 NO QUALIFYING VALUE PICKS\\n\\n"
+            "No selection met the minimum probability and positive expected-value filters using the odds actually retrieved. "
+            "This is a NO BET result, not a reason to lower the filters.\\n\\n"
+            + ("Feed notes: " + "; ".join(diagnostics[:4]) if diagnostics else "No usable bookmaker prices were matched."))
+        return
+    lines = ["🧠 PUNTER KENYA — VALUE SCANNER", f"Market: {market.upper()} | Dates: {', '.join(days)}",
+             "Filters: model probability ≥ 42% (1X2) / ≥ 60% (goals); estimated EV ≥ +3%", ""]
+    for n, item in enumerate(rows[:12], 1):
+        lines.append(f"{n}. {item['home']} vs {item['away']} — {item['league']}")
+        lines.append(f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item['bookmaker']})")
+        lines.append(f"   Model: {item['probability']:.1%} | Fair odds: {item['fair_odds']:.2f} | Est. EV: {item['ev']:+.1%}")
+        lines.append(f"   Kick-off: {item['kickoff'] or 'Not supplied'}")
+        if item.get("url"): lines.append(f"   {item['url']}")
+        lines.append("")
+    lines.append("Important: this is an experimental, uncalibrated Poisson model. Historical results are not xG or lineup-adjusted. Positive estimated EV is not proof of an edge. Verify price and market rules before betting. No BTTS or Under 2.5 picks are included.")
+    message = "\\n".join(lines)
+    for offset in range(0, len(message), 3600):
+        await reply(update, message[offset:offset+3600])
+
+
+async def aipicks_status_command(update, context):
+    # Reuse the same transparent catalogue + price scan; no separate unverified AI claim.
+    context.args = list(context.args or [])
+    await topvalue_command(update, context)
+
+
+async def accumulator_status_command(update, context):
+    args = [x.casefold() for x in (context.args or [])]
+    target = 3.0
+    if args:
+        try:
+            target = float(args[0])
+            if target < 1.5 or target > 50: raise ValueError
+        except ValueError:
+            await reply(update, "Usage: /accumulator [target decimal odds, 1.50–50]. Example: /accumulator 3.00")
+            return
+    await reply(update, "🔎 Finding independent fixture candidates for a conservative accumulator...")
+    try:
+        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "safest")
+    except Exception as exc:
+        await reply(update, f"Accumulator scan failed: {type(exc).__name__}: {str(exc)[:200]}")
+        return
+    chosen, combined = [], 1.0
+    used = set()
+    for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
+        fixture_key = (item["home"], item["away"])
+        if fixture_key in used or item["probability"] < 0.62 or item["ev"] < 0.03:
+            continue
+        if any(x["home"] == item["home"] and x["away"] == item["away"] for x in chosen):
+            continue
+        chosen.append(item); used.add(fixture_key); combined *= item["odds"]
+        if combined >= target: break
+        if len(chosen) >= 6: break
+    if not chosen or combined < target:
+        await reply(update, f"🚫 NO ACCUMULATOR RECOMMENDED\\n\\nCould not reach {target:.2f} using selections that passed the minimum probability (62%) and estimated EV (+3%) filters. PUNTER will not add weak legs just to reach a target.")
+        return
+    probability_product = math.prod(x["probability"] for x in chosen)
+    lines = ["🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR", f"Target: {target:.2f} | Combined decimal odds: {combined:.2f}", ""]
+    for i, item in enumerate(chosen, 1):
+        lines.append(f"{i}. {item['home']} vs {item['away']}")
+        lines.append(f"   {item['selection']} @ {item['odds']:.2f} — {item['bookmaker']}")
+        lines.append(f"   Model probability: {item['probability']:.1%} | Est. EV: {item['ev']:+.1%}")
+    lines.extend(["", f"Naive independent-leg probability product: {probability_product:.2%}",
+        "This product assumes independence and may be materially wrong. Selections may be correlated; this is not a calibrated accumulator probability.",
+        "All legs are experimental estimates, not guarantees. Check every market and price with the bookmaker. No BTTS or Under 2.5 selections."])
+    await reply(update, "\\n".join(lines))
 
 
 def ensure_prediction_records_table(cursor):
