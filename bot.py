@@ -564,7 +564,7 @@ def fetch_upcoming_fixture_rows(days=14, league_id=None):
         return collected
 
     collected = []
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor:
         for date_rows in executor.map(fetch_one_date, dates):
             collected.extend(date_rows)
 
@@ -1628,36 +1628,45 @@ async def matchintel(
     await reply(update, "🔎 Finding the fixture and checking available match data...")
 
     try:
-        raw_rows = await asyncio.to_thread(fetch_upcoming_fixture_rows, 14)
-        candidates = []
         normal_query = query.casefold().replace(" v ", " vs ")
         if " vs " in normal_query:
             home_query, away_query = [part.strip() for part in normal_query.split(" vs ", 1)]
         else:
             home_query, away_query = normal_query, ""
 
-        for raw in raw_rows:
-            item = normalise_fixture(raw)
-            if not item:
-                continue
-            home = item["home_team"]
-            away = item["away_team"]
-            if away_query:
-                if (
+        def find_candidates(raw_rows):
+            found = []
+            for raw in raw_rows:
+                item = normalise_fixture(raw)
+                if not item:
+                    continue
+                home = item["home_team"]
+                away = item["away_team"]
+                if away_query:
+                    if (
+                        team_name_matches_query(home_query, home)
+                        and team_name_matches_query(away_query, away)
+                    ):
+                        found.append((raw, item))
+                    elif (
+                        team_name_matches_query(home_query, away)
+                        and team_name_matches_query(away_query, home)
+                    ):
+                        found.append((raw, item))
+                elif home_query and (
                     team_name_matches_query(home_query, home)
-                    and team_name_matches_query(away_query, away)
+                    or team_name_matches_query(home_query, away)
                 ):
-                    candidates.append((raw, item))
-                elif (
-                    team_name_matches_query(home_query, away)
-                    and team_name_matches_query(away_query, home)
-                ):
-                    candidates.append((raw, item))
-            elif home_query and (
-                team_name_matches_query(home_query, home)
-                or team_name_matches_query(home_query, away)
-            ):
-                candidates.append((raw, item))
+                    found.append((raw, item))
+            return found
+
+        # Most requested matches are today or within the next day. Search that
+        # short window first; only expand to 14 days if no match is found.
+        raw_rows = await asyncio.to_thread(fetch_upcoming_fixture_rows, 1)
+        candidates = find_candidates(raw_rows)
+        if not candidates:
+            raw_rows = await asyncio.to_thread(fetch_upcoming_fixture_rows, 14)
+            candidates = find_candidates(raw_rows)
 
         if not candidates:
             await reply(
