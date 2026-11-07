@@ -1155,6 +1155,20 @@ async def help_command(
     await start(update, context)
 
 
+async def about(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """Display data-provider attribution and project information."""
+    await reply(
+        update,
+        "ℹ️ ABOUT PUNTER KENYA\\n\\n"
+        "Fixture data provider: open-matchday\\n"
+        "Repository: https://github.com/oladeeayo/open-matchday\\n\\n"
+        "PUNTER KENYA is an independent project and is not affiliated with the data provider.",
+    )
+
+
 # ============================================================
 # DATABASE TEST
 # ============================================================
@@ -1545,7 +1559,6 @@ async def leaguefixtures(
             selected,
             f"⚽ PUNTER KENYA  ·  {league_name.upper()}\n🏟 {len(selected)} matches · {day_label}",
         )
-        lines.extend(["", "Source: open-matchday · github.com/oladeeayo/open-matchday"])
         await reply(update, "\n".join(lines))
 
     except Exception as exc:
@@ -1665,7 +1678,6 @@ async def fixtures(
             lines.extend(["", f"➡️ NEXT PAGE  /fixtures {page + 1}"])
         if page > 1:
             lines.append(f"⬅️ PREVIOUS PAGE  /fixtures {page - 1}")
-        lines.extend(["", "Source: open-matchday · github.com/oladeeayo/open-matchday"])
         await reply(update, "\n".join(lines))
 
     except Exception as exc:
@@ -2567,6 +2579,7 @@ def main():
     handlers = [
         ("start", start),
         ("help", help_command),
+        ("about", about),
         ("diagnose", diagnose),
         ("leagues", leagues),
         ("syncleagues", syncleagues),
