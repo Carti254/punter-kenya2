@@ -1274,7 +1274,7 @@ async def accumulator_status_command(update, context):
 
     if not chosen or combined < target:
         await reply(update,
-            f"🚫 NO ACCUMULATOR RECOMMENDED\\n\\n"
+            f"🚫 NO ACCUMULATOR RECOMMENDED\n\n"
             f"Could not reach {target:.2f} using selections that passed the minimum probability (62%) "
             "and estimated expected-value (+3%) filters. PUNTER will not add weak legs just to reach a target. "
             + ("Feed notes: " + "; ".join(diagnostics[:3]) if diagnostics else ""))
@@ -1298,7 +1298,7 @@ async def accumulator_status_command(update, context):
         "This assumes independence. Correlation is not modelled, so this is NOT a calibrated accumulator probability.",
         "Experimental estimates only. Confirm every price and market with the bookmaker. No BTTS or Under 2.5.",
     ])
-    await reply(update, "\\n".join(lines))
+    await reply(update, "\n".join(lines))
 
 
 async def fullintel_callback(update, context):
