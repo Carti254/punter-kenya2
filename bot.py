@@ -1159,6 +1159,67 @@ async def start(
     )
 
 
+async def fullintel_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """Display the PUNTER KENYA Full Intelligence Centre (v4)."""
+    await reply(
+        update,
+        "⚽ PUNTER KENYA — FULL INTELLIGENCE CENTRE\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "VERSION 4  |  MASTER COMMAND DIRECTORY\n\n"
+        "Your control centre for fixtures, team research, match predictions, "
+        "betting analysis and forecast tracking. Choose a command below and "
+        "add the two team names where shown.\n\n"
+        "📅 1. FIXTURES & COMPETITIONS\n"
+        "/fixtures — browse upcoming fixtures\n"
+        "/fixtures today — today's fixtures\n"
+        "/fixtures tomorrow — tomorrow's fixtures\n"
+        "/leaguefixtures LEAGUE — fixtures by competition\n"
+        "/leagues [SEARCH] — find competitions in the catalogue\n"
+        "/syncleagues — refresh the league catalogue\n"
+        "/syncfixtures — sync available fixture records\n\n"
+        "📊 2. TEAM FORM & PERFORMANCE\n"
+        "/form TEAM A vs TEAM B — recent results, form and points rate\n"
+        "/goals TEAM A vs TEAM B — goals for/against and scoring rates\n"
+        "/homeaway TEAM A vs TEAM B — home and away records\n"
+        "/strength TEAM A vs TEAM B — attack, defence and consistency\n"
+        "/halves TEAM A vs TEAM B — half-time data availability\n\n"
+        "⚔️ 3. MATCHUP & HISTORY\n"
+        "/h2h TEAM A vs TEAM B — previous meetings in the dataset\n"
+        "/matchup TEAM A vs TEAM B — attack-versus-defence comparison\n"
+        "/scenarios TEAM A vs TEAM B — possible statistical match scenarios\n"
+        "/risk TEAM A vs TEAM B — uncertainty and warning flags\n\n"
+        "🧠 4. PREDICTIONS & BETTING ANALYSIS\n"
+        "/matchintel TEAM A vs TEAM B — match information and model forecast\n"
+        "/markets TEAM A vs TEAM B — supported model market probabilities\n"
+        "/deepdive TEAM A vs TEAM B — combined report and final assessment\n"
+        "/value TEAM A vs TEAM B HOME DRAW AWAY — compare supplied 1X2 odds\n"
+        "/topvalue — value-scanner status\n\n"
+        "📚 5. TRACKING & UTILITIES\n"
+        "/record — evaluate saved forecasts against completed results\n"
+        "/calculator ODDS STAKE — calculate returns and implied probability\n"
+        "/live — current live-data availability\n"
+        "/about — data provider and project information\n"
+        "/dbtest — test database connection\n"
+        "/start or /help — show the main help menu\n\n"
+        "🚀 QUICK START\n"
+        "1. Find a fixture with /fixtures or /leaguefixtures.\n"
+        "2. Run /deepdive TEAM A vs TEAM B for the full analysis.\n"
+        "3. Use individual commands above to inspect specific evidence.\n"
+        "4. Use /value with actual bookmaker prices to assess 1X2 value.\n"
+        "5. Use /record to review forecast performance.\n\n"
+        "⚠️ DATA & SAFETY NOTES\n"
+        "Fixture and results data comes from open-matchday and is refreshed "
+        "daily, not live. Confirmed lineups, live events, half-time statistics "
+        "and verified bookmaker odds are not currently supplied. /value uses "
+        "prices entered by you; verify them with the bookmaker. Missing data "
+        "is not invented. Model probabilities are estimates, not guarantees. "
+        "A NO BET decision is valid when evidence or odds are insufficient."
+    )
+
+
 async def help_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -3238,6 +3299,7 @@ def main():
         ("syncleagues", syncleagues),
         ("leaguefixtures", leaguefixtures),
         ("matchintel", matchintel),
+        ("fullintel", fullintel_command),
         ("form", form_command),
         ("goals", goals_command),
         ("homeaway", homeaway_command),
