@@ -3535,17 +3535,19 @@ def save_bookmaker_odds_snapshots(games):
 
 
 async def bookmakers_command(update, context):
-    from datetime import timedelta
     day = datetime.now(EAT).date()
-    await reply(update, f"🔎 Checking Betika and BetPawa public odds feeds for {day:%d %b %Y}...")
+    await reply(update, f"🔎 Checking Betika and SportyBet public odds feeds for {day:%d %b %Y}...")
     result = await asyncio.to_thread(fetch_bookmaker_odds, day)
     lines = ["🏦 BOOKMAKER FEED CHECK", f"Date: {day:%d %b %Y} (EAT)", ""]
-    for name in ("Betika", "BetPawa"):
+    for name in ("Betika", "SportyBet"):
         item = result["bookmakers"].get(name)
         if item:
             lines.append(f"✅ {name}: {item['events']} events | {item['priced_events']} with markets")
         else:
             lines.append(f"⚠️ {name}: " + result["errors"].get(name, "No response"))
+    lines.extend(["", "OTHER KENYAN BOOKMAKERS"])
+    for name, reason in result.get("unavailable", {}).items():
+        lines.append(f"⏸️ {name}: {reason}")
     lines.extend(["", "These are read-only public feed checks. A successful response confirms data retrieval, not guaranteed continuous availability."])
     await reply(update, "\n".join(lines))
 
@@ -3558,7 +3560,7 @@ async def bookmaker_odds_command(update, context):
             "💹 BOOKMAKER ODDS COMPARISON\n\n"
             "Usage: /odds HOME TEAM vs AWAY TEAM [today|tomorrow]\n"
             "Example: /odds Brighton vs Brentford today\n\n"
-            "Compares retrieved Betika and BetPawa prices. Only markets actually returned by the feeds are shown.")
+            "Compares retrieved Betika and SportyBet prices. Only markets actually returned by the feeds are shown.")
         return
     day = datetime.now(EAT).date()
     lowered = raw_query.casefold()
