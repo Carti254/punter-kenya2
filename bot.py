@@ -750,7 +750,10 @@ def fetch_upcoming_fixture_rows(days=14, league_id=None):
     range_rows = []
     try:
         range_rows = collect_pages("fixtures", range_params)
-    except Exception:
+    except Exception as exc:
+        FIXTURE_RESPONSE_DIAGNOSTICS.append(
+            f"REQUEST ERROR endpoint=fixtures; {type(exc).__name__}: {str(exc)[:500]}"
+        )
         logger.warning(
             "GOAL API date-range fixture request failed; using date-scoped "
             "fixture retrieval.",
@@ -771,7 +774,11 @@ def fetch_upcoming_fixture_rows(days=14, league_id=None):
                 f"fixtures/date/{fixture_date.isoformat()}",
                 params,
             )
-        except Exception:
+        except Exception as exc:
+            FIXTURE_RESPONSE_DIAGNOSTICS.append(
+                f"REQUEST ERROR endpoint=fixtures/date/{fixture_date.isoformat()}; "
+                f"{type(exc).__name__}: {str(exc)[:350]}"
+            )
             logger.warning(
                 "Fixture retrieval failed for %s",
                 fixture_date.isoformat(),
