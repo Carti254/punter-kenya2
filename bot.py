@@ -34,6 +34,7 @@ GOAL_API_BASE = os.getenv(
 
 PROVIDER_NAME = "goal_api"
 EAT = ZoneInfo("Africa/Nairobi")
+FIXTURE_RESPONSE_DIAGNOSTICS = []
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -341,6 +342,33 @@ def goal_request(endpoint, params=None):
             )[:500]
         )
 
+    if endpoint == "fixtures" or endpoint.startswith("fixtures/date/"):
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if isinstance(data, list):
+            data_type = "list"
+            data_count = len(data)
+            sample = repr(data[0])[:650] if data else "empty list"
+            data_keys = ""
+        elif isinstance(data, dict):
+            data_type = "dict"
+            data_count = "n/a"
+            data_keys = ",".join(str(k) for k in list(data.keys())[:25])
+            sample = repr(data)[:650]
+        else:
+            data_type = type(data).__name__
+            data_count = "n/a"
+            data_keys = ""
+            sample = repr(payload)[:650]
+        diagnostic = (
+            f"endpoint={endpoint}; root_keys="
+            f"{','.join(str(k) for k in list(payload.keys())[:25]) if isinstance(payload, dict) else type(payload).__name__}; "
+            f"success={payload.get('success') if isinstance(payload, dict) else 'n/a'}; "
+            f"data_type={data_type}; data_count={data_count}; "
+            f"data_keys={data_keys}; sample={sample}"
+        )
+        FIXTURE_RESPONSE_DIAGNOSTICS.append(diagnostic)
+        del FIXTURE_RESPONSE_DIAGNOSTICS[4:]
+
     return payload
 
 
@@ -646,6 +674,7 @@ def fetch_matchintel_fixture_rows(days=14):
 
 
 def fetch_upcoming_fixture_rows(days=14, league_id=None):
+    FIXTURE_RESPONSE_DIAGNOSTICS.clear()
     """
     Fetch a date range through GOAL API's documented /fixtures endpoint.
     This avoids requesting every calendar date separately and ensures the
@@ -1433,8 +1462,13 @@ async def fixtures(
                     "First raw record preview: "
                     + repr(raw_rows[0])[:900]
                 )
+            if FIXTURE_RESPONSE_DIAGNOSTICS:
+                diagnostic.append("GOAL API response diagnostics:")
+                diagnostic.extend(FIXTURE_RESPONSE_DIAGNOSTICS)
+            else:
+                diagnostic.append("No fixture response diagnostics were captured.")
             diagnostic.append(
-                "This diagnostic helps identify the provider's actual fixture schema."
+                "This diagnostic shows the raw response envelope, not just extracted fixtures."
             )
             await reply(update, "\\n".join(diagnostic))
             return
