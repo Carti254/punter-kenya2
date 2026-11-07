@@ -27,10 +27,11 @@ PUNTER KENYA is an independent project and is not affiliated with open-matchday.
 - `/matchintel HOME TEAM vs AWAY TEAM` — retrieve available fixture information.
 - `/syncfixtures` — sync available fixture records to the database.
 - `/live` — explains current live-data limitations.
+- `/calculator ODDS STAKE` — calculate potential returns and implied probability.
 - `/dbtest` — test the database connection.
 - `/calculator` — use the betting calculator.
 
-Live scores and confirmed starting lineups are **not implemented yet**. Do not treat scheduled fixtures as live matches. A statistical prediction engine and verified team-history analysis are also not yet complete; the bot should not present unsupported predictions as facts.
+The pre-match forecast uses a basic Poisson model based on up to 10 recent completed results per team in the same competition. It requires at least five usable results for each team. It reports estimated 1X2 and goal probabilities, recent form and a most-likely score; these are not guarantees and do not account for injuries, suspensions, xG or lineups. If the provider has insufficient history, the bot clearly withholds the forecast.\n\nLive scores, confirmed starting lineups, live events and verified bookmaker odds are **not implemented**. Do not treat scheduled fixtures as live matches or the model output as a betting guarantee.
 
 ## Deployment configuration
 
