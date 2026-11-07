@@ -23,6 +23,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 
 from database import get_connection, test_connection
 from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find_bookmaker_event
+from slip_manager import create_slip, get_slip, list_slips, update_slip
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -1159,13 +1160,198 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+def parse_slip_lines(raw_text):
+    """Parse one selection per line: Fixture | Market | Pick | Decimal odds [| Bookmaker]."""
+    selections = []
+    bookmaker = "Manual"
+    for line_number, raw in enumerate(raw_text.splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) not in (4, 5):
+            raise ValueError(
+                f"Line {line_number}: use Fixture | Market | Selection | Odds [| Bookmaker]."
+            )
+        fixture, market, selection, odds_text = parts[:4]
+        try:
+            odds = float(odds_text)
+        except ValueError:
+            raise ValueError(f"Line {line_number}: odds must be a decimal number.")
+        if not fixture or not market or not selection or not math.isfinite(odds) or odds <= 1.0 or odds > 1000:
+            raise ValueError(f"Line {line_number}: fixture, market, selection and odds above 1.00 are required.")
+        if len(parts) == 5 and parts[4]:
+            bookmaker = parts[4][:80]
+        selections.append({
+            "fixture": fixture[:180],
+            "market": market[:100],
+            "selection": selection[:120],
+            "odds": round(odds, 4),
+        })
+    if not selections:
+        raise ValueError("No selections found. Send at least one non-empty selection line.")
+    if len(selections) > 50:
+        raise ValueError("A slip can contain no more than 50 selections.")
+    return selections, bookmaker
+
+
+def format_slip(slip_id, selections, bookmaker="Manual"):
+    combined = math.prod(float(item["odds"]) for item in selections)
+    lines = [
+        f"🎟️ PUNTER KENYA — SLIP #{slip_id}",
+        f"Bookmaker label: {bookmaker}",
+        f"Selections: {len(selections)}",
+        f"Combined decimal odds: {combined:.2f}",
+        "",
+    ]
+    for index, item in enumerate(selections, 1):
+        lines.append(
+            f"{index}. {item['fixture']}\n"
+            f"   {item['market']}: {item['selection']} @ {float(item['odds']):.2f}"
+        )
+    lines.extend(["", "Internal PUNTER slip record only — not a bookmaker booking code and no bet has been placed."])
+    return "\n".join(lines)
+
+
+async def process_slip_flow(update, context):
+    state = context.user_data.get("slip_flow")
+    if not state:
+        return False
+    message = (update.effective_message.text or "").strip()
+    user_id = update.effective_user.id
+    if message.casefold() in ("/cancel", "cancel", "❌ cancel"):
+        context.user_data.pop("slip_flow", None)
+        await reply(update, "Cancelled. Your existing slips have not been changed.")
+        return True
+
+    try:
+        if state == "build":
+            selections, bookmaker = parse_slip_lines(message)
+            slip_id = await asyncio.to_thread(create_slip, user_id, selections, bookmaker)
+            context.user_data.pop("slip_flow", None)
+            await reply(update, format_slip(slip_id, selections, bookmaker))
+            return True
+
+        if state == "edit":
+            parts = [part.strip() for part in message.split("|")]
+            if len(parts) != 6:
+                await reply(update, "Format: SLIP_ID | LEG_NUMBER | FIXTURE | MARKET | SELECTION | ODDS\nExample: 42 | 2 | Arsenal vs Chelsea | 1X2 | Arsenal | 1.85")
+                return True
+            slip_id, leg_number = int(parts[0]), int(parts[1])
+            slip = await asyncio.to_thread(get_slip, user_id, slip_id)
+            if not slip:
+                await reply(update, "Slip not found. Use /myslips to see your active slip IDs.")
+                return True
+            if not 1 <= leg_number <= len(slip["selections"]):
+                await reply(update, f"Leg number must be between 1 and {len(slip['selections'])}.")
+                return True
+            odds = float(parts[5])
+            if not math.isfinite(odds) or odds <= 1.0 or odds > 1000 or not all(parts[2:5]):
+                await reply(update, "Invalid fixture, market, selection or odds. Odds must be above 1.00.")
+                return True
+            slip["selections"][leg_number - 1] = {
+                "fixture": parts[2][:180], "market": parts[3][:100],
+                "selection": parts[4][:120], "odds": round(odds, 4),
+            }
+            await asyncio.to_thread(update_slip, user_id, slip_id, slip["selections"])
+            context.user_data.pop("slip_flow", None)
+            await reply(update, format_slip(slip_id, slip["selections"], slip["bookmaker"]))
+            return True
+
+        if state == "merge":
+            ids = [int(value) for value in re.split(r"[ ,]+", message) if value]
+            if len(ids) != 2 or ids[0] == ids[1]:
+                await reply(update, "Send exactly two different slip IDs, separated by a space. Example: 12 15")
+                return True
+            first, second = await asyncio.gather(
+                asyncio.to_thread(get_slip, user_id, ids[0]),
+                asyncio.to_thread(get_slip, user_id, ids[1]),
+            )
+            if not first or not second:
+                await reply(update, "One or both slips were not found in your account. Use /myslips.")
+                return True
+            selections = first["selections"] + second["selections"]
+            if len(selections) > 50:
+                await reply(update, "Merged slip would exceed the 50-selection limit.")
+                return True
+            new_id = await asyncio.to_thread(create_slip, user_id, selections, "Merged")
+            context.user_data.pop("slip_flow", None)
+            await reply(update, format_slip(new_id, selections, "Merged") + f"\n\nSource slips #{ids[0]} and #{ids[1]} remain unchanged.")
+            return True
+
+        if state == "split":
+            parts = [part.strip() for part in message.split("|")]
+            if len(parts) != 2:
+                await reply(update, "Format: SLIP_ID | LEGS_PER_NEW_SLIP\nExample: 21 | 3")
+                return True
+            slip_id, chunk_size = int(parts[0]), int(parts[1])
+            slip = await asyncio.to_thread(get_slip, user_id, slip_id)
+            if not slip:
+                await reply(update, "Slip not found. Use /myslips.")
+                return True
+            if chunk_size < 1 or chunk_size >= len(slip["selections"]):
+                await reply(update, f"Choose a number from 1 to {len(slip['selections']) - 1}.")
+                return True
+            created = []
+            selections = slip["selections"]
+            for offset in range(0, len(selections), chunk_size):
+                chunk = selections[offset:offset + chunk_size]
+                new_id = await asyncio.to_thread(create_slip, user_id, chunk, "Split")
+                created.append(f"#{new_id} ({len(chunk)} legs, odds {math.prod(float(x['odds']) for x in chunk):.2f})")
+            context.user_data.pop("slip_flow", None)
+            await reply(update, "✂️ SPLIT COMPLETE\n\n" + "\n".join(created) + f"\n\nOriginal slip #{slip_id} remains unchanged. These are internal records, not bookmaker codes.")
+            return True
+    except (ValueError, TypeError) as exc:
+        await reply(update, f"Could not process that input: {str(exc)[:250]}\nSend /cancel to stop.")
+        return True
+    except Exception as exc:
+        logger.exception("Slip workflow failed")
+        await reply(update, f"Slip operation failed: {type(exc).__name__}: {str(exc)[:200]}")
+        context.user_data.pop("slip_flow", None)
+        return True
+    return False
+
+
+async def my_slips_command(update, context):
+    try:
+        rows = await asyncio.to_thread(list_slips, update.effective_user.id, 15)
+        if not rows:
+            await reply(update, "🎟️ You have no saved slips yet. Choose 🤖 Build a slip from the menu.")
+            return
+        lines = ["🎟️ YOUR SAVED SLIPS", ""]
+        for row in rows:
+            total = math.prod(float(x["odds"]) for x in row["selections"])
+            lines.append(f"#{row['slip_id']} · {len(row['selections'])} legs · {total:.2f} odds · {row['bookmaker']}")
+        lines.append("\nUse the Edit, Merge or Split menu actions with these slip IDs.")
+        await reply(update, "\n".join(lines))
+    except Exception as exc:
+        logger.exception("Could not list slips")
+        await reply(update, f"Could not load slips: {type(exc).__name__}: {str(exc)[:200]}")
+
+
 async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Route persistent menu buttons to working commands or honest capability notes."""
+    """Handle slip workflows and persistent home-menu buttons."""
+    if await process_slip_flow(update, context):
+        return
     choice = (update.effective_message.text or "").strip()
-    if choice == "📋 Bookies & regions":
+    prompts = {
+        "🤖 Build a slip": ("build", "Send one selection per line in this format:\nFixture | Market | Selection | Odds [| Bookmaker]\n\nExample:\nArsenal vs Chelsea | 1X2 | Arsenal | 1.85 | Betika\nNapoli vs Roma | Over 1.5 | Over 1.5 | 1.42 | SportyBet\n\nYour slip will be saved privately under your Telegram account."),
+        "✏️ Edit slip": ("edit", "Edit one leg using:\nSLIP_ID | LEG_NUMBER | FIXTURE | MARKET | SELECTION | ODDS\nExample: 42 | 2 | Arsenal vs Chelsea | 1X2 | Arsenal | 1.85\nUse /myslips to find your slip ID."),
+        "🔗 Merge slips": ("merge", "Send two of your saved slip IDs separated by a space. Example: 12 15. A new combined slip is created; the originals remain unchanged."),
+        "✂️ Split slip": ("split", "Send: SLIP_ID | LEGS_PER_NEW_SLIP\nExample: 21 | 3. New slips are created in groups of three; the original remains unchanged."),
+    }
+    if choice in prompts:
+        context.user_data["slip_flow"] = prompts[choice][0]
+        await reply(update, prompts[choice][1] + "\n\nSend /cancel to stop.")
+    elif choice == "🔄 Convert bet code":
+        await reply(update,
+            "🔄 BOOKING-CODE CONVERSION\n\n"
+            "I can store and manage internal PUNTER slips, but cross-bookmaker conversion "
+            "requires working integrations for both source and destination bookmakers. "
+            "Those public-feed adapters do not expose booking-code conversion. I will not "
+            "invent a converted code. You can build, edit, merge and split your own slips here.")
+    elif choice == "📋 Bookies & regions":
         await bookmakers_command(update, context)
-    elif choice == "🤖 Build a slip":
-        await accumulator_status_command(update, context)
     elif choice == "⚽ Match intelligence":
         await fullintel_command(update, context)
     elif choice == "📅 Fixtures & leagues":
@@ -1178,21 +1364,12 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif choice == "❓ Contact support":
         await reply(update,
             "❓ PUNTER KENYA SUPPORT\n\n"
-            "For technical issues, use the project repository: "
-            "https://github.com/Carti254/punter-kenya2\n"
-            "Do not send bookmaker passwords, account credentials or private tokens.")
-    elif choice in ("🔄 Convert bet code", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip"):
-        feature = {
-            "🔄 Convert bet code": "booking-code conversion",
-            "✏️ Edit slip": "slip editing",
-            "🔗 Merge slips": "slip merging",
-            "✂️ Split slip": "slip splitting",
-        }[choice]
-        await reply(update,
-            f"🛠️ {feature.upper()}\n\n"
-            "This feature is not connected yet. It requires a verified bookmaker-specific "
-            "integration and supported code format. I won't generate fake booking codes or "
-            "claim a slip was changed when it was not.")
+            "For technical issues, use: https://github.com/Carti254/punter-kenya2\n"
+            "Never send bookmaker passwords, account credentials or private tokens.")
+    elif choice == "/myslips":
+        await my_slips_command(update, context)
+    elif choice == "🎟️ My slips":
+        await my_slips_command(update, context)
 
 
 
@@ -3820,6 +3997,7 @@ def main():
         ("oddshistory", odds_history_command),
         ("aipicks", aipicks_status_command),
         ("accumulator", accumulator_status_command),
+        ("myslips", my_slips_command),
     ]
 
     for command, callback in handlers:
@@ -3833,6 +4011,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(fullintel_callback, pattern=r"^fi:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_text_handler))
+    app.add_handler(MessageHandler(filters.Regex(r"^/myslips$"), my_slips_command))
     
     app.add_error_handler(error_handler)
 
