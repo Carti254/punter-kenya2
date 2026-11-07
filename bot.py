@@ -5,6 +5,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import unicodedata
 import re
+import math
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -344,8 +345,14 @@ def normalise_fixture(raw):
         "dateTime",
         "matchDateTime",
         "startTime",
-        "date",
     )
+    if kickoff is None:
+        match_date = first_value(raw, "matchDate", "date")
+        match_time = first_value(raw, "matchTime", "time")
+        if match_date and match_time:
+            kickoff = f"{str(match_date)[:10]}T{str(match_time)[:8]}:00"
+        else:
+            kickoff = match_date
 
     status = first_value(
         raw,
@@ -1473,6 +1480,129 @@ def team_name_matches_query(query_name, actual_name):
 
 
 # ============================================================
+# PRE-MATCH MODEL — RECENT RESULTS + POISSON SCORE DISTRIBUTION
+# ============================================================
+
+def entity_id(value):
+    if isinstance(value, dict):
+        return first_value(value, "id", "teamId", "team_id", "apiId")
+    return None
+
+
+def fixture_team_id(raw, side):
+    direct = first_value(raw, f"{side}TeamId", f"{side}_team_id")
+    if direct is not None:
+        return str(direct)
+    nested = first_value(raw, f"{side}Team", side.lower())
+    value = entity_id(nested)
+    return str(value) if value is not None else None
+
+
+def poisson_probability(goals, expected):
+    return math.exp(-expected) * (expected ** goals) / math.factorial(goals)
+
+
+def build_pre_match_prediction(raw_fixture, fixture):
+    """Build a cautious pre-lineup forecast from verified recent team results."""
+    home_id = fixture_team_id(raw_fixture, "home")
+    away_id = fixture_team_id(raw_fixture, "away")
+    if not home_id or not away_id:
+        return {
+            "available": False,
+            "reason": "The fixture feed did not include both team IDs, so recent team results could not be linked safely.",
+        }
+
+    def get_recent(team_id):
+        payload = goal_request(f"teams/{team_id}/results", {"limit": 10, "offset": 0})
+        rows = extract_list(payload, ("results", "matches", "fixtures"))
+        parsed = []
+        for row in rows:
+            item = normalise_fixture(row)
+            if not item or item["home_score"] is None or item["away_score"] is None:
+                continue
+            if item["home_team"].casefold() == fixture["home_team"].casefold() or fixture_team_id(row, "home") == team_id:
+                gf, ga = item["home_score"], item["away_score"]
+            elif item["away_team"].casefold() == fixture["home_team"].casefold() or fixture_team_id(row, "away") == team_id:
+                gf, ga = item["away_score"], item["home_score"]
+            else:
+                # Team-results endpoint is scoped to the requested team; infer side from returned team IDs.
+                if fixture_team_id(row, "home") == team_id:
+                    gf, ga = item["home_score"], item["away_score"]
+                elif fixture_team_id(row, "away") == team_id:
+                    gf, ga = item["away_score"], item["home_score"]
+                else:
+                    continue
+            parsed.append((item["kickoff_at"], gf, ga))
+        parsed.sort(key=lambda x: x[0] or datetime.min, reverse=True)
+        return parsed[:10]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        home_future = pool.submit(get_recent, home_id)
+        away_future = pool.submit(get_recent, away_id)
+        home_results = home_future.result()
+        away_results = away_future.result()
+
+    if len(home_results) < 5 or len(away_results) < 5:
+        return {
+            "available": False,
+            "reason": f"Insufficient verified recent results (home: {len(home_results)}, away: {len(away_results)}; at least 5 each required).",
+        }
+
+    def averages(rows):
+        return (
+            sum(x[1] for x in rows) / len(rows),
+            sum(x[2] for x in rows) / len(rows),
+        )
+
+    home_scored, home_conceded = averages(home_results)
+    away_scored, away_conceded = averages(away_results)
+
+    # Modest home advantage; rates are bounded to avoid unstable extreme outputs.
+    lambda_home = max(0.15, min(4.0, ((home_scored + away_conceded) / 2) * 1.08))
+    lambda_away = max(0.15, min(4.0, ((away_scored + home_conceded) / 2) * 0.92))
+
+    score_grid = []
+    for hg in range(9):
+        for ag in range(9):
+            probability = poisson_probability(hg, lambda_home) * poisson_probability(ag, lambda_away)
+            score_grid.append((probability, hg, ag))
+
+    home_win = sum(p for p, hg, ag in score_grid if hg > ag)
+    draw = sum(p for p, hg, ag in score_grid if hg == ag)
+    away_win = sum(p for p, hg, ag in score_grid if hg < ag)
+    over_15 = sum(p for p, hg, ag in score_grid if hg + ag >= 2)
+    over_25 = sum(p for p, hg, ag in score_grid if hg + ag >= 3)
+    most_likely = max(score_grid, key=lambda x: x[0])
+
+    probabilities = {"1": home_win, "X": draw, "2": away_win}
+    top_outcome = max(probabilities, key=probabilities.get)
+    sample_strength = min(1.0, (len(home_results) + len(away_results)) / 20)
+    confidence = "LOW" if sample_strength < 0.7 else "MODERATE"
+    if max(probabilities.values()) >= 0.58 and sample_strength >= 0.9:
+        confidence = "MODERATE"
+
+    return {
+        "available": True,
+        "home_results": len(home_results),
+        "away_results": len(away_results),
+        "home_scored": home_scored,
+        "home_conceded": home_conceded,
+        "away_scored": away_scored,
+        "away_conceded": away_conceded,
+        "lambda_home": lambda_home,
+        "lambda_away": lambda_away,
+        "home_win": home_win,
+        "draw": draw,
+        "away_win": away_win,
+        "over_15": over_15,
+        "over_25": over_25,
+        "score": (most_likely[1], most_likely[2]),
+        "top_outcome": top_outcome,
+        "confidence": confidence,
+    }
+
+
+# ============================================================
 # MATCH INTELLIGENCE — VERIFIED MATCH DATA
 # ============================================================
 
@@ -1802,12 +1932,40 @@ async def matchintel(
             event_lines = format_match_events(events_result)
             output.extend(event_lines or ["• No events published yet."])
 
+        output.extend(["", "🧠 PRE-MATCH PREDICTION"])
+        try:
+            prediction = await asyncio.to_thread(build_pre_match_prediction, raw, item)
+        except Exception as prediction_error:
+            logger.warning("Pre-match model data request failed: %s", prediction_error)
+            prediction = {"available": False, "reason": "Recent team results could not be retrieved: " + str(prediction_error)[:220]}
+
+        if prediction.get("available"):
+            home_pct = prediction["home_win"] * 100
+            draw_pct = prediction["draw"] * 100
+            away_pct = prediction["away_win"] * 100
+            output.extend([
+                f"• Model score: {prediction['score'][0]}–{prediction['score'][1]}",
+                f"• 1X2 probabilities: Home {home_pct:.1f}% | Draw {draw_pct:.1f}% | Away {away_pct:.1f}%",
+                f"• Expected goals: {prediction['lambda_home']:.2f} – {prediction['lambda_away']:.2f}",
+                f"• Over 1.5 goals probability: {prediction['over_15'] * 100:.1f}%",
+                f"• Over 2.5 goals probability: {prediction['over_25'] * 100:.1f}%",
+                f"• Recent results used: {prediction['home_results']} home-team matches; {prediction['away_results']} away-team matches",
+                f"• Model confidence: {prediction['confidence']}",
+                f"• Outcome lean: {prediction['top_outcome']} (highest model probability, not a guaranteed result)",
+                "• BET / NO BET: NO BET — verified bookmaker odds are not available for value comparison.",
+            ])
+        else:
+            output.extend([
+                "• Forecast not produced: " + prediction.get("reason", "Insufficient verified data."),
+                "• BET / NO BET: NO BET — do not stake without a data-backed forecast and verified odds.",
+            ])
+
         output.extend([
             "",
-            "⚠️ DATA & MODEL STATUS",
-            "• This is verified match data, not yet a statistical betting prediction.",
-            "• Predicted lineups, injuries and suspensions are not inferred when no verified feed is returned.",
-            "• No BET / NO BET verdict is issued until market-specific probability models and price validation are integrated.",
+            "⚠️ MODEL LIMITATIONS",
+            "• This is a pre-lineup statistical forecast from recent results; it does not invent starting XIs.",
+            "• Injuries, suspensions, tactical matchups and predicted lineups are not yet verified model inputs.",
+            "• Probabilities are estimates, not guarantees. No stake recommendation is made without verified prices.",
         ])
 
         # Telegram messages have a 4096-character limit; split long reports safely.
