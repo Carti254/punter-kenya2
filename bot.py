@@ -2039,10 +2039,35 @@ async def matchintel(
                 return
 
         if not candidates:
+            valid_rows = []
+            for raw_fixture in raw_rows:
+                parsed_fixture = normalise_fixture(raw_fixture)
+                if parsed_fixture:
+                    valid_rows.append(parsed_fixture)
+
+            sample_lines = [
+                f"• {row['home_team']} vs {row['away_team']}"
+                for row in valid_rows[:8]
+            ]
+            diagnostic = (
+                "\\n\\nProvider fixtures received: "
+                + str(len(raw_rows))
+                + "\\nFixtures successfully parsed: "
+                + str(len(valid_rows))
+            )
+            if sample_lines:
+                diagnostic += "\\n\\nSample fixtures returned:\\n" + "\\n".join(sample_lines)
+            else:
+                diagnostic += (
+                    "\\n\\nThe provider returned no fixtures the bot could parse. "
+                    "This points to an API response/coverage issue, not your team spelling."
+                )
+
             await reply(
                 update,
-                "❌ I couldn't find that match in the next 14 days of fixtures.\n"
-                "Check the team names or use /fixtures to see upcoming matches.",
+                "❌ The requested fixture was not found in the provider feed."
+                + diagnostic
+                + "\\n\\nUse /fixtures to compare the provider's current fixture list.",
             )
             return
 
