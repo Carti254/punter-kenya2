@@ -733,8 +733,8 @@ def canonical_competition_key(value):
     return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
 
 
-def upcoming_fixtures(raw_fixtures, limit=None, offset=0):
-    """Return upcoming fixtures sorted by kickoff, removing provider aliases."""
+def upcoming_fixtures(raw_fixtures, limit=None, offset=0, include_past=False):
+    """Return fixtures sorted by kickoff, removing provider aliases."""
     now = now_utc_naive()
     valid = []
     seen_ids = set()
@@ -742,7 +742,7 @@ def upcoming_fixtures(raw_fixtures, limit=None, offset=0):
 
     for raw in raw_fixtures:
         item = normalise_fixture(raw)
-        if not item or not item["kickoff_at"] or item["kickoff_at"] < now:
+        if not item or not item["kickoff_at"] or (not include_past and item["kickoff_at"] < now):
             continue
 
         fixture_id = str(item["provider_match_id"])
@@ -838,8 +838,8 @@ def fetch_openmatchday_csv(folder, kind="fixtures"):
     return rows
 
 
-def fetch_openmatchday_fixture_rows(days=14, league_id=None):
-    """Fetch upcoming fixtures from every indexed football competition."""
+def fetch_openmatchday_fixture_rows(days=14, league_id=None, day_filter=None):
+    """Fetch fixtures for a selected EAT calendar day, or a rolling upcoming window."""
     FIXTURE_RESPONSE_DIAGNOSTICS.clear()
     leagues = fetch_all_leagues()
     if league_id:
@@ -853,6 +853,8 @@ def fetch_openmatchday_fixture_rows(days=14, league_id=None):
         ]
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    today_eat = datetime.now(EAT).date()
+    target_date = today_eat + timedelta(days=1) if day_filter == "tomorrow" else today_eat
     cutoff = now + timedelta(days=max(1, int(days or 14)))
     collected = []
     errors = []
@@ -875,7 +877,11 @@ def fetch_openmatchday_fixture_rows(days=14, league_id=None):
             except ValueError:
                 continue
             kickoff_naive = kickoff.astimezone(timezone.utc).replace(tzinfo=None)
-            if kickoff_naive < now or kickoff_naive > cutoff:
+            kickoff_eat_date = kickoff.astimezone(EAT).date()
+            if day_filter:
+                if kickoff_eat_date != target_date:
+                    continue
+            elif kickoff_naive < now or kickoff_naive > cutoff:
                 continue
             stable_id = f"{folder}:{match_date}:{home}:{away}"
             output.append({
@@ -1399,20 +1405,34 @@ async def leaguefixtures(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    """Show fixtures by competition name; resolve the provider ID internally."""
-    query = " ".join(context.args).strip()
-    if not query:
+    """Show one competition's fixtures for today or tomorrow."""
+    args = list(context.args or [])
+    if not args:
         await reply(
             update,
-            "Usage: /leaguefixtures La Liga\n"
-            "Enter the competition name as shown by /leagues.",
+            "Usage: /leaguefixtures COMPETITION [today|tomorrow]\n"
+            "Examples:\n"
+            "/leaguefixtures Premier League today\n"
+            "/leaguefixtures La Liga tomorrow\n"
+            "/leaguefixtures Bundesliga\n\n"
+            "If you omit the day, both today and tomorrow are shown.",
         )
+        return
+
+    day_filter = None
+    final_word = args[-1].casefold()
+    if final_word in ("today", "tomorrow"):
+        day_filter = final_word
+        args = args[:-1]
+
+    query = " ".join(args).strip()
+    if not query:
+        await reply(update, "Please include a competition name.")
         return
 
     try:
         # Accept the exact display format emitted by /leagues:
-        # "Competition Name | Region". Resolve the region in Python so
-        # database collation/whitespace differences cannot trigger a broad fallback.
+        # "Competition Name | Region".
         parts = [part.strip() for part in query.split("|", 1)]
         competition_name = parts[0]
         competition_region = parts[1] if len(parts) == 2 else None
@@ -1464,14 +1484,12 @@ async def leaguefixtures(
                             )
                             matches = cursor.fetchall()
 
-                    # Remove duplicate database rows without exposing provider IDs.
                     unique = {}
                     for row in matches:
                         unique[row["provider_league_id"]] = row
                     return list(unique.values())
             finally:
                 connection.close()
-
 
         matches = await asyncio.to_thread(find_league)
         if not matches:
@@ -1490,34 +1508,42 @@ async def leaguefixtures(
             await reply(
                 update,
                 "Several competitions match that name. Choose the exact competition name and run:\n"
-                "/leaguefixtures EXACT COMPETITION NAME\n\n"
+                "/leaguefixtures EXACT COMPETITION NAME today\n\n"
                 + "\n".join(choices),
             )
             return
 
         league_id = matches[0]["provider_league_id"]
         league_name = matches[0]["name"]
-        await reply(update, f"⚽ Fetching the next 14 days of {league_name} fixtures...")
+        if day_filter:
+            selected_days = [day_filter]
+        else:
+            selected_days = ["today", "tomorrow"]
 
-        raw_rows = await asyncio.to_thread(
-            fetch_upcoming_fixture_rows,
-            14,
-            league_id,
-        )
-        selected = upcoming_fixtures(raw_rows, limit=20)
+        raw_rows = []
+        for selected_day in selected_days:
+            day_rows = await asyncio.to_thread(
+                fetch_openmatchday_fixture_rows,
+                14,
+                league_id,
+                selected_day,
+            )
+            raw_rows.extend(day_rows)
 
+        selected = upcoming_fixtures(raw_rows, limit=40, include_past=True)
         if not selected:
+            day_label = day_filter or "today and tomorrow"
             await reply(
                 update,
-                f"No upcoming fixtures were returned for {league_name} "
-                "in the next 14 days. This may also mean the API has no "
-                "fixture coverage for the selected competition.",
+                f"No fixtures were returned for {league_name} on {day_label}. "
+                "The provider may not have coverage for that competition on the selected day.",
             )
             return
 
+        day_label = day_filter.upper() if day_filter else "TODAY & TOMORROW"
         lines = format_fixture_list(
             selected,
-            f"⚽ PUNTER KENYA  ·  {league_name.upper()}\n🏟 {len(selected)} upcoming matches · next 14 days",
+            f"⚽ PUNTER KENYA  ·  {league_name.upper()}\n🏟 {len(selected)} matches · {day_label}",
         )
         lines.extend(["", "Source: open-matchday · github.com/oladeeayo/open-matchday"])
         await reply(update, "\n".join(lines))
