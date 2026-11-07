@@ -709,27 +709,62 @@ def normalise_league(raw):
     }
 
 
-def upcoming_fixtures(raw_fixtures, limit=20):
+def canonical_team_key(value):
+    """Normalise common club-name variants before comparing fixtures."""
+    value = unicodedata.normalize("NFKD", str(value or ""))
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    phrase = " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+    aliases = {
+        "los angeles football club": "lafc",
+        "la football club": "lafc",
+        "los angeles fc": "lafc",
+        "manchester utd": "manchester united",
+        "man utd": "manchester united",
+        "psg": "paris saint germain",
+    }
+    phrase = aliases.get(phrase, phrase)
+    removable = {"fc", "cf", "sc", "afc", "football", "club"}
+    return " ".join(word for word in phrase.split() if word not in removable)
 
+
+def canonical_competition_key(value):
+    value = unicodedata.normalize("NFKD", str(value or ""))
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+
+def upcoming_fixtures(raw_fixtures, limit=None, offset=0):
+    """Return upcoming fixtures sorted by kickoff, removing provider aliases."""
     now = now_utc_naive()
     valid = []
-    seen = set()
+    seen_ids = set()
+    seen_matches = set()
 
     for raw in raw_fixtures:
         item = normalise_fixture(raw)
-        if not item:
+        if not item or not item["kickoff_at"] or item["kickoff_at"] < now:
             continue
 
-        fixture_id = item["provider_match_id"]
-        if fixture_id in seen:
+        fixture_id = str(item["provider_match_id"])
+        match_key = (
+            canonical_competition_key(item.get("competition")),
+            item["kickoff_at"].replace(second=0, microsecond=0),
+            canonical_team_key(item["home_team"]),
+            canonical_team_key(item["away_team"]),
+        )
+        if fixture_id in seen_ids or match_key in seen_matches:
             continue
-        seen.add(fixture_id)
 
-        if item["kickoff_at"] and item["kickoff_at"] >= now:
-            valid.append((item["kickoff_at"], raw, item))
+        seen_ids.add(fixture_id)
+        seen_matches.add(match_key)
+        valid.append((item["kickoff_at"], raw, item))
 
-    valid.sort(key=lambda row: row[0])
-    return [(raw, item) for _, raw, item in valid[:limit]]
+    valid.sort(key=lambda row: (row[0], canonical_competition_key(row[2].get("competition"))))
+    start = max(0, int(offset or 0))
+    end = start + max(0, int(limit)) if limit is not None else None
+    return [(raw, item) for _, raw, item in valid[start:end]]
+
+
 
 
 def openmatchday_season_code():
@@ -1508,87 +1543,79 @@ async def fixtures(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-
-    await reply(
-        update,
-        "⚽ Fetching upcoming fixtures from open-matchday (free public feed)...",
-    )
-
+    """Show upcoming fixtures in pages of 20. Usage: /fixtures [page]."""
     try:
+        page = 1
+        if context.args:
+            if len(context.args) != 1 or not str(context.args[0]).isdigit():
+                await reply(update, "Usage: /fixtures [PAGE]\\nExample: /fixtures 2")
+                return
+            page = int(context.args[0])
+            if page < 1 or page > 1000:
+                await reply(update, "Enter a page number between 1 and 1000.")
+                return
 
-        raw_rows = await asyncio.to_thread(
-            fetch_upcoming_fixture_rows,
-            14,
+        await reply(
+            update,
+            f"⚽ Fetching upcoming fixtures — page {page} — from open-matchday...",
         )
+        raw_rows = await asyncio.to_thread(fetch_upcoming_fixture_rows, 14)
+        all_selected = upcoming_fixtures(raw_rows)
+        page_size = 20
+        total = len(all_selected)
+        total_pages = max(1, math.ceil(total / page_size))
 
-        selected = upcoming_fixtures(
-            raw_rows,
-            limit=20,
-        )
-
-        if not selected:
+        if not total:
             diagnostic = [
                 "No upcoming fixtures could be displayed from the 14-day search.",
                 f"Raw provider records received: {len(raw_rows)}",
             ]
-            if raw_rows and isinstance(raw_rows[0], dict):
-                diagnostic.append(
-                    "First raw record fields: "
-                    + ", ".join(sorted(str(key) for key in raw_rows[0].keys())[:50])
-                )
-                diagnostic.append(
-                    "First raw record preview: "
-                    + repr(raw_rows[0])[:900]
-                )
             if FIXTURE_RESPONSE_DIAGNOSTICS:
-                diagnostic.append("open-matchday response diagnostics:")
                 diagnostic.extend(FIXTURE_RESPONSE_DIAGNOSTICS)
-            else:
-                diagnostic.append("No fixture response diagnostics were captured.")
-            diagnostic.append(
-                "This diagnostic shows the raw response envelope, not just extracted fixtures."
-            )
-            await reply(update, "\n".join(diagnostic))
+            await reply(update, "\\n".join(diagnostic))
             return
 
+        if page > total_pages:
+            await reply(
+                update,
+                f"Only {total} unique upcoming fixtures were found across {total_pages} page(s).\\n"
+                f"Use /fixtures {total_pages} for the last page.",
+            )
+            return
+
+        start_index = (page - 1) * page_size
+        selected = all_selected[start_index:start_index + page_size]
         lines = [
-            f"⚽ UPCOMING FIXTURES — {len(selected)} shown",
+            f"⚽ UPCOMING FIXTURES — {total} unique matches",
+            f"📄 Page {page} of {total_pages} | Showing {start_index + 1}–{start_index + len(selected)}",
             "",
         ]
 
         for _, item in selected:
-
             kickoff = (
                 item["kickoff_at"]
                 .replace(tzinfo=timezone.utc)
                 .astimezone(EAT)
             )
-
             lines.append(
-                f"🏆 {item['competition'] or 'Competition unavailable'}\n"
-                f"🏠 {item['home_team']}\n"
-                f"🆚 {item['away_team']}\n"
-                f"🕒 {kickoff:%d %b %Y — %H:%M EAT}\n"
+                f"🏆 {item['competition'] or 'Competition unavailable'}\\n"
+                f"🏠 {item['home_team']}\\n"
+                f"🆚 {item['away_team']}\\n"
+                f"🕒 {kickoff:%d %b %Y — %H:%M EAT}\\n"
             )
 
-        await reply(
-            update,
-            "\n".join(lines) + "\n\nSource: open-matchday (github.com/oladeeayo/open-matchday)",
-        )
+        if page < total_pages:
+            lines.append(f"➡️ Next page: /fixtures {page + 1}")
+        if page > 1:
+            lines.append(f"⬅️ Previous page: /fixtures {page - 1}")
+        lines.append("\\nSource: open-matchday (github.com/oladeeayo/open-matchday)")
+        await reply(update, "\\n".join(lines))
 
     except Exception as exc:
-
-        logger.exception(
-            "Fixture retrieval failed"
-        )
-
-        await reply(
-            update,
-            f"❌ FIXTURE REQUEST FAILED\n\n{str(exc)[:700]}",
-        )
+        logger.exception("Fixture retrieval failed")
+        await reply(update, f"❌ FIXTURE REQUEST FAILED\\n\\n{str(exc)[:700]}")
 
 
-# ============================================================
 # FIXTURE DATABASE SYNC
 # ============================================================
 
