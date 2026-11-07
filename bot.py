@@ -1236,17 +1236,70 @@ async def fullintel_command(update, context):
     )
 
 async def aipicks_status_command(update, context):
-    await reply(update,
-        "🧠 AI PICKS — NOT YET ENABLED\n\n"
-        "The current model can analyse a selected fixture with /deepdive and save forecasts for later evaluation. "
-        "It does not yet scan the full fixture catalogue, rank all markets, or issue calibrated daily picks. "
-        "No fabricated picks: when the scanner is not ready, PUNTER says so.")
+    """Run the same transparent fixture-wide statistical and price scan."""
+    await topvalue_command(update, context)
+
 
 async def accumulator_status_command(update, context):
-    await reply(update,
-        "🧮 ACCUMULATOR BUILDER — NOT YET ENABLED\n\n"
-        "PUNTER does not yet build or optimise accumulators. Analyse each fixture separately with /deepdive. "
-        "Do not assume multiplying individual model probabilities gives a reliable combined probability.")
+    """Build a cautious combination only from scanner-qualified selections."""
+    args = [str(x).strip() for x in (context.args or [])]
+    target = 3.0
+    if args:
+        try:
+            target = float(args[0])
+            if not 1.50 <= target <= 50:
+                raise ValueError
+        except ValueError:
+            await reply(update, "Usage: /accumulator [target decimal odds, 1.50–50]. Example: /accumulator 3.00")
+            return
+
+    await reply(update, "🔎 Scanning today's and tomorrow's fixtures and retrieved bookmaker prices...")
+    try:
+        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "safest")
+    except Exception as exc:
+        logger.exception("Accumulator scan failed")
+        await reply(update, f"❌ ACCUMULATOR SCAN FAILED: {type(exc).__name__}: {str(exc)[:250]}")
+        return
+
+    chosen, combined, used = [], 1.0, set()
+    for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
+        fixture_key = (item["home"], item["away"])
+        if fixture_key in used or item["probability"] < 0.62 or item["ev"] < 0.03:
+            continue
+        chosen.append(item)
+        used.add(fixture_key)
+        combined *= item["odds"]
+        if combined >= target or len(chosen) >= 6:
+            break
+
+    if not chosen or combined < target:
+        await reply(update,
+            f"🚫 NO ACCUMULATOR RECOMMENDED\\n\\n"
+            f"Could not reach {target:.2f} using selections that passed the minimum probability (62%) "
+            "and estimated expected-value (+3%) filters. PUNTER will not add weak legs just to reach a target. "
+            + ("Feed notes: " + "; ".join(diagnostics[:3]) if diagnostics else ""))
+        return
+
+    probability_product = math.prod(item["probability"] for item in chosen)
+    lines = [
+        "🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR",
+        f"Target: {target:.2f} | Combined decimal odds: {combined:.2f}",
+        "",
+    ]
+    for number, item in enumerate(chosen, 1):
+        lines.extend([
+            f"{number}. {item['home']} vs {item['away']} — {item['league']}",
+            f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item['bookmaker']})",
+            f"   Model probability: {item['probability']:.1%} | Estimated EV: {item['ev']:+.1%}",
+        ])
+    lines.extend([
+        "",
+        f"Naive independent-leg probability product: {probability_product:.2%}",
+        "This assumes independence. Correlation is not modelled, so this is NOT a calibrated accumulator probability.",
+        "Experimental estimates only. Confirm every price and market with the bookmaker. No BTTS or Under 2.5.",
+    ])
+    await reply(update, "\\n".join(lines))
+
 
 async def fullintel_callback(update, context):
     query = update.callback_query
@@ -2579,7 +2632,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     candidates, diagnostics = [], []
     for day_filter in day_filters:
         raw_fixtures = fetch_openmatchday_fixture_rows(14, None, day_filter)
-        fixtures = upcoming_fixtures(raw_fixtures, include_past=True)
+        fixtures = upcoming_fixtures(raw_fixtures)
         if not fixtures:
             diagnostics.append(f"{day_filter}: no fixtures from open-matchday")
             continue
