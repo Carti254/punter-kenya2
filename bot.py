@@ -1546,7 +1546,7 @@ def build_pre_match_prediction(raw_fixture, fixture):
             "reason": "The fixture feed did not include both team IDs, so recent team results could not be linked safely.",
         }
 
-    def get_recent(team_id):
+    def get_recent(team_id, team_name):
         payload = goal_request(f"teams/{team_id}/results", {"limit": 10, "offset": 0})
         rows = extract_list(payload, ("results", "matches", "fixtures"))
         parsed = []
@@ -1557,22 +1557,41 @@ def build_pre_match_prediction(raw_fixture, fixture):
             row_home_id = fixture_team_id(row, "home")
             row_away_id = fixture_team_id(row, "away")
             if row_home_id == team_id:
-                gf, ga = item["home_score"], item["away_score"]
+                is_home = True
             elif row_away_id == team_id:
-                gf, ga = item["away_score"], item["home_score"]
-            elif item["home_team"].casefold() == fixture["home_team"].casefold() and team_id == home_id:
-                gf, ga = item["home_score"], item["away_score"]
-            elif item["away_team"].casefold() == fixture["away_team"].casefold() and team_id == away_id:
-                gf, ga = item["away_score"], item["home_score"]
+                is_home = False
+            elif team_name_matches_query(item["home_team"], team_name):
+                is_home = True
+            elif team_name_matches_query(item["away_team"], team_name):
+                is_home = False
             else:
                 continue
-            parsed.append((item["kickoff_at"], gf, ga))
-        parsed.sort(key=lambda x: x[0] or datetime.min, reverse=True)
+
+            home_goals = item["home_score"]
+            away_goals = item["away_score"]
+            gf, ga = (home_goals, away_goals) if is_home else (away_goals, home_goals)
+            if gf > ga:
+                result = "W"
+            elif gf == ga:
+                result = "D"
+            else:
+                result = "L"
+            opponent = item["away_team"] if is_home else item["home_team"]
+            parsed.append({
+                "date": item["kickoff_at"],
+                "opponent": opponent,
+                "venue": "H" if is_home else "A",
+                "score": f"{home_goals}-{away_goals}",
+                "gf": gf,
+                "ga": ga,
+                "result": result,
+            })
+        parsed.sort(key=lambda x: x["date"] or datetime.min, reverse=True)
         return parsed[:10]
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        home_future = pool.submit(get_recent, home_id)
-        away_future = pool.submit(get_recent, away_id)
+        home_future = pool.submit(get_recent, home_id, fixture["home_team"])
+        away_future = pool.submit(get_recent, away_id, fixture["away_team"])
         home_results = home_future.result()
         away_results = away_future.result()
 
@@ -1584,8 +1603,8 @@ def build_pre_match_prediction(raw_fixture, fixture):
 
     def averages(rows):
         return (
-            sum(x[1] for x in rows) / len(rows),
-            sum(x[2] for x in rows) / len(rows),
+            sum(x["gf"] for x in rows) / len(rows),
+            sum(x["ga"] for x in rows) / len(rows),
         )
 
     home_scored, home_conceded = averages(home_results)
@@ -1623,8 +1642,10 @@ def build_pre_match_prediction(raw_fixture, fixture):
         "home_conceded": home_conceded,
         "away_scored": away_scored,
         "away_conceded": away_conceded,
-        "home_form": "".join("W" if gf > ga else "D" if gf == ga else "L" for _, gf, ga in reversed(home_results)),
-        "away_form": "".join("W" if gf > ga else "D" if gf == ga else "L" for _, gf, ga in reversed(away_results)),
+        "home_form": "".join(x["result"] for x in reversed(home_results)),
+        "away_form": "".join(x["result"] for x in reversed(away_results)),
+        "home_recent_matches": home_results,
+        "away_recent_matches": away_results,
         "lambda_home": lambda_home,
         "lambda_away": lambda_away,
         "home_win": home_win,
@@ -1988,6 +2009,17 @@ async def matchintel(
                 f"• Recent form (oldest → latest): Home {prediction['home_form']} | Away {prediction['away_form']}",
                 f"• Avg goals scored/conceded: Home {prediction['home_scored']:.2f}/{prediction['home_conceded']:.2f} | Away {prediction['away_scored']:.2f}/{prediction['away_conceded']:.2f}",
                 f"• Recent results used: {prediction['home_results']} home-team matches; {prediction['away_results']} away-team matches",
+                "",
+                "📚 HOME TEAM — LAST MATCHES (newest first)",
+            ])
+            for match in prediction["home_recent_matches"]:
+                match_date = match["date"].strftime("%d %b %Y") if match["date"] else "Date n/a"
+                output.append(f"• {match_date} | {match['venue']} vs {match['opponent']} | {match['score']} | {match['result']}")
+            output.extend(["", "📚 AWAY TEAM — LAST MATCHES (newest first)"])
+            for match in prediction["away_recent_matches"]:
+                match_date = match["date"].strftime("%d %b %Y") if match["date"] else "Date n/a"
+                output.append(f"• {match_date} | {match['venue']} vs {match['opponent']} | {match['score']} | {match['result']}")
+            output.extend([
                 f"• Model confidence: {prediction['confidence']}",
                 f"• Outcome lean: {prediction['top_outcome']} (highest model probability, not a guaranteed result)",
                 "• BET / NO BET: NO BET — verified bookmaker odds are not available for value comparison.",
