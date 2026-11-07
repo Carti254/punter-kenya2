@@ -2,6 +2,8 @@
 import os
 import logging
 import asyncio
+import unicodedata
+import re
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -1402,6 +1404,18 @@ async def live(
 
 
 
+def team_name_matches_query(query_name, actual_name):
+    """Accent-insensitive, token-based team matching (e.g. Atletico Madrid)."""
+    def tokens(value):
+        value = unicodedata.normalize("NFKD", str(value or ""))
+        value = "".join(ch for ch in value if not unicodedata.combining(ch))
+        return set(re.findall(r"[a-z0-9]+", value.casefold()))
+
+    wanted = tokens(query_name)
+    actual = tokens(actual_name)
+    return bool(wanted) and wanted.issubset(actual)
+
+
 # ============================================================
 # MATCH INTELLIGENCE — VERIFIED MATCH DATA
 # ============================================================
@@ -1609,14 +1623,23 @@ async def matchintel(
             item = normalise_fixture(raw)
             if not item:
                 continue
-            home = item["home_team"].casefold()
-            away = item["away_team"].casefold()
+            home = item["home_team"]
+            away = item["away_team"]
             if away_query:
-                if home_query in home and away_query in away:
+                if (
+                    team_name_matches_query(home_query, home)
+                    and team_name_matches_query(away_query, away)
+                ):
                     candidates.append((raw, item))
-                elif home_query in away and away_query in home:
+                elif (
+                    team_name_matches_query(home_query, away)
+                    and team_name_matches_query(away_query, home)
+                ):
                     candidates.append((raw, item))
-            elif home_query and (home_query in home or home_query in away):
+            elif home_query and (
+                team_name_matches_query(home_query, home)
+                or team_name_matches_query(home_query, away)
+            ):
                 candidates.append((raw, item))
 
         if not candidates:
