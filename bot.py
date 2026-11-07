@@ -793,19 +793,30 @@ def fetch_openligadb_fixture_rows(days=14, league_id=None):
 
     collected = []
     errors = []
-    for (shortcut, season), league in league_items:
-        try:
-            rows = fetch_openligadb_league_matches(shortcut, season)
-            for raw in rows:
-                if not isinstance(raw, dict):
-                    continue
-                raw.setdefault("leagueName", league.get("leagueName"))
-                raw.setdefault("leagueShortcut", shortcut)
-                raw.setdefault("leagueSeason", season)
-                collected.append(raw)
-        except Exception as exc:
-            errors.append(f"{shortcut}/{season}: {type(exc).__name__}: {str(exc)[:140]}")
-            logger.warning("OpenLigaDB request failed for %s/%s: %s", shortcut, season, exc)
+
+    def fetch_one(entry):
+        (shortcut, season), league = entry
+        rows = fetch_openligadb_league_matches(shortcut, season)
+        normalised_rows = []
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            raw.setdefault("leagueName", league.get("leagueName"))
+            raw.setdefault("leagueShortcut", shortcut)
+            raw.setdefault("leagueSeason", season)
+            normalised_rows.append(raw)
+        return shortcut, season, normalised_rows
+
+    # Small bounded pool: faster than serial requests without flooding the free API.
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = [pool.submit(fetch_one, entry) for entry in league_items]
+        for future in futures:
+            try:
+                shortcut, season, rows = future.result()
+                collected.extend(rows)
+            except Exception as exc:
+                errors.append(f"{type(exc).__name__}: {str(exc)[:140]}")
+                logger.warning("OpenLigaDB competition request failed: %s", exc)
 
     if errors:
         FIXTURE_RESPONSE_DIAGNOSTICS.append(
@@ -1485,7 +1496,7 @@ async def fixtures(
                     + repr(raw_rows[0])[:900]
                 )
             if FIXTURE_RESPONSE_DIAGNOSTICS:
-                diagnostic.append("GOAL API response diagnostics:")
+                diagnostic.append("OpenLigaDB response diagnostics:")
                 diagnostic.extend(FIXTURE_RESPONSE_DIAGNOSTICS)
             else:
                 diagnostic.append("No fixture response diagnostics were captured.")
@@ -1608,76 +1619,14 @@ async def live(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-
     await reply(
         update,
-        "🔴 Checking live matches...",
+        "⚠️ LIVE MATCH TRACKING IS NOT AVAILABLE FROM OPENLIGADB.\n\n"
+        "The free OpenLigaDB feed supplies fixtures and results, but it does not "
+        "provide a dependable live clock or real-time match status. "
+        "PUNTER KENYA will not label scheduled matches as live or invent scores.",
     )
 
-    try:
-
-        payload = await asyncio.to_thread(
-            goal_request,
-            "fixtures/live",
-            {},
-        )
-
-        rows = extract_fixtures(payload)
-
-        if not rows:
-
-            await reply(
-                update,
-                "No live matches were returned by the API at this moment.",
-            )
-
-            return
-
-        lines = [
-            f"🔴 LIVE MATCHES — {len(rows)} returned",
-            "",
-        ]
-
-        for raw in rows[:25]:
-
-            item = normalise_fixture(raw)
-
-            if not item:
-                continue
-
-            hs = (
-                item["home_score"]
-                if item["home_score"] is not None
-                else "—"
-            )
-
-            aws = (
-                item["away_score"]
-                if item["away_score"] is not None
-                else "—"
-            )
-
-            lines.append(
-                f"⚽ {item['home_team']} "
-                f"{hs}–{aws} {item['away_team']}\n"
-                f"⏱ {item['status'] or 'Live'}"
-            )
-
-        await reply(
-            update,
-            "\n\n".join(lines),
-        )
-
-    except Exception as exc:
-
-        logger.exception(
-            "Live fixtures request failed"
-        )
-
-        await reply(
-            update,
-            f"❌ LIVE MATCH REQUEST FAILED\n\n{str(exc)[:700]}",
-        )
 
 
 
