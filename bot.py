@@ -1124,26 +1124,24 @@ async def start(
 
     await reply(
         update,
-        "⚽ PUNTER KENYA — ODDS INTELLIGENCE\n\n"
-        "Football data collection and research system.\n\n"
-        "DATA COMMANDS\n"
-        "/diagnose — test GOAL API endpoints\n"
-        "/leagues [SEARCH] — search the synced competition catalogue\n"
-        "/syncleagues — download all available competitions\n"
-        "/leaguefixtures LEAGUE NAME — show fixtures for one competition\n"
-        "/matchintel HOME vs AWAY — match intelligence report\n"
-        "/fixtures [PAGE] — browse upcoming fixtures (20 per page)\n"
-        "/syncfixtures — save upcoming fixtures\n"
-        "/live — show live matches\n\n"
-        "SYSTEM COMMANDS\n"
-        "/dbtest — test database connection\n"
-        "/odds — check odds API configuration\n"
-        "/bookmakers — show bookmaker registry\n"
-        "/compare — odds comparison status\n"
-        "/calculator ODDS STAKE — calculate returns\n"
-        "/help — show this message\n\n"
-        "The system will only label a market as valuable "
-        "when verified data and prices support it."
+        "⚽ PUNTER KENYA — FOOTBALL INTELLIGENCE\\n\\n"
+        "Free football fixtures and pre-match research.\\n\\n"
+        "FIXTURES & COMPETITIONS\\n"
+        "/leagues [SEARCH] — search the 75-competition catalogue\\n"
+        "/syncleagues — refresh the competition catalogue\\n"
+        "/fixtures [PAGE] — browse upcoming fixtures\\n"
+        "/leaguefixtures LEAGUE [today|tomorrow] — choose a league and day\\n"
+        "/syncfixtures — save upcoming fixtures to the database\\n\\n"
+        "MATCH ANALYSIS\\n"
+        "/matchintel HOME vs AWAY — recent-form forecast\\n"
+        "/live — explain live-data availability\\n\\n"
+        "TOOLS\\n"
+        "/calculator ODDS STAKE — calculate potential returns\\n"
+        "/dbtest — test the database connection\\n"
+        "/about — data source and project information\\n"
+        "/help — show this message\\n\\n"
+        "Data is refreshed daily, not live. Forecasts are estimates; "
+        "the bot does not provide guaranteed picks or verified bookmaker odds."
     )
 
 
@@ -1961,6 +1959,123 @@ def build_pre_match_prediction(raw_fixture, fixture):
     }
 
 
+
+def build_openmatchday_prediction(raw_fixture, fixture):
+    """Forecast a fixture from recent results in its own competition CSV."""
+    folder = str(raw_fixture.get("leagueShortcut") or "").strip()
+    if not folder:
+        return {"available": False, "reason": "The fixture has no competition reference for retrieving its results."}
+
+    try:
+        rows = fetch_openmatchday_csv(folder, "results")
+    except Exception as exc:
+        logger.warning("Could not load historical results for %s: %s", folder, exc)
+        return {"available": False, "reason": "Historical results could not be retrieved for this competition."}
+
+    def parse_team_history(team_name):
+        parsed = []
+        for row in rows:
+            home = str(row.get("home") or "").strip()
+            away = str(row.get("away") or "").strip()
+            try:
+                home_goals = int(row.get("ft_home"))
+                away_goals = int(row.get("ft_away"))
+            except (TypeError, ValueError):
+                continue
+
+            if team_name_matches_query(team_name, home):
+                is_home = True
+            elif team_name_matches_query(team_name, away):
+                is_home = False
+            else:
+                continue
+
+            gf, ga = (home_goals, away_goals) if is_home else (away_goals, home_goals)
+            result = "W" if gf > ga else "D" if gf == ga else "L"
+            try:
+                match_date = datetime.strptime(str(row.get("date", "")), "%Y-%m-%d")
+            except ValueError:
+                match_date = None
+            parsed.append({
+                "date": match_date,
+                "opponent": away if is_home else home,
+                "venue": "H" if is_home else "A",
+                "score": f"{home_goals}-{away_goals}",
+                "gf": gf,
+                "ga": ga,
+                "result": result,
+            })
+
+        parsed.sort(key=lambda item: item["date"] or datetime.min, reverse=True)
+        return parsed[:10]
+
+    home_results = parse_team_history(fixture["home_team"])
+    away_results = parse_team_history(fixture["away_team"])
+    if len(home_results) < 5 or len(away_results) < 5:
+        return {
+            "available": False,
+            "reason": (
+                f"Insufficient recent results in this competition "
+                f"(home: {len(home_results)}, away: {len(away_results)}; "
+                "at least 5 each required)."
+            ),
+        }
+
+    def averages(history):
+        return (
+            sum(match["gf"] for match in history) / len(history),
+            sum(match["ga"] for match in history) / len(history),
+        )
+
+    home_scored, home_conceded = averages(home_results)
+    away_scored, away_conceded = averages(away_results)
+    lambda_home = max(0.15, min(4.0, ((home_scored + away_conceded) / 2) * 1.08))
+    lambda_away = max(0.15, min(4.0, ((away_scored + home_conceded) / 2) * 0.92))
+
+    grid = []
+    for home_goals in range(9):
+        for away_goals in range(9):
+            probability = (
+                poisson_probability(home_goals, lambda_home)
+                * poisson_probability(away_goals, lambda_away)
+            )
+            grid.append((probability, home_goals, away_goals))
+
+    home_win = sum(p for p, hg, ag in grid if hg > ag)
+    draw = sum(p for p, hg, ag in grid if hg == ag)
+    away_win = sum(p for p, hg, ag in grid if hg < ag)
+    over_15 = sum(p for p, hg, ag in grid if hg + ag >= 2)
+    over_25 = sum(p for p, hg, ag in grid if hg + ag >= 3)
+    most_likely = max(grid, key=lambda item: item[0])
+    probabilities = {"1": home_win, "X": draw, "2": away_win}
+    top_outcome = max(probabilities, key=probabilities.get)
+    confidence = "LOW" if len(home_results) + len(away_results) < 14 else "MODERATE"
+
+    return {
+        "available": True,
+        "home_results": len(home_results),
+        "away_results": len(away_results),
+        "home_scored": home_scored,
+        "home_conceded": home_conceded,
+        "away_scored": away_scored,
+        "away_conceded": away_conceded,
+        "home_form": "".join(match["result"] for match in reversed(home_results)),
+        "away_form": "".join(match["result"] for match in reversed(away_results)),
+        "home_recent_matches": home_results,
+        "away_recent_matches": away_results,
+        "lambda_home": lambda_home,
+        "lambda_away": lambda_away,
+        "home_win": home_win,
+        "draw": draw,
+        "away_win": away_win,
+        "over_15": over_15,
+        "over_25": over_25,
+        "score": (most_likely[1], most_likely[2]),
+        "top_outcome": top_outcome,
+        "confidence": confidence,
+    }
+
+
 # ============================================================
 # MATCH INTELLIGENCE — VERIFIED MATCH DATA
 # ============================================================
@@ -2298,62 +2413,28 @@ async def matchintel(
 
         await reply(update, "✅ Fixture found. Checking lineups, statistics, odds and match events...")
 
-        endpoint_results = [
-            RuntimeError("open-matchday does not provide this detail endpoint."),
-            RuntimeError("Starting lineups are not supplied by open-matchday."),
-            RuntimeError("Detailed match statistics are not supplied by open-matchday."),
-            RuntimeError("Bookmaker odds are not supplied by open-matchday."),
-            RuntimeError("Detailed event feed is not available through this integration."),
+        output = header + [
+            "",
+            "📋 LINEUPS",
+            "• Starting lineups are not provided by open-matchday.",
+            "",
+            "📈 MATCH STATISTICS",
+            "• No live or pre-match match statistics are supplied for an upcoming fixture.",
+            "",
+            "💹 AVAILABLE ODDS",
+            "• Verified bookmaker odds are not available through this free data source.",
+            "",
+            "🗓 MATCH EVENTS",
+            "• Live events are not available; this dataset is refreshed daily.",
+            "",
+            "🧠 PRE-MATCH PREDICTION",
         ]
-        labels = ("DETAILS", "LINEUPS", "STATISTICS", "ODDS", "EVENTS")
-        results = dict(zip(labels, endpoint_results))
-
-        details = results["DETAILS"]
-        if not isinstance(details, Exception):
-            detail_data = unwrap_api_data(details)
-            if isinstance(detail_data, dict):
-                score_home = first_value(detail_data, "homeTeamScore", "homeScore")
-                score_away = first_value(detail_data, "awayTeamScore", "awayScore")
-                if score_home is not None or score_away is not None:
-                    header.append(f"📊 Score: {score_home if score_home is not None else '—'} – {score_away if score_away is not None else '—'}")
-
-        output = header + ["", "📋 LINEUPS"]
-        lineups = results["LINEUPS"]
-        if isinstance(lineups, Exception):
-            output.append("• Lineup endpoint unavailable: " + str(lineups)[:180])
-        else:
-            output.extend(format_match_lineups(lineups))
-
-        output.extend(["", "📈 MATCH STATISTICS"])
-        stats = results["STATISTICS"]
-        if isinstance(stats, Exception):
-            output.append("• Statistics unavailable from provider.")
-        else:
-            stat_lines = format_stat_rows(extract_match_statistics(stats))
-            output.extend(stat_lines or ["• No match statistics published yet (often normal before kick-off)."])
-
-        output.extend(["", "💹 AVAILABLE ODDS"])
-        odds_result = results["ODDS"]
-        if isinstance(odds_result, Exception):
-            output.append("• Odds endpoint unavailable for this match.")
-        else:
-            odds_lines = format_match_odds(odds_result)
-            output.extend(odds_lines or ["• No bookmaker prices returned for this match."])
-
-        output.extend(["", "🗓 MATCH EVENTS"])
-        events_result = results["EVENTS"]
-        if isinstance(events_result, Exception):
-            output.append("• Events not available.")
-        else:
-            event_lines = format_match_events(events_result)
-            output.extend(event_lines or ["• No events published yet."])
-
-        output.extend(["", "🧠 PRE-MATCH PREDICTION"])
-        await reply(update, "📊 Match data retrieved. Building the pre-match forecast...")
-        prediction = {
-            "available": False,
-            "reason": "open-matchday currently supplies fixtures and results, but this integration does not yet retrieve enough verified team-history data for a statistical forecast.",
-        }
+        await reply(update, "📊 Fixture found. Analysing recent results from this competition...")
+        prediction = await asyncio.to_thread(
+            build_openmatchday_prediction,
+            raw,
+            item,
+        )
 
         if prediction.get("available"):
             home_pct = prediction["home_win"] * 100
@@ -2366,35 +2447,35 @@ async def matchintel(
                 f"• Over 1.5 goals probability: {prediction['over_15'] * 100:.1f}%",
                 f"• Over 2.5 goals probability: {prediction['over_25'] * 100:.1f}%",
                 f"• Recent form (oldest → latest): Home {prediction['home_form']} | Away {prediction['away_form']}",
-                f"• Avg goals scored/conceded: Home {prediction['home_scored']:.2f}/{prediction['home_conceded']:.2f} | Away {prediction['away_scored']:.2f}/{prediction['away_conceded']:.2f}",
-                f"• Recent results used: {prediction['home_results']} home-team matches; {prediction['away_results']} away-team matches",
+                f"• Average goals scored/conceded: Home {prediction['home_scored']:.2f}/{prediction['home_conceded']:.2f} | Away {prediction['away_scored']:.2f}/{prediction['away_conceded']:.2f}",
+                f"• Results used: {prediction['home_results']} for home team; {prediction['away_results']} for away team",
                 "",
-                "📚 HOME TEAM — LAST MATCHES (newest first)",
+                "📚 HOME TEAM — RECENT RESULTS (newest first)",
             ])
             for match in prediction["home_recent_matches"]:
                 match_date = match["date"].strftime("%d %b %Y") if match["date"] else "Date n/a"
                 output.append(f"• {match_date} | {match['venue']} vs {match['opponent']} | {match['score']} | {match['result']}")
-            output.extend(["", "📚 AWAY TEAM — LAST MATCHES (newest first)"])
+            output.extend(["", "📚 AWAY TEAM — RECENT RESULTS (newest first)"])
             for match in prediction["away_recent_matches"]:
                 match_date = match["date"].strftime("%d %b %Y") if match["date"] else "Date n/a"
                 output.append(f"• {match_date} | {match['venue']} vs {match['opponent']} | {match['score']} | {match['result']}")
             output.extend([
                 f"• Model confidence: {prediction['confidence']}",
                 f"• Outcome lean: {prediction['top_outcome']} (highest model probability, not a guaranteed result)",
-                "• BET / NO BET: NO BET — verified bookmaker odds are not available for value comparison.",
+                "• BET / NO BET: NO BET — odds are unavailable, so value cannot be assessed.",
             ])
         else:
             output.extend([
                 "• Forecast not produced: " + prediction.get("reason", "Insufficient verified data."),
-                "• BET / NO BET: NO BET — do not stake without a data-backed forecast and verified odds.",
+                "• BET / NO BET: NO BET — insufficient verified data for a responsible forecast.",
             ])
 
         output.extend([
             "",
             "⚠️ MODEL LIMITATIONS",
-            "• This is a pre-lineup statistical forecast from recent results; it does not invent starting XIs.",
-            "• Injuries, suspensions, tactical matchups and predicted lineups are not yet verified model inputs.",
-            "• Probabilities are estimates, not guarantees. No stake recommendation is made without verified prices.",
+            "• Uses up to the 10 most recent completed matches per team in this competition.",
+            "• Basic Poisson model; it does not account for injuries, suspensions, lineups, xG or tactical changes.",
+            "• Source data is refreshed daily, not live. Probabilities are estimates, not guarantees.",
         ])
 
         # Telegram messages have a 4096-character limit; split long reports safely.
