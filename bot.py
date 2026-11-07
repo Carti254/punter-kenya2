@@ -43,6 +43,8 @@ FIXTURE_RESPONSE_DIAGNOSTICS = []
 GOAL_API_COOLDOWN_UNTIL = None
 GOAL_API_COOLDOWN_LOCK = threading.Lock()
 GOAL_API_COOLDOWN_SECONDS = 60
+GOAL_API_RATE_LIMIT_FAILURES = 0
+GOAL_API_RATE_LIMIT_MAX_COOLDOWN_SECONDS = 6 * 60 * 60
 
 # Shared in-process response cache: Telegram commands read cached data first.
 # Successful responses are cached by endpoint + parameters. Expired entries
@@ -323,7 +325,7 @@ def response_metadata(payload):
 # ============================================================
 
 def goal_request(endpoint, params=None):
-    global GOAL_API_COOLDOWN_UNTIL
+    global GOAL_API_COOLDOWN_UNTIL, GOAL_API_RATE_LIMIT_FAILURES
 
     cache_key = goal_cache_key(endpoint, params)
     cached = goal_cached_response(cache_key)
@@ -372,6 +374,8 @@ def goal_request(endpoint, params=None):
         )
 
         response.raise_for_status()
+        with GOAL_API_COOLDOWN_LOCK:
+            GOAL_API_RATE_LIMIT_FAILURES = 0
 
     except requests.HTTPError as exc:
 
@@ -393,20 +397,34 @@ def goal_request(endpoint, params=None):
             reset_value = response_headers.get("X-RateLimit-Reset")
             cooldown_seconds = GOAL_API_COOLDOWN_SECONDS
 
-            # Prefer the provider's explicit retry instruction. If absent,
-            # use its quota reset timestamp when available; never guess a
-            # multi-hour delay from the generic 429 body alone.
+            # Prefer provider timing. If the gateway omits all timing headers,
+            # back off progressively so repeated Telegram commands do not
+            # hammer an already rate-limited account.
             try:
                 if retry_after:
                     cooldown_seconds = max(1, int(float(retry_after)))
+                    GOAL_API_RATE_LIMIT_FAILURES = 0
                 elif reset_value:
                     reset_timestamp = float(reset_value)
                     cooldown_seconds = max(
                         1,
                         int(reset_timestamp - datetime.now(timezone.utc).timestamp())
                     )
+                    GOAL_API_RATE_LIMIT_FAILURES = 0
+                else:
+                    GOAL_API_RATE_LIMIT_FAILURES += 1
+                    cooldown_seconds = min(
+                        GOAL_API_COOLDOWN_SECONDS
+                        * (2 ** min(GOAL_API_RATE_LIMIT_FAILURES + 3, 9)),
+                        GOAL_API_RATE_LIMIT_MAX_COOLDOWN_SECONDS,
+                    )
             except (TypeError, ValueError, OverflowError):
-                cooldown_seconds = GOAL_API_COOLDOWN_SECONDS
+                GOAL_API_RATE_LIMIT_FAILURES += 1
+                cooldown_seconds = min(
+                    GOAL_API_COOLDOWN_SECONDS
+                    * (2 ** min(GOAL_API_RATE_LIMIT_FAILURES + 3, 9)),
+                    GOAL_API_RATE_LIMIT_MAX_COOLDOWN_SECONDS,
+                )
 
             with GOAL_API_COOLDOWN_LOCK:
                 GOAL_API_COOLDOWN_UNTIL = (
