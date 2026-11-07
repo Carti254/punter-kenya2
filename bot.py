@@ -1515,20 +1515,11 @@ async def leaguefixtures(
             )
             return
 
-        lines = [f"⚽ {league_name.upper()} FIXTURES — {len(selected)} shown", ""]
-        for _, item in selected:
-            kickoff = (
-                item["kickoff_at"]
-                .replace(tzinfo=timezone.utc)
-                .astimezone(EAT)
-            )
-            lines.append(
-                f"🏆 {item['competition'] or league_name}\n"
-                f"🏠 {item['home_team']}\n"
-                f"🆚 {item['away_team']}\n"
-                f"🕒 {kickoff:%d %b %Y — %H:%M EAT}\n"
-            )
-
+        lines = format_fixture_list(
+            selected,
+            f"⚽ PUNTER KENYA  ·  {league_name.upper()}\n🏟 {len(selected)} upcoming matches · next 14 days",
+        )
+        lines.extend(["", "Source: open-matchday · github.com/oladeeayo/open-matchday"])
         await reply(update, "\n".join(lines))
 
     except Exception as exc:
@@ -1537,6 +1528,58 @@ async def leaguefixtures(
             update,
             f"❌ LEAGUE FIXTURE REQUEST FAILED\n\n{str(exc)[:700]}",
         )
+
+
+def country_flag(country):
+    """Return a flag for common country names; safely fall back when unknown."""
+    value = str(country or "").strip().casefold()
+    flags = {
+        "usa": "🇺🇸", "united states": "🇺🇸", "united states of america": "🇺🇸",
+        "brazil": "🇧🇷", "argentina": "🇦🇷", "mexico": "🇲🇽",
+        "australia": "🇦🇺", "japan": "🇯🇵", "china": "🇨🇳",
+        "england": "🏴", "scotland": "🏴", "wales": "🏴",
+        "spain": "🇪🇸", "germany": "🇩🇪", "france": "🇫🇷",
+        "italy": "🇮🇹", "portugal": "🇵🇹", "netherlands": "🇳🇱",
+        "belgium": "🇧🇪", "turkey": "🇹🇷", "türkiye": "🇹🇷",
+        "kenya": "🇰🇪", "south africa": "🇿🇦", "morocco": "🇲🇦",
+        "egypt": "🇪🇬", "nigeria": "🇳🇬", "ghana": "🇬🇭",
+        "saudi arabia": "🇸🇦", "south korea": "🇰🇷", "india": "🇮🇳",
+        "sweden": "🇸🇪", "norway": "🇳🇴", "denmark": "🇩🇰",
+        "switzerland": "🇨🇭", "austria": "🇦🇹", "poland": "🇵🇱",
+        "ukraine": "🇺🇦", "greece": "🇬🇷", "croatia": "🇭🇷",
+        "serbia": "🇷🇸", "czech republic": "🇨🇿", "czechia": "🇨🇿",
+        "ireland": "🇮🇪", "northern ireland": "🇬🇧", "finland": "🇫🇮",
+        "romania": "🇷🇴", "bulgaria": "🇧🇬", "cyprus": "🇨🇾",
+        "israel": "🇮🇱", "united arab emirates": "🇦🇪",
+    }
+    return flags.get(value, "🌍")
+
+
+def format_fixture_list(selected, heading, page=None, total_pages=None, total=None):
+    """Create a compact, date-grouped Telegram fixture digest."""
+    lines = [heading]
+    if page is not None and total_pages is not None:
+        first = (page - 1) * 20 + 1
+        last = first + len(selected) - 1
+        lines.append(f"📄 Page {page}/{total_pages}  ·  Matches {first}–{last} of {total}")
+    lines.append("━━━━━━━━━━━━━━━━━━")
+
+    current_date = None
+    for _, item in selected:
+        kickoff = item["kickoff_at"].replace(tzinfo=timezone.utc).astimezone(EAT)
+        date_label = kickoff.strftime("%A · %d %b %Y")
+        if date_label != current_date:
+            if current_date is not None:
+                lines.append("")
+            lines.append(f"📅 {date_label.upper()}")
+            current_date = date_label
+
+        competition = str(item.get("competition") or "Competition unavailable").strip()
+        flag = country_flag(item.get("country"))
+        lines.append(f"{kickoff:%H:%M} EAT  ·  {flag} {competition}")
+        lines.append(f"   {item['home_team']}  vs  {item['away_team']}")
+
+    return lines
 
 
 async def fixtures(
@@ -1585,30 +1628,18 @@ async def fixtures(
 
         start_index = (page - 1) * page_size
         selected = all_selected[start_index:start_index + page_size]
-        lines = [
-            f"⚽ UPCOMING FIXTURES — {total} unique matches",
-            f"📄 Page {page} of {total_pages} | Showing {start_index + 1}–{start_index + len(selected)}",
-            "",
-        ]
-
-        for _, item in selected:
-            kickoff = (
-                item["kickoff_at"]
-                .replace(tzinfo=timezone.utc)
-                .astimezone(EAT)
-            )
-            lines.append(
-                f"🏆 {item['competition'] or 'Competition unavailable'}\n"
-                f"🏠 {item['home_team']}\n"
-                f"🆚 {item['away_team']}\n"
-                f"🕒 {kickoff:%d %b %Y — %H:%M EAT}\n"
-            )
-
+        lines = format_fixture_list(
+            selected,
+            f"⚽ PUNTER KENYA  ·  UPCOMING FIXTURES\n🏟 {total} unique matches in the next 14 days",
+            page=page,
+            total_pages=total_pages,
+            total=total,
+        )
         if page < total_pages:
-            lines.append(f"➡️ Next page: /fixtures {page + 1}")
+            lines.extend(["", f"➡️ NEXT PAGE  /fixtures {page + 1}"])
         if page > 1:
-            lines.append(f"⬅️ Previous page: /fixtures {page - 1}")
-        lines.append("\nSource: open-matchday (github.com/oladeeayo/open-matchday)")
+            lines.append(f"⬅️ PREVIOUS PAGE  /fixtures {page - 1}")
+        lines.extend(["", "Source: open-matchday · github.com/oladeeayo/open-matchday"])
         await reply(update, "\n".join(lines))
 
     except Exception as exc:
