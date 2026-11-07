@@ -308,8 +308,26 @@ def goal_request(endpoint, params=None):
         if exc.response is not None:
             body = (exc.response.text or "")[:500]
 
+        rate_limit_details = ""
+        if status == 429 and exc.response is not None:
+            response_headers = exc.response.headers
+            header_values = {
+                "type": response_headers.get("X-RateLimit-Type"),
+                "remaining": response_headers.get("X-RateLimit-Remaining"),
+                "limit": response_headers.get("X-RateLimit-Limit"),
+                "reset": response_headers.get("X-RateLimit-Reset"),
+                "retry_after": response_headers.get("Retry-After"),
+            }
+            available = [
+                f"{key}={value}"
+                for key, value in header_values.items()
+                if value not in (None, "")
+            ]
+            if available:
+                rate_limit_details = " | Rate-limit headers: " + ", ".join(available)
+
         raise RuntimeError(
-            f"GOAL API HTTP {status}: {body}"
+            f"GOAL API HTTP {status}: {body}{rate_limit_details}"
         ) from None
 
     except requests.RequestException as exc:
