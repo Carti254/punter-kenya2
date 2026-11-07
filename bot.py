@@ -2644,9 +2644,9 @@ async def topvalue_command(update, context):
         rows.sort(key=lambda x: (x["probability"], x["ev"]), reverse=True)
     if not rows:
         await reply(update,
-            "🚫 NO QUALIFYING VALUE PICKS\\n\\n"
+            "🚫 NO QUALIFYING VALUE PICKS\n\n"
             "No selection met the minimum probability and positive expected-value filters using the odds actually retrieved. "
-            "This is a NO BET result, not a reason to lower the filters.\\n\\n"
+            "This is a NO BET result, not a reason to lower the filters.\n\n"
             + ("Feed notes: " + "; ".join(diagnostics[:4]) if diagnostics else "No usable bookmaker prices were matched."))
         return
     lines = ["🧠 PUNTER KENYA — VALUE SCANNER", f"Market: {market.upper()} | Dates: {', '.join(days)}",
@@ -2659,7 +2659,7 @@ async def topvalue_command(update, context):
         if item.get("url"): lines.append(f"   {item['url']}")
         lines.append("")
     lines.append("Important: this is an experimental, uncalibrated Poisson model. Historical results are not xG or lineup-adjusted. Positive estimated EV is not proof of an edge. Verify price and market rules before betting. No BTTS or Under 2.5 picks are included.")
-    message = "\\n".join(lines)
+    message = "\n".join(lines)
     for offset in range(0, len(message), 3600):
         await reply(update, message[offset:offset+3600])
 
