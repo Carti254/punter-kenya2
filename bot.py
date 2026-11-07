@@ -2218,7 +2218,7 @@ def load_competition_analysis(raw_fixture, fixture):
     h2h.sort(key=lambda x: x["date"] or datetime.min, reverse=True)
 
     return {
-        "available": True, "home": home, "away": away,
+        "available": True, "league_shortcut": folder, "home": home, "away": away,
         "home_metrics": metrics(home), "away_metrics": metrics(away),
         "home_at_home": venue_metrics(home, "H"),
         "away_away": venue_metrics(away, "A"),
@@ -2349,8 +2349,7 @@ async def markets_command(update, context):
     if not result: return
     fixture, d = result
     pred = await asyncio.to_thread(build_openmatchday_prediction, {
-        "leagueShortcut": next((x.get("leagueShortcut") for x in fetch_matchintel_fixture_rows(14)
-          if str(x.get("home")) == fixture["home_team"] and str(x.get("away")) == fixture["away_team"]), "")
+        "leagueShortcut": d["league_shortcut"]
     }, fixture)
     if not pred.get("available"):
         await reply(update, analysis_header("MARKET PROBABILITIES", fixture) + "Model probabilities unavailable: " + pred.get("reason", "insufficient data")); return
@@ -2364,8 +2363,7 @@ async def scenarios_command(update, context):
     if not result: return
     fixture, d = result
     pred = await asyncio.to_thread(build_openmatchday_prediction, {
-        "leagueShortcut": next((x.get("leagueShortcut") for x in fetch_matchintel_fixture_rows(14)
-          if str(x.get("home")) == fixture["home_team"] and str(x.get("away")) == fixture["away_team"]), "")
+        "leagueShortcut": d["league_shortcut"]
     }, fixture)
     if not pred.get("available"):
         await reply(update, analysis_header("MATCH SCENARIOS", fixture) + pred.get("reason", "Insufficient data.")); return
