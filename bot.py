@@ -998,8 +998,7 @@ async def leagues(
         output = [heading, ""]
         for row in rows:
             output.append(
-                f"• {row['name']} | {row.get('region') or 'Region unavailable'} "
-                f"| ID: {row['provider_league_id']}"
+                f"• {row['name']} | {row.get('region') or 'Region unavailable'}"
             )
         if total > len(rows):
             output.extend(["", f"Showing {len(rows)}. Narrow the search with /leagues SEARCH."])
@@ -1063,8 +1062,9 @@ async def leaguefixtures(
                         SELECT provider_league_id, name, region
                         FROM leagues
                         WHERE provider = %s AND
-                              (LOWER(name) = LOWER(%s) OR provider_league_id = %s)
-                        ORDER BY name LIMIT 10
+                              (LOWER(TRIM(name)) = LOWER(TRIM(%s))
+                               OR provider_league_id = %s)
+                        ORDER BY name LIMIT 100
                         """,
                         (PROVIDER_NAME, query, query),
                     )
@@ -1075,7 +1075,7 @@ async def leaguefixtures(
                             SELECT provider_league_id, name, region
                             FROM leagues
                             WHERE provider = %s AND name LIKE %s
-                            ORDER BY name LIMIT 10
+                            ORDER BY name LIMIT 100
                             """,
                             (PROVIDER_NAME, f"%{query}%"),
                         )
@@ -1100,7 +1100,8 @@ async def leaguefixtures(
             ]
             await reply(
                 update,
-                "Several competitions match that name. Be more specific:\n\n"
+                "Several competitions match that name. Choose the exact competition name and run:\n"
+                "/leaguefixtures EXACT COMPETITION NAME\n\n"
                 + "\n".join(choices),
             )
             return
