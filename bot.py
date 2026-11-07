@@ -121,7 +121,7 @@ _RETRY = Retry(
     read=1,
     status=1,
     backoff_factor=0.25,
-    status_forcelist=(429, 500, 502, 503, 504),
+    status_forcelist=(500, 502, 503, 504),
     allowed_methods=frozenset(["GET"]),
     respect_retry_after_header=True,
 )
@@ -675,138 +675,79 @@ def fetch_matchintel_fixture_rows(days=14):
 
 def fetch_upcoming_fixture_rows(days=14, league_id=None):
     """
-    Fetch a date range through GOAL API's documented /fixtures endpoint.
-    This avoids requesting every calendar date separately and ensures the
-    search is not limited to whichever competitions happen to be in one
-    date-endpoint page. Fall back to the date endpoint if range listing fails
-    or returns no usable rows.
+    Fetch upcoming fixtures with one paginated date-range request.
+
+    Do not fan out into one request per calendar day: that creates a burst of
+    API traffic and can trigger GOAL API HTTP 429 rate limits. The range
+    endpoint is the single source for this command; if it is rate-limited,
+    report the error rather than hammering the provider with fallback calls.
     """
     FIXTURE_RESPONSE_DIAGNOSTICS.clear()
     first_day = datetime.now(EAT).date() - timedelta(days=1)
     last_day = first_day + timedelta(days=days + 1)
 
-    def collect_pages(endpoint, base_params):
-        collected = []
-        seen = set()
-        offset = 0
-        limit = 100
-
-        for _ in range(50):
-            params = dict(base_params)
-            params.update({"limit": limit, "offset": offset})
-            payload = goal_request(endpoint, params)
-            rows = extract_fixtures(payload)
-            if not rows:
-                break
-
-            for index, raw in enumerate(rows):
-                item = normalise_fixture(raw)
-                # Keep raw provider rows even when their schema has changed.
-                # Dropping them here made the command falsely report zero API
-                # fixtures and hid the actual payload shape from diagnostics.
-                fixture_key = (
-                    item["provider_match_id"]
-                    if item
-                    else str(first_value(raw, "id", "fixtureId", "matchId", "match_id")
-                             or f"{offset}:{index}:{hash(repr(raw))}")
-                )
-                if fixture_key not in seen:
-                    seen.add(fixture_key)
-                    collected.append(raw)
-
-            meta = response_metadata(payload)
-            if meta.get("hasMore") is False:
-                break
-
-            total = safe_int(meta.get("total"))
-            current_offset = safe_int(meta.get("offset"))
-            page_limit = safe_int(meta.get("limit")) or limit
-            next_offset = (
-                current_offset if current_offset is not None else offset
-            ) + len(rows)
-
-            if total is not None and next_offset >= total:
-                break
-            if next_offset <= offset:
-                break
-            if len(rows) < page_limit and meta.get("hasMore") is not True:
-                break
-
-            offset = next_offset
-            limit = page_limit
-
-        return collected
-
-    range_params = {
+    collected = []
+    seen = set()
+    offset = 0
+    limit = 100
+    params_base = {
         "from": first_day.isoformat(),
         "to": last_day.isoformat(),
     }
     if league_id:
-        range_params["leagueId"] = str(league_id)
+        params_base["leagueId"] = str(league_id)
 
-    # The range endpoint can return a partial first page without an error.
-    # Always supplement it with date-scoped results so fixtures in other
-    # competitions are not silently missed.
-    range_rows = []
-    try:
-        range_rows = collect_pages("fixtures", range_params)
-    except Exception as exc:
-        FIXTURE_RESPONSE_DIAGNOSTICS.append(
-            f"REQUEST ERROR endpoint=fixtures; {type(exc).__name__}: {str(exc)[:500]}"
-        )
-        logger.warning(
-            "GOAL API date-range fixture request failed; using date-scoped "
-            "fixture retrieval.",
-            exc_info=True,
-        )
-
-    dates = [
-        first_day + timedelta(days=day_number)
-        for day_number in range(days + 2)
-    ]
-
-    def fetch_one_date(fixture_date):
-        params = {"limit": 100, "offset": 0}
-        if league_id:
-            params["leagueId"] = str(league_id)
+    for _ in range(50):
+        params = dict(params_base)
+        params.update({"limit": limit, "offset": offset})
         try:
-            return collect_pages(
-                f"fixtures/date/{fixture_date.isoformat()}",
-                params,
-            )
+            payload = goal_request("fixtures", params)
         except Exception as exc:
             FIXTURE_RESPONSE_DIAGNOSTICS.append(
-                f"REQUEST ERROR endpoint=fixtures/date/{fixture_date.isoformat()}; "
-                f"{type(exc).__name__}: {str(exc)[:350]}"
+                f"REQUEST ERROR endpoint=fixtures; {type(exc).__name__}: {str(exc)[:500]}"
             )
-            logger.warning(
-                "Fixture retrieval failed for %s",
-                fixture_date.isoformat(),
-                exc_info=True,
+            logger.warning("GOAL API date-range fixture request failed.", exc_info=True)
+            break
+
+        rows = extract_fixtures(payload)
+        if not rows:
+            break
+
+        for index, raw in enumerate(rows):
+            item = normalise_fixture(raw)
+            fixture_key = (
+                item["provider_match_id"]
+                if item
+                else str(first_value(
+                    raw, "id", "fixtureId", "matchId", "match_id"
+                ) or f"{offset}:{index}:{hash(repr(raw))}")
             )
-            return []
+            if fixture_key not in seen:
+                seen.add(fixture_key)
+                collected.append(raw)
 
-    collected = list(range_rows)
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        for date_rows in executor.map(fetch_one_date, dates):
-            collected.extend(date_rows)
+        meta = response_metadata(payload)
+        if meta.get("hasMore") is False:
+            break
 
-    # Deduplicate without discarding provider rows that the current
-    # normaliser cannot yet understand. The previous final filter silently
-    # erased every raw row whenever field mapping changed.
-    unique = {}
-    for index, raw in enumerate(collected):
-        item = normalise_fixture(raw)
-        fixture_key = (
-            item["provider_match_id"]
-            if item
-            else str(first_value(
-                raw, "id", "fixtureId", "matchId", "match_id"
-            ) or f"raw:{index}:{hash(repr(raw))}")
-        )
-        unique.setdefault(fixture_key, raw)
+        total = safe_int(meta.get("total"))
+        current_offset = safe_int(meta.get("offset"))
+        page_limit = safe_int(meta.get("limit")) or limit
+        next_offset = (
+            current_offset if current_offset is not None else offset
+        ) + len(rows)
 
-    return list(unique.values())
+        if total is not None and next_offset >= total:
+            break
+        if next_offset <= offset:
+            break
+        if len(rows) < page_limit and meta.get("hasMore") is not True:
+            break
+
+        offset = next_offset
+        limit = page_limit
+
+    return collected
 
 # ============================================================
 # DATABASE STORAGE
