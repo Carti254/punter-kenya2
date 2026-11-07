@@ -2,6 +2,8 @@
 import os
 import logging
 import asyncio
+import csv
+import io
 from concurrent.futures import ThreadPoolExecutor
 import unicodedata
 import re
@@ -29,9 +31,10 @@ from database import get_connection, test_connection
 
 BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-OPENLIGADB_BASE = os.getenv("OPENLIGADB_BASE", "https://api.openligadb.de").rstrip("/")
+OPENMATCHDAY_RAW_BASE = "https://raw.githubusercontent.com/oladeeayo/open-matchday/master"
+OPENMATCHDAY_INDEX_URL = f"{OPENMATCHDAY_RAW_BASE}/LEAGUE_INDEX.md"
 
-PROVIDER_NAME = "openligadb"
+PROVIDER_NAME = "open-matchday"
 EAT = ZoneInfo("Africa/Nairobi")
 FIXTURE_RESPONSE_DIAGNOSTICS = []
 
@@ -701,7 +704,7 @@ def normalise_league(raw):
     return {
         "id": str(provider_id) if provider_id is not None else None,
         "name": str(name) if name is not None else "Name unavailable",
-        "country": str(country) if country is not None else "OpenLigaDB",
+        "country": str(country) if country is not None else "open-matchday",
         "raw": raw,
     }
 
@@ -729,110 +732,152 @@ def upcoming_fixtures(raw_fixtures, limit=20):
     return [(raw, item) for _, raw, item in valid[:limit]]
 
 
-def openligadb_request(path):
-    """Anonymous, read-only request to the free OpenLigaDB API."""
-    cache_key = goal_cache_key("openligadb:" + path, {})
+def openmatchday_season_code():
+    """Return the shared season code used by open-matchday."""
+    now = datetime.now(EAT)
+    start_year = now.year if now.month >= 7 else now.year - 1
+    return f"{start_year % 100:02d}{(start_year + 1) % 100:02d}"
+
+
+def openmatchday_index():
+    """Load the published 75-competition index without authentication."""
+    cache_key = goal_cache_key("open-matchday:index", {})
     cached = goal_cached_response(cache_key)
     if cached is not None:
         return cached
+
     response = HTTP.get(
-        f"{OPENLIGADB_BASE}/{path.lstrip('/')}",
-        headers={"Accept": "application/json", "User-Agent": "PunterKenya/1.0"},
-        timeout=(5, 15),
+        OPENMATCHDAY_INDEX_URL,
+        headers={"Accept": "text/plain", "User-Agent": "PunterKenya/1.0"},
+        timeout=(5, 20),
     )
     response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, (list, dict)):
-        raise RuntimeError("OpenLigaDB returned an unexpected response format.")
-    goal_store_response(cache_key, "leagues" if "availableleagues" in path else "fixtures", payload)
-    return payload
+    rows = []
+    pattern = re.compile(r"^\|\s*`([^\`]+)`\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|")
+    for line in response.text.splitlines():
+        match = pattern.match(line.strip())
+        if not match:
+            continue
+        folder, name, country = [part.strip() for part in match.groups()]
+        if folder and name and country and folder.lower() != "folder":
+            rows.append({
+                "id": f"{folder}|{openmatchday_season_code()}",
+                "leagueShortcut": folder,
+                "leagueSeason": openmatchday_season_code(),
+                "leagueName": name,
+                "countryName": country,
+            })
+
+    if not rows:
+        raise RuntimeError("Open-matchday returned an empty or unrecognised league index.")
+    goal_store_response(cache_key, "leagues", rows)
+    return rows
 
 
 def fetch_all_leagues():
-    """Retrieve the current-season OpenLigaDB league catalogue."""
-    season = datetime.now(EAT).year
-    payload = openligadb_request(f"getavailableleagues/{season}")
-    if not isinstance(payload, list):
-        raise RuntimeError("OpenLigaDB league catalogue was not a list.")
-    return [
-        row for row in payload
-        if isinstance(row, dict)
-        and first_value(row, "leagueShortcut")
-        and first_value(row, "leagueSeason") is not None
-    ]
+    """Return the complete football-only competition index from open-matchday."""
+    return openmatchday_index()
 
 
-def fetch_openligadb_league_matches(shortcut, season):
-    rows = openligadb_request(f"getmatchdata/{shortcut}/{season}")
-    return rows if isinstance(rows, list) else []
+def fetch_openmatchday_csv(folder, kind="fixtures"):
+    """Fetch one public CSV file; cache successful responses to reduce traffic."""
+    season = openmatchday_season_code()
+    path = f"data/{folder}/{kind}_{season}.csv"
+    cache_key = goal_cache_key("open-matchday:" + path, {})
+    cached = goal_cached_response(cache_key)
+    if cached is not None:
+        return cached
+
+    url = f"{OPENMATCHDAY_RAW_BASE}/{path}"
+    response = HTTP.get(
+        url,
+        headers={"Accept": "text/csv", "User-Agent": "PunterKenya/1.0"},
+        timeout=(5, 20),
+    )
+    if response.status_code == 404:
+        return []
+    response.raise_for_status()
+
+    rows = list(csv.DictReader(io.StringIO(response.text)))
+    goal_store_response(cache_key, "fixtures", rows)
+    return rows
 
 
-def fetch_openligadb_fixture_rows(days=14, league_id=None):
-    """Fetch current-season fixtures from the public OpenLigaDB catalogue."""
+def fetch_openmatchday_fixture_rows(days=14, league_id=None):
+    """Fetch upcoming fixtures from every indexed football competition."""
     FIXTURE_RESPONSE_DIAGNOSTICS.clear()
     leagues = fetch_all_leagues()
     if league_id:
         parts = str(league_id).split("|", 1)
         if len(parts) != 2:
-            raise RuntimeError("Invalid OpenLigaDB competition reference.")
+            raise RuntimeError("Invalid open-matchday competition reference.")
         leagues = [
             row for row in leagues
             if str(row.get("leagueShortcut")) == parts[0]
             and str(row.get("leagueSeason")) == parts[1]
         ]
 
-    unique = {}
-    for league in leagues:
-        key = (str(league.get("leagueShortcut")), str(league.get("leagueSeason")))
-        unique[key] = league
-    league_items = list(unique.items())
-    # Keep anonymous calls polite. The full league catalogue can be much larger;
-    # later batches can be added after verifying provider behaviour and coverage.
-    if not league_id:
-        league_items = league_items[:60]
-
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    cutoff = now + timedelta(days=max(1, int(days or 14)))
     collected = []
     errors = []
 
-    def fetch_one(entry):
-        (shortcut, season), league = entry
-        rows = fetch_openligadb_league_matches(shortcut, season)
-        normalised_rows = []
-        for raw in rows:
-            if not isinstance(raw, dict):
+    def fetch_one(league):
+        folder = league["leagueShortcut"]
+        rows = fetch_openmatchday_csv(folder, "fixtures")
+        output = []
+        for row in rows:
+            match_date = str(row.get("date") or "").strip()
+            match_time = str(row.get("time") or "").strip()
+            home = str(row.get("home") or "").strip()
+            away = str(row.get("away") or "").strip()
+            if not match_date or not match_time or not home or not away:
                 continue
-            raw.setdefault("leagueName", league.get("leagueName"))
-            raw.setdefault("leagueShortcut", shortcut)
-            raw.setdefault("leagueSeason", season)
-            normalised_rows.append(raw)
-        return shortcut, season, normalised_rows
+            try:
+                # Dataset documents its kickoff clock as fixed UTC+1 (CET-1 convention).
+                kickoff = datetime.fromisoformat(f"{match_date}T{match_time}:00+01:00")
+                kickoff_utc = kickoff.astimezone(timezone.utc).isoformat()
+            except ValueError:
+                continue
+            kickoff_naive = kickoff.astimezone(timezone.utc).replace(tzinfo=None)
+            if kickoff_naive < now or kickoff_naive > cutoff:
+                continue
+            stable_id = f"{folder}:{match_date}:{home}:{away}"
+            output.append({
+                "id": stable_id,
+                "home": home,
+                "away": away,
+                "kickoffUtc": kickoff_utc,
+                "matchStatus": "Scheduled",
+                "leagueName": league["leagueName"],
+                "countryName": league["countryName"],
+                "leagueShortcut": folder,
+                "leagueSeason": league["leagueSeason"],
+            })
+        return output
 
-    # Small bounded pool: faster than serial requests without flooding the free API.
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = [pool.submit(fetch_one, entry) for entry in league_items]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(fetch_one, league) for league in leagues]
         for future in futures:
             try:
-                shortcut, season, rows = future.result()
-                collected.extend(rows)
+                collected.extend(future.result())
             except Exception as exc:
                 errors.append(f"{type(exc).__name__}: {str(exc)[:140]}")
-                logger.warning("OpenLigaDB competition request failed: %s", exc)
+                logger.warning("Open-matchday competition request failed: %s", exc)
 
     if errors:
         FIXTURE_RESPONSE_DIAGNOSTICS.append(
-            f"OpenLigaDB competition requests failed: {len(errors)}"
+            f"Open-matchday CSV requests failed: {len(errors)} of {len(leagues)} competitions"
         )
     return collected
 
 
 def fetch_matchintel_fixture_rows(days=14):
-    return fetch_openligadb_fixture_rows(days)
-
-
+    return fetch_openmatchday_fixture_rows(days)
 
 
 def fetch_upcoming_fixture_rows(days=14, league_id=None):
-    return fetch_openligadb_fixture_rows(days, league_id)
+    return fetch_openmatchday_fixture_rows(days, league_id)
 
 
 # ============================================================
@@ -1293,19 +1338,19 @@ async def syncleagues(
 ):
     await reply(
         update,
-        "🔄 Downloading the current-season OpenLigaDB league catalogue...",
+        "🔄 Downloading the current-season open-matchday league catalogue...",
     )
     try:
         raw_rows = await asyncio.to_thread(fetch_all_leagues)
         if not raw_rows:
-            await reply(update, "⚠️ OpenLigaDB returned no current-season league records. Nothing was saved.")
+            await reply(update, "⚠️ open-matchday returned no current-season league records. Nothing was saved.")
             return
 
         stats = await asyncio.to_thread(save_leagues_to_database, raw_rows)
         await reply(
             update,
             "✅ FULL LEAGUE CATALOGUE SYNC COMPLETE\n\n"
-            f"OpenLigaDB records collected: {len(raw_rows)}\n"
+            f"open-matchday records collected: {len(raw_rows)}\n"
             f"Valid leagues saved/updated: {stats['saved']}\n"
             f"Records skipped: {stats['skipped']}\n\n"
             "Search any synced competition using /leagues SEARCH.",
@@ -1466,7 +1511,7 @@ async def fixtures(
 
     await reply(
         update,
-        "⚽ Fetching upcoming fixtures from OpenLigaDB (free public feed)...",
+        "⚽ Fetching upcoming fixtures from open-matchday (free public feed)...",
     )
 
     try:
@@ -1496,7 +1541,7 @@ async def fixtures(
                     + repr(raw_rows[0])[:900]
                 )
             if FIXTURE_RESPONSE_DIAGNOSTICS:
-                diagnostic.append("OpenLigaDB response diagnostics:")
+                diagnostic.append("open-matchday response diagnostics:")
                 diagnostic.extend(FIXTURE_RESPONSE_DIAGNOSTICS)
             else:
                 diagnostic.append("No fixture response diagnostics were captured.")
@@ -1528,7 +1573,7 @@ async def fixtures(
 
         await reply(
             update,
-            "\n".join(lines),
+            "\n".join(lines) + "\n\nSource: open-matchday (github.com/oladeeayo/open-matchday)",
         )
 
     except Exception as exc:
@@ -1622,7 +1667,7 @@ async def live(
     await reply(
         update,
         "⚠️ LIVE MATCH TRACKING IS NOT AVAILABLE FROM OPENLIGADB.\n\n"
-        "The free OpenLigaDB feed supplies fixtures and results, but it does not "
+        "The free open-matchday feed supplies fixtures and results, but it does not "
         "provide a dependable live clock or real-time match status. "
         "PUNTER KENYA will not label scheduled matches as live or invent scores.",
     )
@@ -2158,10 +2203,10 @@ async def matchintel(
         await reply(update, "✅ Fixture found. Checking lineups, statistics, odds and match events...")
 
         endpoint_results = [
-            RuntimeError("OpenLigaDB does not provide this detail endpoint."),
-            RuntimeError("Starting lineups are not supplied by OpenLigaDB."),
-            RuntimeError("Detailed match statistics are not supplied by OpenLigaDB."),
-            RuntimeError("Bookmaker odds are not supplied by OpenLigaDB."),
+            RuntimeError("open-matchday does not provide this detail endpoint."),
+            RuntimeError("Starting lineups are not supplied by open-matchday."),
+            RuntimeError("Detailed match statistics are not supplied by open-matchday."),
+            RuntimeError("Bookmaker odds are not supplied by open-matchday."),
             RuntimeError("Detailed event feed is not available through this integration."),
         ]
         labels = ("DETAILS", "LINEUPS", "STATISTICS", "ODDS", "EVENTS")
@@ -2211,7 +2256,7 @@ async def matchintel(
         await reply(update, "📊 Match data retrieved. Building the pre-match forecast...")
         prediction = {
             "available": False,
-            "reason": "OpenLigaDB currently supplies fixtures and results, but this integration does not yet retrieve enough verified team-history data for a statistical forecast.",
+            "reason": "open-matchday currently supplies fixtures and results, but this integration does not yet retrieve enough verified team-history data for a statistical forecast.",
         }
 
         if prediction.get("available"):
@@ -2425,7 +2470,7 @@ def main():
             "or TELEGRAM_BOT_TOKEN in Railway."
         )
 
-    logger.info("OpenLigaDB provider selected; no API key required.")
+    logger.info("open-matchday provider selected; no API key required.")
 
     acquire_polling_lock()
 
