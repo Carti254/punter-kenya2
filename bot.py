@@ -350,7 +350,10 @@ def normalise_fixture(raw):
         match_date = first_value(raw, "matchDate", "date")
         match_time = first_value(raw, "matchTime", "time")
         if match_date and match_time:
-            kickoff = f"{str(match_date)[:10]}T{str(match_time)[:8]}:00"
+            time_text = str(match_time).strip()
+            if len(time_text) == 5:
+                time_text += ":00"
+            kickoff = f"{str(match_date)[:10]}T{time_text}"
         else:
             kickoff = match_date
 
@@ -1520,18 +1523,18 @@ def build_pre_match_prediction(raw_fixture, fixture):
             item = normalise_fixture(row)
             if not item or item["home_score"] is None or item["away_score"] is None:
                 continue
-            if item["home_team"].casefold() == fixture["home_team"].casefold() or fixture_team_id(row, "home") == team_id:
+            row_home_id = fixture_team_id(row, "home")
+            row_away_id = fixture_team_id(row, "away")
+            if row_home_id == team_id:
                 gf, ga = item["home_score"], item["away_score"]
-            elif item["away_team"].casefold() == fixture["home_team"].casefold() or fixture_team_id(row, "away") == team_id:
+            elif row_away_id == team_id:
+                gf, ga = item["away_score"], item["home_score"]
+            elif item["home_team"].casefold() == fixture["home_team"].casefold() and team_id == home_id:
+                gf, ga = item["home_score"], item["away_score"]
+            elif item["away_team"].casefold() == fixture["away_team"].casefold() and team_id == away_id:
                 gf, ga = item["away_score"], item["home_score"]
             else:
-                # Team-results endpoint is scoped to the requested team; infer side from returned team IDs.
-                if fixture_team_id(row, "home") == team_id:
-                    gf, ga = item["home_score"], item["away_score"]
-                elif fixture_team_id(row, "away") == team_id:
-                    gf, ga = item["away_score"], item["home_score"]
-                else:
-                    continue
+                continue
             parsed.append((item["kickoff_at"], gf, ga))
         parsed.sort(key=lambda x: x[0] or datetime.min, reverse=True)
         return parsed[:10]
