@@ -1548,7 +1548,7 @@ async def fixtures(
         page = 1
         if context.args:
             if len(context.args) != 1 or not str(context.args[0]).isdigit():
-                await reply(update, "Usage: /fixtures [PAGE]\\nExample: /fixtures 2")
+                await reply(update, "Usage: /fixtures [PAGE]\nExample: /fixtures 2")
                 return
             page = int(context.args[0])
             if page < 1 or page > 1000:
@@ -1572,13 +1572,13 @@ async def fixtures(
             ]
             if FIXTURE_RESPONSE_DIAGNOSTICS:
                 diagnostic.extend(FIXTURE_RESPONSE_DIAGNOSTICS)
-            await reply(update, "\\n".join(diagnostic))
+            await reply(update, "\n".join(diagnostic))
             return
 
         if page > total_pages:
             await reply(
                 update,
-                f"Only {total} unique upcoming fixtures were found across {total_pages} page(s).\\n"
+                f"Only {total} unique upcoming fixtures were found across {total_pages} page(s).\n"
                 f"Use /fixtures {total_pages} for the last page.",
             )
             return
@@ -1598,22 +1598,22 @@ async def fixtures(
                 .astimezone(EAT)
             )
             lines.append(
-                f"🏆 {item['competition'] or 'Competition unavailable'}\\n"
-                f"🏠 {item['home_team']}\\n"
-                f"🆚 {item['away_team']}\\n"
-                f"🕒 {kickoff:%d %b %Y — %H:%M EAT}\\n"
+                f"🏆 {item['competition'] or 'Competition unavailable'}\n"
+                f"🏠 {item['home_team']}\n"
+                f"🆚 {item['away_team']}\n"
+                f"🕒 {kickoff:%d %b %Y — %H:%M EAT}\n"
             )
 
         if page < total_pages:
             lines.append(f"➡️ Next page: /fixtures {page + 1}")
         if page > 1:
             lines.append(f"⬅️ Previous page: /fixtures {page - 1}")
-        lines.append("\\nSource: open-matchday (github.com/oladeeayo/open-matchday)")
-        await reply(update, "\\n".join(lines))
+        lines.append("\nSource: open-matchday (github.com/oladeeayo/open-matchday)")
+        await reply(update, "\n".join(lines))
 
     except Exception as exc:
         logger.exception("Fixture retrieval failed")
-        await reply(update, f"❌ FIXTURE REQUEST FAILED\\n\\n{str(exc)[:700]}")
+        await reply(update, f"❌ FIXTURE REQUEST FAILED\n\n{str(exc)[:700]}")
 
 
 # FIXTURE DATABASE SYNC
