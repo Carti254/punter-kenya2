@@ -28,14 +28,10 @@ from database import get_connection, test_connection
 # ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
-GOAL_API_KEY = os.getenv("GOAL_API_KEY")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-GOAL_API_BASE = os.getenv(
-    "GOAL_API_BASE",
-    "https://api.goal-api.com/v1"
-).rstrip("/")
+OPENLIGADB_BASE = os.getenv("OPENLIGADB_BASE", "https://api.openligadb.de").rstrip("/")
 
-PROVIDER_NAME = "goal_api"
+PROVIDER_NAME = "openligadb"
 EAT = ZoneInfo("Africa/Nairobi")
 FIXTURE_RESPONSE_DIAGNOSTICS = []
 
@@ -538,6 +534,7 @@ def normalise_fixture(raw):
         "id",
         "fixtureId",
         "matchId",
+        "matchID",
         "match_id",
     )
 
@@ -547,6 +544,7 @@ def normalise_fixture(raw):
         "homeTeam",
         "home_team",
         "home",
+        "team1",
     )
 
     away = first_value(
@@ -555,6 +553,7 @@ def normalise_fixture(raw):
         "awayTeam",
         "away_team",
         "away",
+        "team2",
     )
 
     home_name = nested_name(home)
@@ -573,6 +572,7 @@ def normalise_fixture(raw):
         "competitionName",
         "competition",
         "league",
+        "leagueName",
     )
 
     country = first_value(
@@ -598,6 +598,7 @@ def normalise_fixture(raw):
         "kickoffUtc",
         "kickoff_utc",
         "dateTime",
+        "matchDateTimeUTC",
         "matchDateTime",
         "startTime",
     )
@@ -619,20 +620,21 @@ def normalise_fixture(raw):
         "fixtureStatus",
         "state",
     )
+    if status is None and "matchIsFinished" in raw:
+        status = "Finished" if raw.get("matchIsFinished") else "Scheduled"
 
-    home_score = first_value(
-        raw,
-        "homeTeamScore",
-        "homeScore",
-        "home_score",
-    )
-
-    away_score = first_value(
-        raw,
-        "awayTeamScore",
-        "awayScore",
-        "away_score",
-    )
+    home_score = first_value(raw, "homeTeamScore", "homeScore", "home_score")
+    away_score = first_value(raw, "awayTeamScore", "awayScore", "away_score")
+    if home_score is None or away_score is None:
+        results = raw.get("matchResults") or []
+        if isinstance(results, list):
+            full_time = next(
+                (r for r in results if isinstance(r, dict) and safe_int(r.get("resultTypeID")) == 2),
+                None,
+            )
+            if full_time:
+                home_score = full_time.get("pointsTeam1", home_score)
+                away_score = full_time.get("pointsTeam2", away_score)
 
     return {
         "provider": PROVIDER_NAME,
@@ -693,22 +695,13 @@ def normalise_league(raw):
     if league_id is None and name is None:
         return None
 
+    shortcut = first_value(raw, "leagueShortcut", "shortcut")
+    season = first_value(raw, "leagueSeason", "season")
+    provider_id = f"{shortcut}|{season}" if shortcut and season is not None else league_id
     return {
-        "id": (
-            str(league_id)
-            if league_id is not None
-            else None
-        ),
-        "name": (
-            str(name)
-            if name is not None
-            else "Name unavailable"
-        ),
-        "country": (
-            str(country)
-            if country is not None
-            else "Country unavailable"
-        ),
+        "id": str(provider_id) if provider_id is not None else None,
+        "name": str(name) if name is not None else "Name unavailable",
+        "country": str(country) if country is not None else "OpenLigaDB",
         "raw": raw,
     }
 
@@ -736,170 +729,100 @@ def upcoming_fixtures(raw_fixtures, limit=20):
     return [(raw, item) for _, raw, item in valid[:limit]]
 
 
+def openligadb_request(path):
+    """Anonymous, read-only request to the free OpenLigaDB API."""
+    cache_key = goal_cache_key("openligadb:" + path, {})
+    cached = goal_cached_response(cache_key)
+    if cached is not None:
+        return cached
+    response = HTTP.get(
+        f"{OPENLIGADB_BASE}/{path.lstrip('/')}",
+        headers={"Accept": "application/json", "User-Agent": "PunterKenya/1.0"},
+        timeout=(5, 15),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, (list, dict)):
+        raise RuntimeError("OpenLigaDB returned an unexpected response format.")
+    goal_store_response(cache_key, "leagues" if "availableleagues" in path else "fixtures", payload)
+    return payload
+
+
 def fetch_all_leagues():
-    """Fetch every page of the GOAL API league catalogue."""
+    """Retrieve the current-season OpenLigaDB league catalogue."""
+    season = datetime.now(EAT).year
+    payload = openligadb_request(f"getavailableleagues/{season}")
+    if not isinstance(payload, list):
+        raise RuntimeError("OpenLigaDB league catalogue was not a list.")
+    return [
+        row for row in payload
+        if isinstance(row, dict)
+        and first_value(row, "leagueShortcut")
+        and first_value(row, "leagueSeason") is not None
+    ]
+
+
+def fetch_openligadb_league_matches(shortcut, season):
+    rows = openligadb_request(f"getmatchdata/{shortcut}/{season}")
+    return rows if isinstance(rows, list) else []
+
+
+def fetch_openligadb_fixture_rows(days=14, league_id=None):
+    """Fetch current-season fixtures from the public OpenLigaDB catalogue."""
+    FIXTURE_RESPONSE_DIAGNOSTICS.clear()
+    leagues = fetch_all_leagues()
+    if league_id:
+        parts = str(league_id).split("|", 1)
+        if len(parts) != 2:
+            raise RuntimeError("Invalid OpenLigaDB competition reference.")
+        leagues = [
+            row for row in leagues
+            if str(row.get("leagueShortcut")) == parts[0]
+            and str(row.get("leagueSeason")) == parts[1]
+        ]
+
+    unique = {}
+    for league in leagues:
+        key = (str(league.get("leagueShortcut")), str(league.get("leagueSeason")))
+        unique[key] = league
+    league_items = list(unique.items())
+    # Keep anonymous calls polite. The full league catalogue can be much larger;
+    # later batches can be added after verifying provider behaviour and coverage.
+    if not league_id:
+        league_items = league_items[:60]
+
     collected = []
-    offset = 0
-    limit = 100
+    errors = []
+    for (shortcut, season), league in league_items:
+        try:
+            rows = fetch_openligadb_league_matches(shortcut, season)
+            for raw in rows:
+                if not isinstance(raw, dict):
+                    continue
+                raw.setdefault("leagueName", league.get("leagueName"))
+                raw.setdefault("leagueShortcut", shortcut)
+                raw.setdefault("leagueSeason", season)
+                collected.append(raw)
+        except Exception as exc:
+            errors.append(f"{shortcut}/{season}: {type(exc).__name__}: {str(exc)[:140]}")
+            logger.warning("OpenLigaDB request failed for %s/%s: %s", shortcut, season, exc)
 
-    for _ in range(50):
-        payload = goal_request("leagues", {"limit": limit, "offset": offset})
-        rows = extract_leagues(payload)
-        if not rows:
-            break
-
-        collected.extend(rows)
-        meta = response_metadata(payload)
-        if meta.get("hasMore") is False:
-            break
-
-        total = safe_int(meta.get("total"))
-        current_offset = safe_int(meta.get("offset"))
-        page_limit = safe_int(meta.get("limit")) or limit
-        next_offset = (current_offset if current_offset is not None else offset) + len(rows)
-
-        if total is not None and next_offset >= total:
-            break
-        if next_offset <= offset:
-            break
-
-        offset = next_offset
-        limit = page_limit
-
-        if len(rows) < limit and meta.get("hasMore") is not True:
-            break
-
+    if errors:
+        FIXTURE_RESPONSE_DIAGNOSTICS.append(
+            f"OpenLigaDB competition requests failed: {len(errors)}"
+        )
     return collected
 
 
 def fetch_matchintel_fixture_rows(days=14):
-    """
-    Fast first-pass fixture lookup for /matchintel.
-    Use the provider's date-range endpoint and pagination first; the broader
-    date-by-date catalogue scan is reserved as a fallback when no match is found.
-    """
-    first_day = datetime.now(EAT).date() - timedelta(days=1)
-    last_day = first_day + timedelta(days=days + 1)
-    collected = []
-    seen = set()
-    offset = 0
-    limit = 100
+    return fetch_openligadb_fixture_rows(days)
 
-    for _ in range(10):
-        payload = goal_request("fixtures", {
-            "from": first_day.isoformat(),
-            "to": last_day.isoformat(),
-            "limit": limit,
-            "offset": offset,
-        })
-        rows = extract_fixtures(payload)
-        if not rows:
-            break
-        for index, raw in enumerate(rows):
-            item = normalise_fixture(raw)
-            # Preserve provider rows even if the normaliser does not yet
-            # recognise the current GOAL API schema. This keeps matchintel
-            # diagnostics honest and allows schema mapping to be fixed.
-            fixture_key = (
-                item["provider_match_id"]
-                if item
-                else str(first_value(
-                    raw, "id", "fixtureId", "matchId", "match_id"
-                ) or f"{offset}:{index}:{hash(repr(raw))}")
-            )
-            if fixture_key not in seen:
-                seen.add(fixture_key)
-                collected.append(raw)
-        meta = response_metadata(payload)
-        if meta.get("hasMore") is False:
-            break
-        total = safe_int(meta.get("total"))
-        current_offset = safe_int(meta.get("offset"))
-        page_limit = safe_int(meta.get("limit")) or limit
-        next_offset = (current_offset if current_offset is not None else offset) + len(rows)
-        if (total is not None and next_offset >= total) or next_offset <= offset:
-            break
-        if len(rows) < page_limit and meta.get("hasMore") is not True:
-            break
-        offset, limit = next_offset, page_limit
-    return collected
+
 
 
 def fetch_upcoming_fixture_rows(days=14, league_id=None):
-    """
-    Fetch upcoming fixtures with one paginated date-range request.
+    return fetch_openligadb_fixture_rows(days, league_id)
 
-    Do not fan out into one request per calendar day: that creates a burst of
-    API traffic and can trigger GOAL API HTTP 429 rate limits. The range
-    endpoint is the single source for this command; if it is rate-limited,
-    report the error rather than hammering the provider with fallback calls.
-    """
-    FIXTURE_RESPONSE_DIAGNOSTICS.clear()
-    first_day = datetime.now(EAT).date() - timedelta(days=1)
-    last_day = first_day + timedelta(days=days + 1)
-
-    collected = []
-    seen = set()
-    offset = 0
-    limit = 100
-    params_base = {
-        "from": first_day.isoformat(),
-        "to": last_day.isoformat(),
-    }
-    if league_id:
-        params_base["leagueId"] = str(league_id)
-
-    for _ in range(50):
-        params = dict(params_base)
-        params.update({"limit": limit, "offset": offset})
-        try:
-            payload = goal_request("fixtures", params)
-        except Exception as exc:
-            FIXTURE_RESPONSE_DIAGNOSTICS.append(
-                f"REQUEST ERROR endpoint=fixtures; {type(exc).__name__}: {str(exc)[:500]}"
-            )
-            logger.warning("GOAL API date-range fixture request failed.", exc_info=True)
-            break
-
-        rows = extract_fixtures(payload)
-        if not rows:
-            break
-
-        for index, raw in enumerate(rows):
-            item = normalise_fixture(raw)
-            fixture_key = (
-                item["provider_match_id"]
-                if item
-                else str(first_value(
-                    raw, "id", "fixtureId", "matchId", "match_id"
-                ) or f"{offset}:{index}:{hash(repr(raw))}")
-            )
-            if fixture_key not in seen:
-                seen.add(fixture_key)
-                collected.append(raw)
-
-        meta = response_metadata(payload)
-        if meta.get("hasMore") is False:
-            break
-
-        total = safe_int(meta.get("total"))
-        current_offset = safe_int(meta.get("offset"))
-        page_limit = safe_int(meta.get("limit")) or limit
-        next_offset = (
-            current_offset if current_offset is not None else offset
-        ) + len(rows)
-
-        if total is not None and next_offset >= total:
-            break
-        if next_offset <= offset:
-            break
-        if len(rows) < page_limit and meta.get("hasMore") is not True:
-            break
-
-        offset = next_offset
-        limit = page_limit
-
-    return collected
 
 # ============================================================
 # DATABASE STORAGE
@@ -1359,20 +1282,19 @@ async def syncleagues(
 ):
     await reply(
         update,
-        "🔄 Downloading the complete GOAL API league catalogue. "
-        "This may take several API requests...",
+        "🔄 Downloading the current-season OpenLigaDB league catalogue...",
     )
     try:
         raw_rows = await asyncio.to_thread(fetch_all_leagues)
         if not raw_rows:
-            await reply(update, "⚠️ GOAL API returned no league records. Nothing was saved.")
+            await reply(update, "⚠️ OpenLigaDB returned no current-season league records. Nothing was saved.")
             return
 
         stats = await asyncio.to_thread(save_leagues_to_database, raw_rows)
         await reply(
             update,
             "✅ FULL LEAGUE CATALOGUE SYNC COMPLETE\n\n"
-            f"API records collected: {len(raw_rows)}\n"
+            f"OpenLigaDB records collected: {len(raw_rows)}\n"
             f"Valid leagues saved/updated: {stats['saved']}\n"
             f"Records skipped: {stats['skipped']}\n\n"
             "Search any synced competition using /leagues SEARCH.",
@@ -1533,7 +1455,7 @@ async def fixtures(
 
     await reply(
         update,
-        "⚽ Fetching upcoming fixtures from GOAL API...",
+        "⚽ Fetching upcoming fixtures from OpenLigaDB (free public feed)...",
     )
 
     try:
@@ -1816,7 +1738,8 @@ def fixture_team_id(raw, side):
     direct = first_value(raw, f"{side}TeamId", f"{side}_team_id")
     if direct is not None:
         return str(direct)
-    nested = first_value(raw, f"{side}Team", side.lower())
+    nested_key = "team1" if side == "home" else "team2"
+    nested = first_value(raw, f"{side}Team", side.lower(), nested_key)
     value = entity_id(nested)
     return str(value) if value is not None else None
 
@@ -2285,14 +2208,13 @@ async def matchintel(
 
         await reply(update, "✅ Fixture found. Checking lineups, statistics, odds and match events...")
 
-        endpoint_results = await asyncio.gather(
-            asyncio.to_thread(goal_request, f"fixtures/{fixture_id}", {}),
-            asyncio.to_thread(goal_request, f"fixtures/{fixture_id}/lineups", {}),
-            asyncio.to_thread(goal_request, f"fixtures/{fixture_id}/statistics", {}),
-            asyncio.to_thread(goal_request, f"fixtures/{fixture_id}/odds", {}),
-            asyncio.to_thread(goal_request, f"fixtures/{fixture_id}/events", {}),
-            return_exceptions=True,
-        )
+        endpoint_results = [
+            RuntimeError("OpenLigaDB does not provide this detail endpoint."),
+            RuntimeError("Starting lineups are not supplied by OpenLigaDB."),
+            RuntimeError("Detailed match statistics are not supplied by OpenLigaDB."),
+            RuntimeError("Bookmaker odds are not supplied by OpenLigaDB."),
+            RuntimeError("Detailed event feed is not available through this integration."),
+        ]
         labels = ("DETAILS", "LINEUPS", "STATISTICS", "ODDS", "EVENTS")
         results = dict(zip(labels, endpoint_results))
 
@@ -2338,11 +2260,10 @@ async def matchintel(
 
         output.extend(["", "🧠 PRE-MATCH PREDICTION"])
         await reply(update, "📊 Match data retrieved. Building the pre-match forecast...")
-        try:
-            prediction = await asyncio.to_thread(build_pre_match_prediction, raw, item)
-        except Exception as prediction_error:
-            logger.warning("Pre-match model data request failed: %s", prediction_error)
-            prediction = {"available": False, "reason": "Recent team results could not be retrieved: " + str(prediction_error)[:220]}
+        prediction = {
+            "available": False,
+            "reason": "OpenLigaDB currently supplies fixtures and results, but this integration does not yet retrieve enough verified team-history data for a statistical forecast.",
+        }
 
         if prediction.get("available"):
             home_pct = prediction["home_win"] * 100
@@ -2555,12 +2476,7 @@ def main():
             "or TELEGRAM_BOT_TOKEN in Railway."
         )
 
-    if not GOAL_API_KEY:
-
-        logger.warning(
-            "GOAL_API_KEY is not set; "
-            "GOAL API commands will fail until configured."
-        )
+    logger.info("OpenLigaDB provider selected; no API key required.")
 
     acquire_polling_lock()
 
