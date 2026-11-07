@@ -615,10 +615,20 @@ def fetch_matchintel_fixture_rows(days=14):
         rows = extract_fixtures(payload)
         if not rows:
             break
-        for raw in rows:
+        for index, raw in enumerate(rows):
             item = normalise_fixture(raw)
-            if item and item["provider_match_id"] not in seen:
-                seen.add(item["provider_match_id"])
+            # Preserve provider rows even if the normaliser does not yet
+            # recognise the current GOAL API schema. This keeps matchintel
+            # diagnostics honest and allows schema mapping to be fixed.
+            fixture_key = (
+                item["provider_match_id"]
+                if item
+                else str(first_value(
+                    raw, "id", "fixtureId", "matchId", "match_id"
+                ) or f"{offset}:{index}:{hash(repr(raw))}")
+            )
+            if fixture_key not in seen:
+                seen.add(fixture_key)
                 collected.append(raw)
         meta = response_metadata(payload)
         if meta.get("hasMore") is False:
