@@ -1133,7 +1133,20 @@ async def start(
         "/leaguefixtures LEAGUE [today|tomorrow] — choose a league and day\n"
         "/syncfixtures — save upcoming fixtures to the database\n\n"
         "MATCH ANALYSIS\n"
-        "/matchintel HOME vs AWAY — recent-form forecast\n"
+        "/matchintel HOME vs AWAY — initial match assessment\n"
+        "/form — recent form and points rate\n"
+        "/goals — goals scored/conceded and scoring rates\n"
+        "/homeaway — venue-specific performance\n"
+        "/halves — half-time data availability\n"
+        "/h2h — head-to-head results\n"
+        "/strength — attack, defence and consistency\n"
+        "/matchup — attack-versus-defence comparison\n"
+        "/markets — model probability estimates\n"
+        "/risk — uncertainty and risk flags\n"
+        "/scenarios — possible match scripts\n"
+        "/deepdive — full analysis with simple summary\n"
+        "/value — compare supplied 1X2 odds with model estimates\n"
+        "/topvalue — value scanner status\n"
         "/live — explain live-data availability\n\n"
         "TOOLS\n"
         "/calculator ODDS STAKE — calculate potential returns\n"
@@ -2092,6 +2105,375 @@ def build_openmatchday_prediction(raw_fixture, fixture):
     }
 
 
+
+# ============================================================
+# PUNTER KENYA — MATCH ANALYSIS COMMANDS
+# Historical-result analysis only; no unsupported live/odds claims.
+# ============================================================
+
+def load_competition_analysis(raw_fixture, fixture):
+    folder = str(raw_fixture.get("leagueShortcut") or "").strip()
+    if not folder:
+        return {"available": False, "reason": "Competition reference is missing."}
+    try:
+        rows = fetch_openmatchday_csv(folder, "results")
+    except Exception as exc:
+        logger.warning("Analysis results unavailable for %s: %s", folder, exc)
+        return {"available": False, "reason": "Historical results could not be downloaded."}
+
+    def history(team):
+        matches = []
+        for row in rows:
+            home = str(row.get("home") or "").strip()
+            away = str(row.get("away") or "").strip()
+            if not home or not away:
+                continue
+            try:
+                hg, ag = int(row.get("ft_home")), int(row.get("ft_away"))
+            except (TypeError, ValueError):
+                continue
+            if team_name_matches_query(team, home):
+                is_home = True
+            elif team_name_matches_query(team, away):
+                is_home = False
+            else:
+                continue
+            gf, ga = (hg, ag) if is_home else (ag, hg)
+            result = "W" if gf > ga else "D" if gf == ga else "L"
+            try:
+                date = datetime.strptime(str(row.get("date", "")), "%Y-%m-%d")
+            except ValueError:
+                date = None
+            matches.append({
+                "date": date, "opponent": away if is_home else home,
+                "venue": "H" if is_home else "A", "gf": gf, "ga": ga,
+                "home_goals": hg, "away_goals": ag, "result": result,
+                "points": 3 if result == "W" else 1 if result == "D" else 0,
+            })
+        matches.sort(key=lambda x: x["date"] or datetime.min, reverse=True)
+        return matches
+
+    home = history(fixture["home_team"])
+    away = history(fixture["away_team"])
+    if len(home) < 5 or len(away) < 5:
+        return {
+            "available": False,
+            "reason": f"Only {len(home)} home-team and {len(away)} away-team results found; at least five each are required.",
+        }
+
+    def metrics(matches):
+        n = len(matches)
+        gf = sum(x["gf"] for x in matches) / n
+        ga = sum(x["ga"] for x in matches) / n
+        points = sum(x["points"] for x in matches) / n
+        scored = sum(x["gf"] > 0 for x in matches) / n
+        conceded = sum(x["ga"] > 0 for x in matches) / n
+        clean = sum(x["ga"] == 0 for x in matches) / n
+        failed = sum(x["gf"] == 0 for x in matches) / n
+        goal_totals = [x["gf"] + x["ga"] for x in matches]
+        over15 = sum(v >= 2 for v in goal_totals) / n
+        over25 = sum(v >= 3 for v in goal_totals) / n
+        variance = sum((x["points"] - points) ** 2 for x in matches) / n
+        consistency = max(0, 100 - math.sqrt(variance) * 24)
+        return {
+            "n": n, "gf": gf, "ga": ga, "points": points,
+            "scored_rate": scored, "conceded_rate": conceded,
+            "clean_rate": clean, "failed_rate": failed,
+            "over15": over15, "over25": over25,
+            "consistency": consistency,
+            "form": "".join(x["result"] for x in reversed(matches[:5])),
+        }
+
+    # Venue-specific performance uses the same available competition history.
+    def venue_metrics(matches, venue):
+        selected = [x for x in matches if x["venue"] == venue]
+        if len(selected) < 3:
+            return None
+        n = len(selected)
+        return {
+            "n": n,
+            "gf": sum(x["gf"] for x in selected) / n,
+            "ga": sum(x["ga"] for x in selected) / n,
+            "points": sum(x["points"] for x in selected) / n,
+            "win_rate": sum(x["result"] == "W" for x in selected) / n,
+        }
+
+    h2h = []
+    for row in rows:
+        home_name, away_name = str(row.get("home") or ""), str(row.get("away") or "")
+        if not ((team_name_matches_query(fixture["home_team"], home_name)
+                 and team_name_matches_query(fixture["away_team"], away_name))
+                or (team_name_matches_query(fixture["home_team"], away_name)
+                    and team_name_matches_query(fixture["away_team"], home_name))):
+            continue
+        try:
+            hg, ag = int(row.get("ft_home")), int(row.get("ft_away"))
+        except (TypeError, ValueError):
+            continue
+        try:
+            date = datetime.strptime(str(row.get("date", "")), "%Y-%m-%d")
+        except ValueError:
+            date = None
+        h2h.append({"date": date, "home": home_name, "away": away_name, "hg": hg, "ag": ag})
+    h2h.sort(key=lambda x: x["date"] or datetime.min, reverse=True)
+
+    return {
+        "available": True, "home": home, "away": away,
+        "home_metrics": metrics(home), "away_metrics": metrics(away),
+        "home_at_home": venue_metrics(home, "H"),
+        "away_away": venue_metrics(away, "A"),
+        "h2h": h2h[:10], "competition": fixture.get("competition"),
+    }
+
+
+def find_analysis_fixture(query):
+    parts = re.split(r"\s+(?:vs?\.?|v)\s+", query, maxsplit=1, flags=re.I)
+    if len(parts) != 2 or not all(x.strip() for x in parts):
+        return None, None, "Use both team names: TEAM A vs TEAM B."
+    first, second = parts[0].strip(), parts[1].strip()
+    rows = fetch_matchintel_fixture_rows(14)
+    found = []
+    for raw in rows:
+        item = normalise_fixture(raw)
+        if not item:
+            continue
+        if ((team_name_matches_query(first, item["home_team"]) and team_name_matches_query(second, item["away_team"]))
+            or (team_name_matches_query(first, item["away_team"]) and team_name_matches_query(second, item["home_team"]))):
+            found.append((raw, item))
+    if not found:
+        return None, None, "Fixture not found in the next 14 days. Check /fixtures or verify the team names."
+    if len(found) > 1:
+        return None, None, "More than one fixture matched. Include the competition or use the exact team names."
+    return found[0][0], found[0][1], None
+
+
+async def get_analysis(update, context):
+    query = " ".join(context.args).strip()
+    if not query:
+        await reply(update, "Usage: /COMMAND TEAM A vs TEAM B")
+        return None
+    try:
+        raw, fixture, error = await asyncio.to_thread(find_analysis_fixture, query)
+        if error:
+            await reply(update, "⚠️ " + error)
+            return None
+        data = await asyncio.to_thread(load_competition_analysis, raw, fixture)
+        if not data.get("available"):
+            await reply(update, "⚠️ ANALYSIS UNAVAILABLE\n\n" + data.get("reason", "Insufficient data."))
+            return None
+        return fixture, data
+    except Exception as exc:
+        logger.exception("Match analysis command failed")
+        await reply(update, f"❌ Analysis failed: {str(exc)[:350]}")
+        return None
+
+
+def analysis_header(command, fixture):
+    return f"⚽ PUNTER KENYA | {command}\n{fixture['home_team']} vs {fixture['away_team']}\n🏆 {fixture.get('competition') or 'Competition'}\n\n"
+
+
+async def form_command(update, context):
+    result = await get_analysis(update, context)
+    if not result: return
+    fixture, d = result
+    h, a = d["home_metrics"], d["away_metrics"]
+    await reply(update, analysis_header("FORM REPORT", fixture) +
+        f"HOME — {fixture['home_team']}\nLast five: {h['form']}\nPoints per match: {h['points']:.2f}\nWin rate: {sum(x['result']=='W' for x in d['home'][:10])/len(d['home']):.0%}\n\n"
+        f"AWAY — {fixture['away_team']}\nLast five: {a['form']}\nPoints per match: {a['points']:.2f}\nWin rate: {sum(x['result']=='W' for x in d['away'][:10])/len(d['away']):.0%}\n\n"
+        "Based on the latest available completed competition results; opponent strength is not adjusted.")
+
+async def goals_command(update, context):
+    result = await get_analysis(update, context)
+    if not result: return
+    fixture, d = result
+    h, a = d["home_metrics"], d["away_metrics"]
+    await reply(update, analysis_header("GOAL INTELLIGENCE", fixture) +
+        f"{fixture['home_team']}\nGF: {h['gf']:.2f} per match | GA: {h['ga']:.2f}\nScored in: {h['scored_rate']:.0%} | Conceded in: {h['conceded_rate']:.0%}\nClean sheets: {h['clean_rate']:.0%} | Failed to score: {h['failed_rate']:.0%}\n\n"
+        f"{fixture['away_team']}\nGF: {a['gf']:.2f} per match | GA: {a['ga']:.2f}\nScored in: {a['scored_rate']:.0%} | Conceded in: {a['conceded_rate']:.0%}\nClean sheets: {a['clean_rate']:.0%} | Failed to score: {a['failed_rate']:.0%}\n\n"
+        "GF = goals scored; GA = goals conceded. Rates use up to 10 recent matches.")
+
+async def homeaway_command(update, context):
+    result = await get_analysis(update, context)
+    if not result: return
+    fixture, d = result
+    h, a = d["home_at_home"], d["away_away"]
+    def fmt(x):
+        return "Insufficient venue sample (need at least 3 matches)." if not x else f"Matches: {x['n']} | GF: {x['gf']:.2f} | GA: {x['ga']:.2f} | Points/match: {x['points']:.2f} | Win rate: {x['win_rate']:.0%}"
+    await reply(update, analysis_header("HOME / AWAY REPORT", fixture) +
+        f"HOME TEAM AT HOME\n{fixture['home_team']}\n{fmt(h)}\n\nAWAY TEAM AWAY FROM HOME\n{fixture['away_team']}\n{fmt(a)}\n\nVenue splits are calculated only from the team's latest 10 available results.")
+
+async def halves_command(update, context):
+    query = " ".join(context.args).strip()
+    if not query:
+        await reply(update, "Usage: /halves TEAM A vs TEAM B"); return
+    await reply(update, "⏱ HALF-TIME INTELLIGENCE\n\nThe current open-matchday results feed provides full-time scores only. It does not provide verified half-time scores or goal-minute events. PUNTER will not invent first-half or second-half statistics.\n\nThis module will activate when a reliable half-time/event source is connected.")
+
+async def h2h_command(update, context):
+    result = await get_analysis(update, context)
+    if not result: return
+    fixture, d = result
+    if not d["h2h"]:
+        await reply(update, analysis_header("HEAD-TO-HEAD", fixture) + "No completed head-to-head matches were found in this competition's available results.")
+        return
+    lines = [analysis_header("HEAD-TO-HEAD", fixture), "Recent meetings (newest first):"]
+    for m in d["h2h"]:
+        date = m["date"].strftime("%d %b %Y") if m["date"] else "Date n/a"
+        lines.append(f"• {date} | {m['home']} {m['hg']}-{m['ag']} {m['away']}")
+    await reply(update, "\n".join(lines))
+
+async def strength_command(update, context):
+    result = await get_analysis(update, context)
+    if not result: return
+    fixture, d = result
+    h, a = d["home_metrics"], d["away_metrics"]
+    await reply(update, analysis_header("TEAM STRENGTH", fixture) +
+        f"{fixture['home_team']}\nAttack: {h['gf']:.2f} goals/match | Defence: {h['ga']:.2f} conceded/match\nConsistency indicator: {h['consistency']:.0f}/100 | Points/match: {h['points']:.2f}\n\n"
+        f"{fixture['away_team']}\nAttack: {a['gf']:.2f} goals/match | Defence: {a['ga']:.2f} conceded/match\nConsistency indicator: {a['consistency']:.0f}/100 | Points/match: {a['points']:.2f}\n\n"
+        "Consistency is a simple points-variation indicator, not a proven predictive rating. Strength is not adjusted for opponent quality.")
+
+async def matchup_command(update, context):
+    result = await get_analysis(update, context)
+    if not result: return
+    fixture, d = result
+    h, a = d["home_metrics"], d["away_metrics"]
+    home_edge = (h["gf"] - a["ga"]) - (a["gf"] - h["ga"])
+    edge = "Home-side statistical lean" if home_edge > .15 else "Away-side statistical lean" if home_edge < -.15 else "No clear statistical edge"
+    await reply(update, analysis_header("MATCHUP ANALYSIS", fixture) +
+        f"Home attack vs away defence: {h['gf']:.2f} scored against {a['ga']:.2f} conceded per match.\n"
+        f"Away attack vs home defence: {a['gf']:.2f} scored against {h['ga']:.2f} conceded per match.\n\n"
+        f"Comparison: {edge}.\n\n"
+        "This is a statistical comparison, not tactical video analysis. Opponent strength and lineups are not available.")
+
+async def markets_command(update, context):
+    result = await get_analysis(update, context)
+    if not result: return
+    fixture, d = result
+    pred = await asyncio.to_thread(build_openmatchday_prediction, {
+        "leagueShortcut": next((x.get("leagueShortcut") for x in fetch_matchintel_fixture_rows(14)
+          if str(x.get("home")) == fixture["home_team"] and str(x.get("away")) == fixture["away_team"]), "")
+    }, fixture)
+    if not pred.get("available"):
+        await reply(update, analysis_header("MARKET PROBABILITIES", fixture) + "Model probabilities unavailable: " + pred.get("reason", "insufficient data")); return
+    await reply(update, analysis_header("MARKET PROBABILITIES", fixture) +
+        f"1X2 estimates\n1 — Home win: {pred['home_win']:.1%}\nX — Draw: {pred['draw']:.1%}\n2 — Away win: {pred['away_win']:.1%}\n\n"
+        f"Goal estimates\nOver 1.5: {pred['over_15']:.1%}\nOver 2.5: {pred['over_25']:.1%}\nMost likely score: {pred['score'][0]}-{pred['score'][1]}\n\n"
+        "These are model estimates, not bookmaker prices or guaranteed outcomes. No BTTS or Under 2.5 recommendations are generated.")
+
+async def scenarios_command(update, context):
+    result = await get_analysis(update, context)
+    if not result: return
+    fixture, d = result
+    pred = await asyncio.to_thread(build_openmatchday_prediction, {
+        "leagueShortcut": next((x.get("leagueShortcut") for x in fetch_matchintel_fixture_rows(14)
+          if str(x.get("home")) == fixture["home_team"] and str(x.get("away")) == fixture["away_team"]), "")
+    }, fixture)
+    if not pred.get("available"):
+        await reply(update, analysis_header("MATCH SCENARIOS", fixture) + pred.get("reason", "Insufficient data.")); return
+    h, a = pred["lambda_home"], pred["lambda_away"]
+    total = h + a
+    await reply(update, analysis_header("MATCH SCENARIOS", fixture) +
+        f"Expected goals: {h:.2f} – {a:.2f}\n\n"
+        f"• Home-control scenario: more likely if {fixture['home_team']} converts its home scoring edge.\n"
+        f"• Away-threat scenario: {fixture['away_team']} has a route through its estimated {a:.2f} goals.\n"
+        f"• Lower-scoring scenario: possible if both attacks fall below their recent averages.\n\n"
+        f"Model total-goal expectation: {total:.2f}.\nThese are conditional scenarios, not independent probability forecasts.")
+
+async def risk_command(update, context):
+    result = await get_analysis(update, context)
+    if not result: return
+    fixture, d = result
+    h, a = d["home_metrics"], d["away_metrics"]
+    flags = []
+    if min(h["n"], a["n"]) < 8: flags.append("Limited sample: fewer than 8 results for at least one team.")
+    if abs(h["points"] - a["points"]) < .35: flags.append("Teams have similar recent points rates.")
+    if min(h["consistency"], a["consistency"]) < 45: flags.append("At least one team has volatile recent points results.")
+    if abs(h["gf"] - a["ga"]) < .25 and abs(a["gf"] - h["ga"]) < .25: flags.append("No clear scoring-versus-defence mismatch.")
+    if not flags: flags.append("No basic statistical warning flag detected; this does not mean the match is safe.")
+    await reply(update, analysis_header("RISK SCREEN", fixture) +
+        "⚠️ DATA LIMITATIONS\n• No confirmed lineups, injuries, suspensions, xG, odds or live events.\n\n"
+        "RISK FLAGS\n" + "\n".join("• " + x for x in flags) +
+        "\n\nDecision: do not place a bet from this screen alone. Check market price and value first.")
+
+async def value_command(update, context):
+    args = context.args
+    if len(args) < 4:
+        await reply(update, "Usage: /value TEAM A vs TEAM B HOME_ODDS DRAW_ODDS AWAY_ODDS\nExample: /value Brighton vs Brentford 2.10 3.40 3.50\nUse decimal odds from your bookmaker."); return
+    try:
+        odds = [float(x) for x in args[-3:]]
+        if any(x <= 1 for x in odds): raise ValueError
+    except ValueError:
+        await reply(update, "Enter three valid decimal odds greater than 1.00."); return
+    query = " ".join(args[:-3])
+    result = await get_analysis(update, type("Args", (), {"args": query.split()})())
+    if not result: return
+    fixture, d = result
+    raw, item, err = await asyncio.to_thread(find_analysis_fixture, query)
+    pred = await asyncio.to_thread(build_openmatchday_prediction, raw, item) if not err else {"available": False}
+    if not pred.get("available"):
+        await reply(update, analysis_header("VALUE CHECK", fixture) + "Model probabilities unavailable. No value verdict can be calculated."); return
+    probs = [pred["home_win"], pred["draw"], pred["away_win"]]
+    labels = ["Home", "Draw", "Away"]
+    lines = [analysis_header("VALUE CHECK", fixture), "Your supplied odds:"]
+    for label, odd, p in zip(labels, odds, probs):
+        implied = 1 / odd
+        ev = p * odd - 1
+        fair = 1 / p if p > 0 else float("inf")
+        verdict = "MODEL EDGE" if ev > .03 else "NO EDGE"
+        lines.append(f"• {label}: odds {odd:.2f} | model {p:.1%} | fair odds {fair:.2f} | EV {ev:+.1%} | {verdict}")
+    lines.extend(["", "Odds are user-supplied and have not been independently verified. Model probabilities are uncalibrated estimates; positive EV is not proof of a profitable bet."])
+    await reply(update, "\n".join(lines))
+
+async def topvalue_command(update, context):
+    await reply(update, "📊 TOP VALUE SCANNER\n\nNo verified bookmaker odds feed is connected. PUNTER cannot honestly rank value bets without current prices.\n\nUse /value TEAM A vs TEAM B HOME_ODDS DRAW_ODDS AWAY_ODDS to compare your supplied 1X2 prices with the model. No odds = no value verdict.")
+
+async def deepdive_command(update, context):
+    result = await get_analysis(update, context)
+    if not result: return
+    fixture, d = result
+    h, a = d["home_metrics"], d["away_metrics"]
+    raw, item, err = await asyncio.to_thread(find_analysis_fixture, " vs ".join([fixture["home_team"], fixture["away_team"]]))
+    pred = await asyncio.to_thread(build_openmatchday_prediction, raw, item) if not err else {"available": False}
+    edge = "Home" if h["points"] > a["points"] + .25 else "Away" if a["points"] > h["points"] + .25 else "No clear"
+    lines = [analysis_header("FULL MATCH DEEPDIVE", fixture),
+        "1. RECENT FORM",
+        f"Home: {h['form']} | {h['points']:.2f} points/match",
+        f"Away: {a['form']} | {a['points']:.2f} points/match",
+        "",
+        "2. ATTACK & DEFENCE",
+        f"Home GF/GA: {h['gf']:.2f}/{h['ga']:.2f} | scored in {h['scored_rate']:.0%}",
+        f"Away GF/GA: {a['gf']:.2f}/{a['ga']:.2f} | scored in {a['scored_rate']:.0%}",
+        "",
+        "3. VENUE PERFORMANCE",
+        f"Home team at home: {d['home_at_home']['n']} matches" if d["home_at_home"] else "Home team at home: insufficient sample",
+        f"Away team away: {d['away_away']['n']} matches" if d["away_away"] else "Away team away: insufficient sample",
+        "",
+        "4. CONSISTENCY",
+        f"Home: {h['consistency']:.0f}/100 | Away: {a['consistency']:.0f}/100",
+        "5. HEAD-TO-HEAD",
+        f"Available meetings: {len(d['h2h'])}",
+        "",
+        "6. MODEL FORECAST"]
+    if pred.get("available"):
+        lines.extend([f"Expected goals: {pred['lambda_home']:.2f}-{pred['lambda_away']:.2f}",
+            f"Most likely score: {pred['score'][0]}-{pred['score'][1]}",
+            f"1X2: Home {pred['home_win']:.1%} | Draw {pred['draw']:.1%} | Away {pred['away_win']:.1%}",
+            f"Over 1.5: {pred['over_15']:.1%} | Over 2.5: {pred['over_25']:.1%}"])
+    else:
+        lines.append("Forecast withheld: " + pred.get("reason", "insufficient data"))
+    lines.extend(["", "7. PLAIN-ENGLISH SUMMARY",
+        f"{edge} recent-points advantage. " +
+        ("The data shows a measurable difference, but it is not enough on its own to justify a bet." if edge != "No clear" else "Recent points rates are close; this matchup has no clear form leader."),
+        "",
+        "8. BETTING DECISION",
+        "NO BET — no verified bookmaker odds are connected, so value cannot be established.",
+        "",
+        "DATA QUALITY & LIMITATIONS",
+        "Uses up to 10 recent completed results in this competition. No opponent-strength adjustment, xG, confirmed lineups, injuries, suspensions, half-time data or live events. The model is not yet historically calibrated. Estimates are not guarantees."])
+    message = "\n".join(lines)
+    for start in range(0, len(message), 3800):
+        await reply(update, message[start:start+3800])
+
+
 # ============================================================
 # MATCH INTELLIGENCE — VERIFIED MATCH DATA
 # ============================================================
@@ -2681,6 +3063,19 @@ def main():
         ("syncleagues", syncleagues),
         ("leaguefixtures", leaguefixtures),
         ("matchintel", matchintel),
+        ("form", form_command),
+        ("goals", goals_command),
+        ("homeaway", homeaway_command),
+        ("halves", halves_command),
+        ("h2h", h2h_command),
+        ("strength", strength_command),
+        ("matchup", matchup_command),
+        ("markets", markets_command),
+        ("risk", risk_command),
+        ("scenarios", scenarios_command),
+        ("deepdive", deepdive_command),
+        ("value", value_command),
+        ("topvalue", topvalue_command),
         ("fixtures", fixtures),
         ("syncfixtures", syncfixtures),
         ("live", live),
