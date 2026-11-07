@@ -121,3 +121,12 @@ Telegram commands:
 These are undocumented bookmaker endpoints, not guaranteed APIs. They may change, rate-limit or block automated access. The bot makes read-only requests only; it does not log in, place bets or access user accounts. A successful request is not a guarantee of future availability. Fixture matching is conservative and may fail when team names differ. Prices can be stored as timestamped observations in the configured MySQL database after `/odds` retrieves a matched fixture. `/oddshistory` displays those saved observations; this is not continuous market monitoring or a complete historical odds feed. Betika and BetPawa are the only adapters in this initial implementation; SportPesa, Odibets and Mozzart Bet are not connected yet.
 
 The bookmaker engine is deliberately isolated on the `feature/bookmaker-odds-engine` branch pending syntax checks and live endpoint tests. It has not been merged into `main` or deployed. The workflow has passed a Python syntax check for the odds integration commit, but live endpoint tests remain outstanding.
+
+
+## Experimental scanner commands
+
+- `/topvalue [home|draw|away|over15|over25|safest] [today|tomorrow]`
+- `/aipicks [market] [today|tomorrow]`
+- `/accumulator [target_odds]`
+
+The scanner combines the open-matchday recent-results Poisson estimate with read-only Betika/BetPawa prices returned at query time. It excludes BTTS and Under 2.5. Minimum estimated probability is 42% for 1X2 and 60% for goal overs; estimated expected value must be at least +3%. This model is experimental and uncalibrated, does not adjust for confirmed lineups, injuries, xG or opponent strength, and does not guarantee profit. The accumulator's probability product assumes independent legs and is explicitly not a calibrated combined probability. A NO BET result is valid.
