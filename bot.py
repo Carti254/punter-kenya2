@@ -1420,14 +1420,23 @@ async def fixtures(
         )
 
         if not selected:
-
-            await reply(
-                update,
-                "No upcoming fixtures were returned in the 14-day date search.\n"
-                f"Date records received: {len(raw_rows)}\n"
-                "Try again later or check the selected competition's coverage.",
+            diagnostic = [
+                "No upcoming fixtures could be displayed from the 14-day search.",
+                f"Raw provider records received: {len(raw_rows)}",
+            ]
+            if raw_rows and isinstance(raw_rows[0], dict):
+                diagnostic.append(
+                    "First raw record fields: "
+                    + ", ".join(sorted(str(key) for key in raw_rows[0].keys())[:50])
+                )
+                diagnostic.append(
+                    "First raw record preview: "
+                    + repr(raw_rows[0])[:900]
+                )
+            diagnostic.append(
+                "This diagnostic helps identify the provider's actual fixture schema."
             )
-
+            await reply(update, "\\n".join(diagnostic))
             return
 
         lines = [
