@@ -768,6 +768,7 @@ async def start(
         "/leagues [SEARCH] — search the synced competition catalogue\n"
         "/syncleagues — download all available competitions\n"
         "/leaguefixtures LEAGUE NAME — show fixtures for one competition\n"
+        "/matchintel HOME vs AWAY — match intelligence report\n"
         "/fixtures — show the nearest upcoming fixtures\n"
         "/syncfixtures — save upcoming fixtures\n"
         "/live — show live matches\n\n"
@@ -1400,6 +1401,337 @@ async def live(
         )
 
 
+
+# ============================================================
+# MATCH INTELLIGENCE — VERIFIED MATCH DATA
+# ============================================================
+
+def unwrap_api_data(payload):
+    if isinstance(payload, dict) and "data" in payload:
+        return payload.get("data")
+    return payload
+
+
+def as_named_text(value):
+    if isinstance(value, dict):
+        return str(first_value(
+            value, "name", "playerName", "lineupPlayer",
+            "teamName", "title", "displayName"
+        ) or "")
+    if value is None:
+        return ""
+    return str(value)
+
+
+def get_collection(value, *keys):
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, dict):
+        return []
+    for key in keys:
+        candidate = value.get(key)
+        if isinstance(candidate, list):
+            return candidate
+    return []
+
+
+def extract_match_statistics(payload):
+    data = unwrap_api_data(payload)
+    if isinstance(data, dict):
+        stats = data.get("stats") if isinstance(data.get("stats"), dict) else data
+        match_stats = stats.get("match") if isinstance(stats, dict) else None
+        if isinstance(match_stats, dict):
+            return (
+                get_collection(match_stats, "fullTime", "full_time")
+                or get_collection(match_stats, "statistics", "stats")
+            )
+        return get_collection(stats, "statistics", "stats", "fullTime", "full_time")
+    return get_collection(data)
+
+
+def format_match_lineups(payload):
+    data = unwrap_api_data(payload)
+    if not isinstance(data, dict):
+        return ["Lineups: not published by the data provider yet."]
+
+    lines = []
+    for side_name, side_keys in (
+        ("HOME", ("home", "homeTeam", "homeLineup")),
+        ("AWAY", ("away", "awayTeam", "awayLineup")),
+    ):
+        side = None
+        for key in side_keys:
+            if isinstance(data.get(key), dict):
+                side = data[key]
+                break
+        if side is None:
+            continue
+
+        formation = first_value(
+            side, "formation", "teamFormation"
+        ) or first_value(
+            data, "homeFormation" if side_name == "HOME" else "awayFormation"
+        )
+        starters = get_collection(
+            side, "startingLineups", "startingLineup", "startingXI", "starting_xi"
+        )
+        substitutes = get_collection(
+            side, "substitutes", "substitutePlayers", "bench"
+        )
+
+        lines.append(f"{side_name} XI" + (f" — {formation}" if formation else ""))
+        if starters:
+            def lineup_order(player):
+                return safe_int(first_value(player, "lineupPosition", "positionOrder")) or 999
+            for player in sorted(starters, key=lineup_order):
+                name = as_named_text(first_value(
+                    player, "lineupPlayer", "playerName", "name", "player"
+                ))
+                number = first_value(player, "lineupNumber", "shirtNumber", "number")
+                position = first_value(player, "playerPosition", "position")
+                details = []
+                if number is not None:
+                    details.append(f"#{number}")
+                if position:
+                    details.append(str(position))
+                lines.append("• " + (name or "Player unavailable") +
+                             (f" ({', '.join(details)})" if details else ""))
+        else:
+            lines.append("• Starting XI not published yet.")
+
+        if substitutes:
+            names = [
+                as_named_text(first_value(p, "lineupPlayer", "playerName", "name", "player"))
+                for p in substitutes
+            ]
+            names = [name for name in names if name]
+            if names:
+                lines.append("Bench: " + ", ".join(names[:12]))
+        lines.append("")
+
+    if not lines:
+        return ["Lineups: not published by the data provider yet."]
+    return lines
+
+
+def format_match_odds(payload):
+    data = unwrap_api_data(payload)
+    rows = get_collection(data, "odds", "bookmakers", "items", "results")
+    if isinstance(data, dict) and not rows:
+        rows = [data] if any(k in data for k in ("odd1", "oddX", "odd2")) else []
+
+    lines = []
+    for row in rows[:5]:
+        if not isinstance(row, dict):
+            continue
+        bookmaker = first_value(row, "bookmaker", "bookmakerName", "name") or "Bookmaker"
+        prices = []
+        for key, label in (("odd1", "1"), ("oddX", "X"), ("odd2", "2")):
+            value = row.get(key)
+            if value not in (None, ""):
+                prices.append(f"{label}: {value}")
+        if prices:
+            lines.append(f"• {bookmaker} — " + " | ".join(prices))
+        over_under = row.get("overUnder")
+        if isinstance(over_under, dict):
+            selected = [
+                f"{key}: {value}" for key, value in list(over_under.items())[:4]
+                if value not in (None, "")
+            ]
+            if selected:
+                lines.append("  O/U — " + " | ".join(selected))
+    return lines
+
+
+def format_match_events(payload):
+    data = unwrap_api_data(payload)
+    rows = get_collection(data, "events", "items", "results")
+    lines = []
+    for event in rows[:8]:
+        if not isinstance(event, dict):
+            continue
+        minute = first_value(event, "minute", "time", "elapsed")
+        kind = first_value(event, "type", "eventType", "detail")
+        player = first_value(event, "playerName", "player", "scorer", "name")
+        if kind or player:
+            lines.append(
+                "• " + (f"{minute}' " if minute is not None else "")
+                + " — ".join(str(x) for x in (kind, as_named_text(player)) if x)
+            )
+    return lines
+
+
+def format_stat_rows(rows):
+    lines = []
+    for row in rows[:20]:
+        if not isinstance(row, dict):
+            continue
+        label = first_value(row, "type", "name", "statistic", "label")
+        home = first_value(row, "home", "homeValue", "homeTeam")
+        away = first_value(row, "away", "awayValue", "awayTeam")
+        if label is not None and (home is not None or away is not None):
+            lines.append(f"• {label}: {home if home is not None else '—'} – {away if away is not None else '—'}")
+    return lines
+
+
+async def matchintel(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """
+    Usage: /matchintel HOME TEAM vs AWAY TEAM
+    Finds a scheduled fixture and displays provider-backed match data.
+    """
+    query = " ".join(context.args).strip()
+    if not query:
+        await reply(
+            update,
+            "⚽ MATCH INTELLIGENCE\n\n"
+            "Usage: /matchintel HOME TEAM vs AWAY TEAM\n"
+            "Example: /matchintel Kaedi vs SNIM\n\n"
+            "The bot finds the upcoming fixture and checks match details, "
+            "lineups, statistics and available odds.",
+        )
+        return
+
+    await reply(update, "🔎 Finding the fixture and checking available match data...")
+
+    try:
+        raw_rows = await asyncio.to_thread(fetch_upcoming_fixture_rows, 14)
+        candidates = []
+        normal_query = query.casefold().replace(" v ", " vs ")
+        if " vs " in normal_query:
+            home_query, away_query = [part.strip() for part in normal_query.split(" vs ", 1)]
+        else:
+            home_query, away_query = normal_query, ""
+
+        for raw in raw_rows:
+            item = normalise_fixture(raw)
+            if not item:
+                continue
+            home = item["home_team"].casefold()
+            away = item["away_team"].casefold()
+            if away_query:
+                if home_query in home and away_query in away:
+                    candidates.append((raw, item))
+                elif home_query in away and away_query in home:
+                    candidates.append((raw, item))
+            elif home_query and (home_query in home or home_query in away):
+                candidates.append((raw, item))
+
+        if not candidates:
+            await reply(
+                update,
+                "❌ I couldn't find that match in the next 14 days of fixtures.\n"
+                "Check the team names or use /fixtures to see upcoming matches.",
+            )
+            return
+
+        if len(candidates) > 1:
+            lines = ["Several fixtures match. Narrow the search with both team names:", ""]
+            for _, item in candidates[:10]:
+                kickoff = item["kickoff_at"]
+                local_time = (
+                    kickoff.replace(tzinfo=timezone.utc).astimezone(EAT)
+                    if kickoff else None
+                )
+                lines.append(
+                    f"• {item['home_team']} vs {item['away_team']}"
+                    + (f" — {local_time:%d %b %H:%M EAT}" if local_time else "")
+                )
+            await reply(update, "\n".join(lines))
+            return
+
+        raw, item = candidates[0]
+        fixture_id = first_value(raw, "id", "fixtureId", "matchId", "match_id")
+        if fixture_id is None:
+            await reply(update, "⚠️ The fixture was found, but the provider did not supply a match ID.")
+            return
+
+        kickoff = item["kickoff_at"]
+        local_time = (
+            kickoff.replace(tzinfo=timezone.utc).astimezone(EAT)
+            if kickoff else None
+        )
+        header = [
+            "⚽ MATCH INTELLIGENCE",
+            "",
+            f"{item['home_team']} vs {item['away_team']}",
+            f"🏆 {item['competition'] or 'Competition unavailable'}"
+            + (f" | {item['country']}" if item["country"] else ""),
+            f"🕒 {local_time:%d %b %Y — %H:%M EAT}" if local_time else "🕒 Kick-off time unavailable",
+            f"📍 Status: {item['status'] or 'Scheduled'}",
+        ]
+
+        endpoint_results = await asyncio.gather(
+            asyncio.to_thread(goal_request, f"fixtures/{fixture_id}", {}),
+            asyncio.to_thread(goal_request, f"fixtures/{fixture_id}/lineups", {}),
+            asyncio.to_thread(goal_request, f"fixtures/{fixture_id}/statistics", {}),
+            asyncio.to_thread(goal_request, f"fixtures/{fixture_id}/odds", {}),
+            asyncio.to_thread(goal_request, f"fixtures/{fixture_id}/events", {}),
+            return_exceptions=True,
+        )
+        labels = ("DETAILS", "LINEUPS", "STATISTICS", "ODDS", "EVENTS")
+        results = dict(zip(labels, endpoint_results))
+
+        details = results["DETAILS"]
+        if not isinstance(details, Exception):
+            detail_data = unwrap_api_data(details)
+            if isinstance(detail_data, dict):
+                score_home = first_value(detail_data, "homeTeamScore", "homeScore")
+                score_away = first_value(detail_data, "awayTeamScore", "awayScore")
+                if score_home is not None or score_away is not None:
+                    header.append(f"📊 Score: {score_home if score_home is not None else '—'} – {score_away if score_away is not None else '—'}")
+
+        output = header + ["", "📋 LINEUPS"]
+        lineups = results["LINEUPS"]
+        if isinstance(lineups, Exception):
+            output.append("• Lineup endpoint unavailable: " + str(lineups)[:180])
+        else:
+            output.extend(format_match_lineups(lineups))
+
+        output.extend(["", "📈 MATCH STATISTICS"])
+        stats = results["STATISTICS"]
+        if isinstance(stats, Exception):
+            output.append("• Statistics unavailable from provider.")
+        else:
+            stat_lines = format_stat_rows(extract_match_statistics(stats))
+            output.extend(stat_lines or ["• No match statistics published yet (often normal before kick-off)."])
+
+        output.extend(["", "💹 AVAILABLE ODDS"])
+        odds_result = results["ODDS"]
+        if isinstance(odds_result, Exception):
+            output.append("• Odds endpoint unavailable for this match.")
+        else:
+            odds_lines = format_match_odds(odds_result)
+            output.extend(odds_lines or ["• No bookmaker prices returned for this match."])
+
+        output.extend(["", "🗓 MATCH EVENTS"])
+        events_result = results["EVENTS"]
+        if isinstance(events_result, Exception):
+            output.append("• Events not available.")
+        else:
+            event_lines = format_match_events(events_result)
+            output.extend(event_lines or ["• No events published yet."])
+
+        output.extend([
+            "",
+            "⚠️ DATA & MODEL STATUS",
+            "• This is verified match data, not yet a statistical betting prediction.",
+            "• Predicted lineups, injuries and suspensions are not inferred when no verified feed is returned.",
+            "• No BET / NO BET verdict is issued until market-specific probability models and price validation are integrated.",
+        ])
+
+        # Telegram messages have a 4096-character limit; split long reports safely.
+        message = "\n".join(output)
+        for start in range(0, len(message), 3800):
+            await reply(update, message[start:start + 3800])
+
+    except Exception as exc:
+        logger.exception("Match intelligence request failed")
+        await reply(update, f"❌ MATCH INTELLIGENCE FAILED\n\n{str(exc)[:700]}")
+
+
 # ============================================================
 # ODDS API STATUS
 # ============================================================
@@ -1579,6 +1911,7 @@ def main():
         ("leagues", leagues),
         ("syncleagues", syncleagues),
         ("leaguefixtures", leaguefixtures),
+        ("matchintel", matchintel),
         ("fixtures", fixtures),
         ("syncfixtures", syncfixtures),
         ("live", live),
