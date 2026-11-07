@@ -320,7 +320,8 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
         time.sleep(0.25)
     return games
 
-\ndef fetch_all(day: date | None = None):
+
+def fetch_all(day: date | None = None):
     """Fetch only providers with an implemented read-only adapter."""
     day = day or datetime.now(EAT).date()
     result = {"date": day.isoformat(), "bookmakers": {}, "errors": {}}
