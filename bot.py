@@ -7,6 +7,9 @@ import unicodedata
 import re
 import math
 import threading
+import json
+import time
+import copy
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -40,6 +43,50 @@ FIXTURE_RESPONSE_DIAGNOSTICS = []
 GOAL_API_COOLDOWN_UNTIL = None
 GOAL_API_COOLDOWN_LOCK = threading.Lock()
 GOAL_API_COOLDOWN_SECONDS = 60
+
+# Shared in-process response cache: Telegram commands read cached data first.
+# Successful responses are cached by endpoint + parameters. Expired entries
+# remain available as stale fallback if GOAL API returns 429 or is unreachable.
+GOAL_RESPONSE_CACHE = {}
+GOAL_RESPONSE_CACHE_LOCK = threading.RLock()
+GOAL_CACHE_STALE_SECONDS = 6 * 60 * 60
+
+def goal_cache_ttl(endpoint):
+    if endpoint == "fixtures" or endpoint.startswith("fixtures/date/"):
+        return 15 * 60
+    if endpoint == "fixtures/live":
+        return 30
+    if endpoint.startswith("fixtures/"):
+        return 10 * 60
+    if endpoint == "leagues":
+        return 24 * 60 * 60
+    return 5 * 60
+
+def goal_cache_key(endpoint, params):
+    return (str(endpoint), json.dumps(params or {}, sort_keys=True, default=str))
+
+def goal_cached_response(key, allow_stale=False):
+    with GOAL_RESPONSE_CACHE_LOCK:
+        entry = GOAL_RESPONSE_CACHE.get(key)
+        if not entry:
+            return None
+        age = time.time() - entry["saved_at"]
+        if age <= entry["ttl"] or (allow_stale and age <= GOAL_CACHE_STALE_SECONDS):
+            return copy.deepcopy(entry["payload"])
+    return None
+
+def goal_store_response(key, endpoint, payload):
+    with GOAL_RESPONSE_CACHE_LOCK:
+        GOAL_RESPONSE_CACHE[key] = {
+            "payload": copy.deepcopy(payload),
+            "saved_at": time.time(),
+            "ttl": goal_cache_ttl(endpoint),
+        }
+        # Keep memory bounded; remove entries older than the stale window.
+        cutoff = time.time() - GOAL_CACHE_STALE_SECONDS
+        for old_key, entry in list(GOAL_RESPONSE_CACHE.items()):
+            if entry["saved_at"] < cutoff:
+                GOAL_RESPONSE_CACHE.pop(old_key, None)
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -278,6 +325,14 @@ def response_metadata(payload):
 def goal_request(endpoint, params=None):
     global GOAL_API_COOLDOWN_UNTIL
 
+    cache_key = goal_cache_key(endpoint, params)
+    cached = goal_cached_response(cache_key)
+    if cached is not None:
+        logger.info("GOAL API cache hit: %s", endpoint)
+        return cached
+
+    stale_cached = goal_cached_response(cache_key, allow_stale=True)
+
     with GOAL_API_COOLDOWN_LOCK:
         cooldown_until = GOAL_API_COOLDOWN_UNTIL
         if cooldown_until and datetime.now(timezone.utc) < cooldown_until:
@@ -285,6 +340,9 @@ def goal_request(endpoint, params=None):
                 1,
                 int((cooldown_until - datetime.now(timezone.utc)).total_seconds())
             )
+            if stale_cached is not None:
+                logger.warning("Serving stale GOAL API cache during cooldown: %s", endpoint)
+                return stale_cached
             raise RuntimeError(
                 f"GOAL API is temporarily paused after a rate-limit response. "
                 f"Try again in about {remaining} seconds."
@@ -353,11 +411,19 @@ def goal_request(endpoint, params=None):
             if available:
                 rate_limit_details = " | Rate-limit headers: " + ", ".join(available)
 
+        if stale_cached is not None:
+            logger.warning("GOAL API HTTP %s; serving stale cache for %s", status, endpoint)
+            return stale_cached
+
         raise RuntimeError(
             f"GOAL API HTTP {status}: {body}{rate_limit_details}"
         ) from None
 
     except requests.RequestException as exc:
+
+        if stale_cached is not None:
+            logger.warning("GOAL API connection failed; serving stale cache for %s", endpoint)
+            return stale_cached
 
         raise RuntimeError(
             f"GOAL API connection error: "
@@ -414,6 +480,7 @@ def goal_request(endpoint, params=None):
         FIXTURE_RESPONSE_DIAGNOSTICS.append(diagnostic)
         del FIXTURE_RESPONSE_DIAGNOSTICS[4:]
 
+    goal_store_response(cache_key, endpoint, payload)
     return payload
 
 
