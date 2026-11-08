@@ -4957,7 +4957,7 @@ async def marketdata_command(update, context):
         lines.append("Half-time statistics: " + (", ".join(f"{k}={v}" for k, v in half_stats.items()) if half_stats else "not supplied by this competition/fixture"))
         lines.append(f"Player-stat response groups: {len(data['players'])} | Match events: {len(data['events'])}")
         lines.extend(["", "Provider data retrieval verified for this fixture only. Market-specific settlement is not enabled until the market's exact bookmaker rules are mapped and tested."])
-        await reply(update, "\\n".join(lines))
+        await reply(update, "\n".join(lines))
     except Exception as exc:
         await reply(update, f"⚠️ Match-statistics provider unavailable: {type(exc).__name__}: {str(exc)[:250]}")
 
@@ -5145,7 +5145,7 @@ async def playerprop_command(update, context):
     if len(parts) not in (4, 5):
         await reply(update, "Usage: /playerprop HOME vs AWAY | PLAYER NAME | METRIC | LINE [| YYYY-MM-DD]\nMetrics: shots, shots_on_target, goals, assists, yellow_cards, red_cards")
         return
-    fixture = re.split(r"\s+vs\\.?\\s+|\\s+v\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
+    fixture = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", parts[0], maxsplit=1, flags=re.I)
     if len(fixture) != 2:
         await reply(update, "Enter the fixture as HOME vs AWAY.")
         return
