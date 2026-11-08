@@ -1263,6 +1263,41 @@ async def process_slip_flow(update, context):
         return True
 
     try:
+        if state == "autobuild_target":
+            try:
+                target = float(message.lower().replace("odds", "").strip())
+            except ValueError:
+                await reply(update, "Enter your target combined odds, e.g. 2, 5, 10, 20 or 50.")
+                return True
+            if not math.isfinite(target) or target <= 1:
+                await reply(update, "Target odds must be greater than 1.00.")
+                return True
+            context.user_data["autobuild_target"] = target
+            context.user_data["slip_flow"] = "autobuild_legs"
+            await reply(update, f"Target set to {target:.2f}. How many legs do you want? Enter an exact number.")
+            return True
+
+        if state == "autobuild_legs":
+            try:
+                legs = int(message)
+            except ValueError:
+                await reply(update, "Enter an exact whole number of legs, e.g. 2, 5, 8 or 12.")
+                return True
+            target = float(context.user_data.get("autobuild_target") or 0)
+            if legs < 1 or legs > 100:
+                await reply(update, "Choose between 1 and 100 legs.")
+                return True
+            if target <= 1:
+                context.user_data.pop("slip_flow", None)
+                await reply(update, "Your target odds expired. Start the build again.")
+                return True
+            context.user_data["autobuild_config"] = {"target": target, "legs": legs}
+            context.user_data.pop("autobuild_target", None)
+            context.user_data.pop("slip_flow", None)
+            context.args = []
+            await autobuild_sportybet_command(update, context)
+            return True
+
         if state == "sportybet_build":
             if message.casefold() in ("validate", "confirm selections"):
                 raw_lines = context.user_data.pop("ai_ocr_lines", None) or []
@@ -1924,9 +1959,16 @@ async def autobuild_sportybet_command(update, context):
     message_parts = message_text.split(maxsplit=1)
     raw_tail = message_parts[1].strip() if len(message_parts) > 1 else ""
     args = raw_tail.split() if raw_tail else list(context.args or [])
-    target = 2.0
+    guided = context.user_data.pop("autobuild_config", None)
+    if guided:
+        args = []
+    if not guided and not args:
+        context.user_data["slip_flow"] = "autobuild_target"
+        await reply(update, "🎟️ BUILD YOUR SPORTYBET SLIP\n\nWhat target combined odds do you want?\nExample: 2, 5, 10, 20 or 50.\n/cancel to stop.")
+        return
+    target = float(guided["target"]) if guided else 2.0
     # Accept decimal odds and shorthand such as /autobuild 50odds.
-    if args and re.fullmatch(r"\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
+    if not guided and args and re.fullmatch(r"\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
         target = float(re.sub(r"odds$", "", str(args.pop(0)), flags=re.I))
         if not math.isfinite(target) or target <= 1.0:
             await reply(update, "Target odds must be greater than 1.00.")
@@ -1934,13 +1976,13 @@ async def autobuild_sportybet_command(update, context):
 
     # No fixed leg ceiling: use the available distinct fixtures unless the user
     # explicitly requests a maxlegs/legs value.
-    min_legs = 1
-    max_legs = None
-    explicit_max_legs = False
+    min_legs = int(guided["legs"]) if guided else 1
+    max_legs = int(guided["legs"]) if guided else None
+    explicit_max_legs = bool(guided)
 
     # Scan all fixtures and every retrieved market the scoreline model supports.
     # Default parlay excludes BTTS and Under 2.5 per the user's standing preferences.
-    rank_mode = "parlay"
+    rank_mode = "value"
     market_parts = []
     for token in args:
         lowered = token.casefold()
@@ -1979,9 +2021,15 @@ async def autobuild_sportybet_command(update, context):
         await reply(update, "Leg count must use positive whole numbers and minimum cannot exceed maximum.")
         return
 
+    if not guided and not explicit_max_legs:
+        context.user_data["autobuild_target"] = target
+        context.user_data["slip_flow"] = "autobuild_legs"
+        await reply(update, f"Target combined odds: {target:.2f}.\nHow many legs do you want? Enter an exact number.")
+        return
+
     market_filter = ",".join(market_parts) if market_parts else "all"
-    leg_plan = f"{min_legs} or more different matches" if not explicit_max_legs else f"{min_legs}–{max_legs} different matches"
-    await reply(update, f"🤖 SPORTYBET SCAN — TARGET {target:.2f}\nBuilding {leg_plan}; scanning upcoming fixtures and supported markets…")
+    leg_plan = f"exactly {min_legs} legs"
+    await reply(update, f"🔎 Scanning fixtures and every model-supported SportyBet market for target {target:.2f}, {leg_plan}…")
     try:
         rows, diagnostics = await asyncio.to_thread(
             scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
@@ -2016,7 +2064,7 @@ async def autobuild_sportybet_command(update, context):
             return
         build = build_accumulator(
             rows, target, min_legs=min_legs, max_legs=effective_max_legs,
-            ranking=("odds" if rank_mode == "parlay" else rank_mode),
+            ranking=("value" if rank_mode == "parlay" else rank_mode),
             max_candidates=None,
         )
         chosen = build["selections"]
@@ -2052,11 +2100,11 @@ async def autobuild_sportybet_command(update, context):
                 f"{i}. {leg['fixture']} — {leg['market']}: "
                 f"{leg['selection']} @ {leg['odds']:.2f}"
             )
-            lines.append(f"   PUNTER model hit estimate: {leg['probability']:.1%}")
+
         lines.extend([
             "",
-            f"Estimated accumulator hit probability: {combined_probability:.2%}",
-            "This multiplies individual model estimates and assumes different matches are independent. It is experimental and uncalibrated, not a guarantee.",
+            "Internal assessment completed using the available statistical model and live bookmaker prices.",
+            "Only supported markets with usable model evidence are considered. No guaranteed profit.",
         ])
         if not target_reached:
             lines.append("")
