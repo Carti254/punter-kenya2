@@ -22,3 +22,5 @@ jobs:
         run: python -m py_compile bot.py sportybet_client.py accumulator_engine.py autobuild_research.py
       - name: Test automatic accumulator construction
         run: python -m unittest discover -s tests -p "test_accumulator_engine.py" -v
+      - name: Diagnose SportyBet public market catalogue
+        run: python scripts/probe_sportybet_feed.py
