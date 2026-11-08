@@ -33,6 +33,8 @@ from prediction_validation import brier_score, log_loss, fit_temperature, apply_
 from football_stats_provider import fetch_match_market_data, FootballStatsError
 from market_settlement import settle_bet_with_market_evidence
 from ai_assistant import ai_is_configured, interpret_request, read_slip_image
+from premium_intelligence import market_probabilities, assess_price, rollover_projection
+from user_portfolio import save_bankroll, get_settings, save_rollover, calculate_user_stake
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -5124,6 +5126,67 @@ async def betstats_command(update, context):
         await reply(update, f"⚠️ Bet statistics unavailable: {type(exc).__name__}: {str(exc)[:250]}")
 
 
+
+
+async def bankroll_command(update, context):
+    try:
+        if context.args:
+            await asyncio.to_thread(save_bankroll, update.effective_user.id, float(context.args[0]))
+        settings = await asyncio.to_thread(get_settings, update.effective_user.id)
+        amount = settings.get("bankroll")
+        if amount is None:
+            await reply(update, "Bankroll not set. Use /bankroll AMOUNT (KSh).")
+        else:
+            await reply(update, f"Saved planning bankroll: KSh {float(amount):,.2f}\nUse /stake PROBABILITY ODDS for a capped fractional-Kelly illustration.")
+    except Exception as exc:
+        await reply(update, f"Bankroll setting failed: {type(exc).__name__}: {str(exc)[:180]}\nUsage: /bankroll 1000")
+
+
+async def stake_command(update, context):
+    if len(context.args or []) != 2:
+        await reply(update, "Usage: /stake PROBABILITY ODDS\nExample: /stake 0.58 2.10")
+        return
+    try:
+        probability, odds = map(float, context.args)
+        result = await asyncio.to_thread(calculate_user_stake, update.effective_user.id, probability, odds)
+        await reply(update, f"STAKE SCENARIO\nBankroll: KSh {result['bankroll']:,.2f}\nStake (25% Kelly, capped at 2%): KSh {result['stake']:,.2f}\n{result['warning']}")
+    except Exception as exc:
+        await reply(update, f"Stake calculation unavailable: {type(exc).__name__}: {str(exc)[:180]}")
+
+
+async def rollover_command(update, context):
+    if len(context.args or []) != 2:
+        await reply(update, "Usage: /rollover DAYS DAILY_TARGET_ODDS\nExample: /rollover 5 2")
+        return
+    try:
+        days, target = int(context.args[0]), float(context.args[1])
+        await asyncio.to_thread(save_rollover, update.effective_user.id, days, target)
+        settings = await asyncio.to_thread(get_settings, update.effective_user.id)
+        projection = rollover_projection(float(settings.get("bankroll") or 0), days, target)
+        await reply(update, f"ROLLOVER PLAN SAVED\nDuration: {days} days\nDaily target odds: {target:.2f}\nIllustrative gross if every day won: KSh {projection['illustrative_gross_if_every_day_won']:,.2f}\n{projection['warning']}")
+    except Exception as exc:
+        await reply(update, f"Rollover setup failed: {type(exc).__name__}: {str(exc)[:180]}")
+
+
+async def marketsim_command(update, context):
+    raw = " ".join(context.args or [])
+    parts = [part.strip() for part in raw.split("|")]
+    if len(parts) != 4:
+        await reply(update, "Usage: /marketsim HOME_RATE | AWAY_RATE | MARKET | BOOKMAKER_ODDS\nExample: /marketsim 1.45 | 1.10 | Over 2.5 | 2.05\nSupply researched rates; this is a scenario calculator, not a fixture forecast.")
+        return
+    try:
+        home_rate, away_rate = float(parts[0]), float(parts[1])
+        markets = await asyncio.to_thread(market_probabilities, home_rate, away_rate)
+        market = parts[2]
+        if market not in markets or market.startswith("_"):
+            raise ValueError("Unsupported market label. Use: " + ", ".join(k for k in markets if not k.startswith("_")))
+        assessment = assess_price(markets[market], float(parts[3]))
+        await reply(update, f"MODEL SCENARIO — NOT A VERIFIED PICK\nAssumed rates: {home_rate:.2f} / {away_rate:.2f}\nMarket: {market}\nEstimated probability: {assessment['probability']:.1%}\nImplied probability: {assessment['implied_probability']:.1%}\nEstimated edge: {assessment['edge']:+.1%}\nFair odds: {assessment['fair_odds']:.2f}\nExpected ROI estimate: {assessment['expected_roi']:+.1%}\nPoisson tail mass omitted: {markets['_tail_mass']:.2%}\nIndependent-Poisson assumptions; not calibrated.")
+    except Exception as exc:
+        await reply(update, f"Market scenario failed: {type(exc).__name__}: {str(exc)[:220]}")
+
+
+
 def main():
 
     if not BOT_TOKEN:
@@ -5180,6 +5243,11 @@ def main():
         ("betlog", betlog_command),
         ("betsettle", betsettle_command),
         ("betstats", betstats_command),
+        ("performance", betstats_command),
+        ("bankroll", bankroll_command),
+        ("stake", stake_command),
+        ("rollover", rollover_command),
+        ("marketsim", marketsim_command),
         ("betresults", betresults_command),
         ("marketdata", marketdata_command),
         ("fixtures", fixtures),
