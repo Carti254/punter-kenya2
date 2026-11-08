@@ -136,7 +136,7 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
             panels.append({"role": role, "market": key_name, "available": False,
                            "reason": f"Insufficient recent data (home {len(h)}, away {len(a)}; minimum 3 each)."})
             continue
-        mean = (sum(h) / len(h) + sum(a) / len(a)) if field != "half_time_goals" else ((sum(h) / len(h) + sum(a) / len(a)) / 2)
+        mean = (sum(h) / len(h) + sum(a) / len(a)) / 2
         panels.append({
             "role": role, "market": key_name, "available": True,
             "home_sample": len(h), "away_sample": len(a), "expected_total": mean,
