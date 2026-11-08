@@ -4510,7 +4510,7 @@ async def betlog_command(update, context):
     if len(parts) not in (5, 6):
         await reply(update, "Usage: /betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER]\nExample: /betlog Arsenal vs Chelsea | 1X2 | Arsenal | 2.10 | 100 | SportyBet")
         return
-    fixture = re.split(r"\s+vs\\.?\\s+|\\s+v\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
+    fixture = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", parts[0], maxsplit=1, flags=re.I)
     if len(fixture) != 2:
         await reply(update, "Enter the fixture as HOME vs AWAY.")
         return
