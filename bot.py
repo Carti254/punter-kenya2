@@ -35,6 +35,7 @@ from market_settlement import settle_bet_with_market_evidence
 from ai_assistant import ai_is_configured, interpret_request, read_slip_image
 from premium_intelligence import market_probabilities, assess_price, rollover_projection
 from user_portfolio import save_bankroll, get_settings, save_rollover, calculate_user_stake
+from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -4469,55 +4470,8 @@ async def compare(
 # ============================================================
 
 def save_bookmaker_odds_snapshots(games):
-    """Persist timestamped prices for later movement review; fail safely."""
-    if not games:
-        return 0
-    connection = get_connection()
-    saved = 0
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS punter_odds_snapshots (
-                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-                    bookmaker VARCHAR(40) NOT NULL,
-                    event_id VARCHAR(100) NOT NULL,
-                    home_team VARCHAR(180) NOT NULL,
-                    away_team VARCHAR(180) NOT NULL,
-                    kickoff_eat VARCHAR(32) NULL,
-                    market_name VARCHAR(180) NOT NULL,
-                    selection_name VARCHAR(180) NOT NULL,
-                    handicap_value VARCHAR(80) NULL,
-                    decimal_odds DECIMAL(10,3) NOT NULL,
-                    fetched_at DATETIME NOT NULL,
-                    INDEX idx_odds_event (bookmaker, event_id),
-                    INDEX idx_odds_fixture (home_team, away_team),
-                    INDEX idx_odds_time (fetched_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """)
-            fetched_at = now_utc_naive()
-            for game in games:
-                for market in game.get("markets", []):
-                    cursor.execute("""
-                        INSERT INTO punter_odds_snapshots
-                        (bookmaker, event_id, home_team, away_team, kickoff_eat,
-                         market_name, selection_name, handicap_value, decimal_odds, fetched_at)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    """, (
-                        str(game.get("bookmaker") or "Unknown")[:40],
-                        str(game.get("event_id") or "")[:100],
-                        str(game.get("home") or "Unknown")[:180],
-                        str(game.get("away") or "Unknown")[:180],
-                        str(game.get("kickoff_eat") or "")[:32] or None,
-                        str(market.get("market") or "Unknown")[:180],
-                        str(market.get("selection") or "Unknown")[:180],
-                        str(market.get("handicap"))[:80] if market.get("handicap") is not None else None,
-                        market.get("odds"),
-                        fetched_at,
-                    ))
-                    saved += 1
-        return saved
-    finally:
-        connection.close()
+    """Persist timestamped prices through the shared tracking service."""
+    return save_price_observations(games)
 
 
 async def bookmakers_command(update, context):
@@ -5154,7 +5108,61 @@ async def stake_command(update, context):
         await reply(update, f"Stake calculation unavailable: {type(exc).__name__}: {str(exc)[:180]}")
 
 
-async def rollover_command(update, context):
+async async def clv_command(update, context):
+    try:
+        report = await asyncio.to_thread(closing_line_value, update.effective_user.id)
+        if not report["matched"]:
+            await reply(update, f"📉 CLOSING-LINE VALUE\nMatched bets: 0 of {report['bets_checked']} settled bets.\nExact matching odds snapshots are required. Automatic price capture runs every 30 minutes while the bot is online.")
+            return
+        lines = ["📉 CLOSING-LINE VALUE",
+                 f"Matched bets: {report['matched']} of {report['bets_checked']}",
+                 f"Average CLV: {report['average_clv']:+.2%}",
+                 f"Positive: {report['positive']} | Negative: {report['negative']}", "",
+                 "Positive CLV means your taken price beat the latest captured price. This measures price quality, not profit."]
+        await reply(update, "\n".join(lines))
+    except Exception as exc:
+        await reply(update, f"CLV report unavailable: {type(exc).__name__}: {str(exc)[:180]}")
+
+
+async def rolloverstatus_command(update, context):
+    try:
+        report = await asyncio.to_thread(rollover_status, update.effective_user.id)
+        if not report["configured"]:
+            await reply(update, "No rollover plan saved. Use /rollover DAYS DAILY_TARGET_ODDS.")
+            return
+        lines = ["🔁 ROLLOVER PROGRESS", f"Status: {report['status']}",
+                 f"Progress: {report['completed']}/{report['days']} days",
+                 f"Target odds/day: {report['target']:.2f}", f"Remaining: {report['remaining']}",
+                 f"Wins: {report['wins']} | Losses: {report['losses']}", "",
+                 "Record honestly with /rolloverday WON|LOST|MISSED [ACTUAL_ODDS]. A loss breaks the sequence."]
+        await reply(update, "\n".join(lines))
+    except Exception as exc:
+        await reply(update, f"Rollover progress unavailable: {type(exc).__name__}: {str(exc)[:180]}")
+
+
+async def rolloverday_command(update, context):
+    args = list(context.args or [])
+    if not args:
+        await reply(update, "Usage: /rolloverday WON|LOST|MISSED [ACTUAL_ODDS]")
+        return
+    try:
+        result = await asyncio.to_thread(record_rollover_day, update.effective_user.id, args[0],
+                                         float(args[1]) if len(args) > 1 else None)
+        await reply(update, f"Rollover day {result['day']}/{result['days']} recorded: {result['result']}. Status: {result['status']}. Use /rolloverstatus.")
+    except Exception as exc:
+        await reply(update, f"Could not record rollover day: {type(exc).__name__}: {str(exc)[:180]}")
+
+
+async def automatic_odds_snapshot_job(context):
+    try:
+        result = await asyncio.to_thread(capture_current_prices)
+        logger.info("Scheduled odds capture saved %s prices across %s events; feed errors=%s",
+                    result["saved"], result["events"], list(result["errors"]))
+    except Exception:
+        logger.exception("Scheduled bookmaker price capture failed")
+
+
+def rollover_command(update, context):
     if len(context.args or []) != 2:
         await reply(update, "Usage: /rollover DAYS DAILY_TARGET_ODDS\nExample: /rollover 5 2")
         return
@@ -5246,7 +5254,7 @@ def main():
         ("performance", betstats_command),
         ("bankroll", bankroll_command),
         ("stake", stake_command),
-        ("rollover", rollover_command),
+        ("rollover", rollover_command),\n        ("rolloverstatus", rolloverstatus_command),\n        ("rolloverday", rolloverday_command),\n        ("clv", clv_command),
         ("marketsim", marketsim_command),
         ("betresults", betresults_command),
         ("marketdata", marketdata_command),
