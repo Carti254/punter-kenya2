@@ -1267,7 +1267,7 @@ async def process_slip_flow(update, context):
     try:
         if state == "autobuild_target":
             try:
-                target = float(message.lower().replace("odds", "").strip())
+                target = float(message.lower().replace("odds", "").replace(",", "").strip())
             except ValueError:
                 await reply(update, "Enter your target combined odds, e.g. 2, 5, 10, 20 or 50.")
                 return True
@@ -2051,8 +2051,8 @@ async def autobuild_sportybet_command(update, context):
         return
     target = float(guided["target"]) if guided else 2.0
     # Accept decimal odds and shorthand such as /autobuild 50odds.
-    if not guided and args and re.fullmatch(r"\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
-        target = float(re.sub(r"odds$", "", str(args.pop(0)), flags=re.I))
+    if not guided and args and re.fullmatch(r"\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:odds)?|\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
+        target = float(re.sub(r"odds$", "", str(args.pop(0)).replace(",", ""), flags=re.I))
         if not math.isfinite(target) or target <= 1.0:
             await reply(update, "Target odds must be greater than 1.00.")
             return
