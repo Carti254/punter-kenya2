@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import time
 import requests
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 BASE = "https://www.sportybet.com/api/ke/factsCenter/pcUpcomingEvents"
 HEADERS = {
@@ -56,8 +58,15 @@ def main() -> None:
                 "tournaments": len(tournaments),
                 "events": len(events),
                 "sample_fixtures": [
-                    f"{event.get('homeTeamName')} vs {event.get('awayTeamName')}"
-                    for event in events[:5]
+                    {
+                        "fixture": f"{event.get('homeTeamName')} vs {event.get('awayTeamName')}",
+                        "kickoff_eat": datetime.fromtimestamp(
+                            int(event.get("estimateStartTime") or 0) / 1000,
+                            timezone.utc,
+                        ).astimezone(ZoneInfo("Africa/Nairobi")).strftime("%Y-%m-%d %H:%M"),
+                    }
+                    for event in events[:10]
+                    if event.get("estimateStartTime")
                 ],
                 "sample_market_ids": sorted({
                     str(market.get("id"))
