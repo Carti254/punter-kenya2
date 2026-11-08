@@ -4053,8 +4053,10 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             # This avoids needless network calls for fixtures absent from SportyBet.
             matches = find_bookmaker_event(day_games, home_name, away_name)
             if not matches:
+                diagnostics.append(f"{day.isoformat()}: fixture not matched to SportyBet — {home_name} vs {away_name}")
                 progress(f"{day.isoformat()}: no SportyBet match for {home_name} vs {away_name}.")
                 continue
+            diagnostics.append(f"{day.isoformat()}: matched SportyBet fixture — {home_name} vs {away_name}")
             matched_events += len(matches)
             folder = str(raw.get("leagueShortcut") or "").strip()
             if folder not in historical_cache:
