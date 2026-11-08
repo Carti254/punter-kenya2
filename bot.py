@@ -1422,7 +1422,15 @@ async def convat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("pending_convat", None)
     except ConvatError as exc:
         logger.warning("Convat conversion rejected: status=%s code=%s", exc.status, exc.code)
-        await query.edit_message_text("⚠️ CONVERSION NOT COMPLETED\n\n" + str(exc)[:250] + "\n\nNo new booking code is being claimed. The pending request is retained for a safe retry.")
+        retry_keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔁 Retry safely", callback_data="bc:confirm"),
+            InlineKeyboardButton("✖️ Cancel", callback_data="bc:cancel"),
+        ]])
+        await query.edit_message_text(
+            "⚠️ CONVERSION NOT COMPLETED\n\n" + str(exc)[:250]
+            + "\n\nNo new booking code is being claimed. Retry reuses the same idempotency key.",
+            reply_markup=retry_keyboard,
+        )
     except Exception as exc:
         logger.exception("Unexpected Convat conversion error")
         await query.edit_message_text(f"⚠️ Conversion could not be verified ({type(exc).__name__}). No code will be displayed unless the provider returns one.")
@@ -3892,10 +3900,8 @@ async def bookmakers_command(update, context):
             lines.append(f"✅ {name}: {item['events']} events | {item['priced_events']} with markets")
         else:
             lines.append(f"⚠️ {name}: " + result["errors"].get(name, "No response"))
-    lines.extend(["", "OTHER KENYAN BOOKMAKERS"])
-    for name, reason in result.get("unavailable", {}).items():
-        lines.append(f"⏸️ {name}: {reason}")
-    lines.extend(["", "These are read-only public feed checks. A successful response confirms data retrieval, not guaranteed continuous availability."])
+    lines.extend(["", "PUNTER KENYA bookmaker coverage: Betika + SportyBet only."])
+    lines.extend(["These are read-only public odds-feed checks. Booking-code conversion uses a separate Convat integration. A successful feed response does not guarantee continuous availability."])
     await reply(update, "\n".join(lines))
 
 
