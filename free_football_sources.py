@@ -234,6 +234,34 @@ def _external_probability(prediction, market, selection):
     return _line_probability(prediction, market, selection)
 
 
+def _bsd_consensus_price(odds_payload, market, selection):
+    """Return an exact BSD consensus reference price where the free feed quotes it."""
+    if not isinstance(odds_payload, dict):
+        return None
+    odds = odds_payload.get("odds") or odds_payload
+    market_text = _normal(f"{market} {selection}")
+    selection_text = _normal(selection)
+    key = None
+    if any(term in market_text for term in ("1x2", "match result", "full time result", "fulltime result")):
+        key = {"1": "home_win", "home": "home_win", "home win": "home_win",
+               "x": "draw", "draw": "draw", "tie": "draw",
+               "2": "away_win", "away": "away_win", "away win": "away_win"}.get(selection_text)
+    elif any(term in market_text for term in ("total goals", "over under", "goals over", "goals under")):
+        match = re.search(r"(1[.]5|2[.]5|3[.]5)", str(selection))
+        if match:
+            suffix = match.group(1).replace(".", "")
+            direction = "under" if "under" in selection_text else "over" if "over" in selection_text else ""
+            if direction:
+                key = f"{direction}_{suffix}_goals"
+    if not key:
+        return None
+    try:
+        price = float(odds.get(key))
+        return price if 1.0 < price < 10000 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_prediction_1x2(prediction):
     markets = (prediction or {}).get("markets") or {}
     result = markets.get("match_result") or {}
@@ -346,6 +374,13 @@ def enrich_candidates(rows: list[dict], max_fixtures: int = 30):
             if p1x2:
                 row["external_1x2_probabilities"] = p1x2
             external_p = _external_probability(prediction, row.get("market"), row.get("selection"))
+            reference_price = _bsd_consensus_price(
+                (evidence.get("bsd") or {}).get("consensus_odds"),
+                row.get("market"), row.get("selection"),
+            )
+            if reference_price is not None:
+                row["bsd_consensus_odds"] = reference_price
+                row["price_vs_bsd_consensus"] = float(row.get("odds") or 0) / reference_price - 1.0
             if external_p is not None:
                 row["external_market_probability"] = external_p
                 own_p = row.get("probability")
