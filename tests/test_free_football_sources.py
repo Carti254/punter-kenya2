@@ -5,6 +5,7 @@ from free_football_sources import (
     _same_team,
     _extract_prediction_1x2,
     _external_probability,
+    _bsd_consensus_price,
     _match_event,
 )
 
@@ -52,6 +53,12 @@ class FreeFootballSourceTests(unittest.TestCase):
         prediction = {"markets": {"over_under": {"prob_over_25": 44.8}}}
         self.assertAlmostEqual(_external_probability(prediction, "Total Goals", "Over 2.5"), 0.448)
         self.assertAlmostEqual(_external_probability(prediction, "Total Goals", "Under 2.5"), 0.552)
+
+    def test_bsd_consensus_price_matches_exact_market(self):
+        odds = {"odds": {"home_win": 2.10, "over_25_goals": 1.85}}
+        self.assertAlmostEqual(_bsd_consensus_price(odds, "1X2", "Home"), 2.10)
+        self.assertAlmostEqual(_bsd_consensus_price(odds, "Total Goals", "Over 2.5"), 1.85)
+        self.assertIsNone(_bsd_consensus_price(odds, "Total Corners", "Over 9.5"))
 
     def test_fixture_match_requires_home_away_orientation(self):
         rows = [{
