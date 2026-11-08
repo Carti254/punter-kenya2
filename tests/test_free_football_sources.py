@@ -4,6 +4,7 @@ from free_football_sources import (
     _line_probability,
     _same_team,
     _extract_prediction_1x2,
+    _external_probability,
     _match_event,
 )
 
@@ -39,6 +40,18 @@ class FreeFootballSourceTests(unittest.TestCase):
         self.assertEqual(_extract_prediction_1x2(prediction), {
             "prob_home": 0.45, "prob_draw": 0.30, "prob_away": 0.25
         })
+
+    def test_bsd_result_probability_maps_to_exact_selection(self):
+        prediction = {"markets": {"match_result": {
+            "prob_home": 45, "prob_draw": 30, "prob_away": 25
+        }}}
+        self.assertAlmostEqual(_external_probability(prediction, "1X2", "Home"), 0.45)
+        self.assertAlmostEqual(_external_probability(prediction, "1X2", "Draw"), 0.30)
+
+    def test_bsd_goal_total_probability_maps_to_exact_line(self):
+        prediction = {"markets": {"over_under": {"prob_over_25": 44.8}}}
+        self.assertAlmostEqual(_external_probability(prediction, "Total Goals", "Over 2.5"), 0.448)
+        self.assertAlmostEqual(_external_probability(prediction, "Total Goals", "Under 2.5"), 0.552)
 
     def test_fixture_match_requires_home_away_orientation(self):
         rows = [{
