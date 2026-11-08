@@ -343,7 +343,7 @@ def enrich_candidates(rows: list[dict], max_fixtures: int = 30):
                     # diagnostic, not an unvalidated model blend.
                     row["external_model_disagreement"] = abs(float(own_p) - max(p1x2.values()))
             if row.get("probability") is None:
-                external_p = _line_probability(prediction, row.get("market"), row.get("selection"))
+                external_p = _external_probability(prediction, row.get("market"), row.get("selection"))
                 if external_p is not None:
                     row["probability"] = external_p
                     row["probability_source"] = "BSD free football model — exact total-corners line"
