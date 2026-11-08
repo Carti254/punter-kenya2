@@ -1,5 +1,6 @@
 """Auditable bet logging, automatic result matching and settlement helpers."""
 from decimal import Decimal, InvalidOperation
+from datetime import date, datetime, timezone
 from database import get_connection
 
 
@@ -112,3 +113,18 @@ def bet_statistics(user_id):
             return cursor.fetchone()
     finally:
         connection.close()
+
+
+def utc_match_date(kickoff):
+    """Return the UTC calendar date used by open-matchday result CSVs."""
+    if isinstance(kickoff, date) and not isinstance(kickoff, datetime):
+        return kickoff
+    if isinstance(kickoff, str):
+        kickoff = datetime.fromisoformat(kickoff.strip().replace("Z", "+00:00"))
+    if not isinstance(kickoff, datetime):
+        raise TypeError("Kick-off must be a date, datetime or ISO timestamp.")
+    if kickoff.tzinfo is None:
+        kickoff = kickoff.replace(tzinfo=timezone.utc)
+    else:
+        kickoff = kickoff.astimezone(timezone.utc)
+    return kickoff.date()
