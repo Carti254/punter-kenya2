@@ -31,9 +31,9 @@ PUNTER KENYA is an independent project and is not affiliated with open-matchday.
 - `/live` — explains current live-data limitations.
 - `/calculator ODDS STAKE` — calculate potential returns and implied probability.
 - `/dbtest` — test the database connection.
-- `/calculator` — use the betting calculator.\n- `/bookies` — check Betika and BetPawa public odds-feed availability for today.\n- `/odds HOME vs AWAY [today|tomorrow]` — retrieve and compare prices returned for a named fixture.
+- `/calculator` — use the betting calculator.\n- `/bookies` — check Betika and SportyBet public odds-feed availability for today.\n- `/odds HOME vs AWAY [today|tomorrow]` — retrieve and compare prices returned for a named fixture.
 
-The pre-match forecast uses a basic Poisson model based on up to 10 recent completed results per team in the same competition. It requires at least five usable results for each team. It reports estimated 1X2 and goal probabilities, recent form and a most-likely score; these are not guarantees and do not account for injuries, suspensions, xG or lineups. If the provider has insufficient history, the bot clearly withholds the forecast.\n\nLive scores, confirmed starting lineups, live events and verified live bookmaker APIs are **not implemented**. The feature branch contains experimental read-only Betika and BetPawa public-endpoint adapters; access and market completeness are not guaranteed. Do not treat scheduled fixtures as live matches or model output as a betting guarantee.
+The pre-match forecast uses a basic Poisson model based on up to 10 recent completed results per team in the same competition. It requires at least five usable results for each team. It reports estimated 1X2 and goal probabilities, recent form and a most-likely score; these are not guarantees and do not account for injuries, suspensions, xG or lineups. If the provider has insufficient history, the bot clearly withholds the forecast.\n\nLive scores, confirmed starting lineups, live events and verified live bookmaker APIs are **not implemented**. The bot uses read-only Betika and SportyBet public odds-feed adapters; access and market completeness are not guaranteed. Do not treat scheduled fixtures as live matches or model output as a betting guarantee.
 
 
 ## Full Intelligence Centre (v4)
@@ -130,3 +130,17 @@ The bookmaker engine is deliberately isolated on the `feature/bookmaker-odds-eng
 - `/accumulator [target_odds]`
 
 The scanner combines the open-matchday recent-results Poisson estimate with read-only Betika/BetPawa prices returned at query time. It excludes BTTS and Under 2.5. Minimum estimated probability is 42% for 1X2 and 60% for goal overs; estimated expected value must be at least +3%. This model is experimental and uncalibrated, does not adjust for confirmed lineups, injuries, xG or opponent strength, and does not guarantee profit. The accumulator's probability product assumes independent legs and is explicitly not a calibrated combined probability. A NO BET result is valid.
+
+## Bookmaker coverage and booking-code conversion
+
+PUNTER KENYA is intentionally limited to **Betika** and **SportyBet Kenya**.
+
+- Odds comparison reads the available public feeds for Betika and SportyBet.
+- Booking-code conversion is implemented through the documented Convat server API: **Betika → SportyBet Kenya**.
+- The bot previews the Betika code and its legs before asking the user to confirm conversion.
+- Conversion uses exact totals lines, reports every unmatched leg, and displays a new code only when Convat returns one.
+- Safe retries reuse the same idempotency key to avoid creating duplicate coupons.
+- Configure `CONVAT_API_KEY` in the hosting environment after Convat issues an evaluation key. The default API host is `https://eval-api.convat.io/v1`; set `CONVAT_API_BASE_URL=https://api.convat.io/v1` only when using a production key.
+- The API key must remain a server-side secret. Never put it in Telegram messages, source code or a public repository.
+
+Reverse conversion (SportyBet Kenya → Betika), and bookmaker-code editing, merging, splitting or building from scratch are not advertised as supported by the current integration. The bot must not represent internal slip records as bookmaker-issued codes.
