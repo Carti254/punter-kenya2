@@ -85,14 +85,23 @@ def refresh_specialist_forecasts(api_key=None, session=None, limit=300):
             cursor.execute("""
                 SELECT id,fixture_key,market,selection
                 FROM punter_forecast_results
-                WHERE outcome IS NULL AND fixture_key LIKE 'api-football:%'
+                WHERE outcome IS NULL AND (fixture_key LIKE 'api-football:%' OR fixture_key LIKE 'api-football-player:%')
                 ORDER BY forecast_at LIMIT %s
             """, (max(1, min(int(limit), 1000)),))
             forecasts = cursor.fetchall()
     finally:
         connection.close()
-    fixture_ids = sorted({int(str(row["fixture_key"]).split(":", 1)[1]) for row in forecasts
-                          if str(row["fixture_key"]).split(":", 1)[-1].isdigit()})
+    fixture_ids = set()
+    for row in forecasts:
+        parts = str(row["fixture_key"]).split(":")
+        try:
+            if len(parts) >= 2 and parts[0] == "api-football":
+                fixture_ids.add(int(parts[1]))
+            elif len(parts) == 3 and parts[0] == "api-football-player":
+                fixture_ids.add(int(parts[1]))
+        except (TypeError, ValueError):
+            continue
+    fixture_ids = sorted(fixture_ids)
     settled_ids, seen = set(), {}
     stat_aliases = {
         "corners": ("corner kicks", "corners"),
@@ -124,10 +133,55 @@ def refresh_specialist_forecasts(api_key=None, session=None, limit=300):
                 except (TypeError, ValueError):
                     continue
             by_id[team_id] = values
+        player_forecasts = [
+            row for row in forecasts
+            if str(row["fixture_key"]).startswith(f"api-football-player:{fixture_id}:")
+        ]
+        player_stats = {}
+        if player_forecasts:
+            player_rows = _get("players", {"fixture": fixture_id}, key, session)
+            for team_row in player_rows:
+                for player_row in team_row.get("players") or []:
+                    player = player_row.get("player") or {}
+                    stats = (player_row.get("statistics") or [{}])[0]
+                    try:
+                        player_id = int(player.get("id") or 0)
+                        minutes = float((stats.get("games") or {}).get("minutes") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if player_id and minutes > 0:
+                        player_stats[player_id] = stats
         for row in forecasts:
-            if row["fixture_key"] != f"api-football:{fixture_id}":
-                continue
+            fixture_key = str(row["fixture_key"])
             market = str(row["market"]).casefold()
+            if fixture_key.startswith(f"api-football-player:{fixture_id}:"):
+                try:
+                    player_id = int(fixture_key.split(":")[2])
+                except (IndexError, ValueError):
+                    continue
+                stats = player_stats.get(player_id)
+                if not stats:
+                    continue
+                player_metric = {
+                    "player_shots": ("shots", "total"),
+                    "player_shots_on_target": ("shots", "on"),
+                    "player_goals": ("goals", "total"),
+                    "player_assists": ("goals", "assists"),
+                    "player_yellow_cards": ("cards", "yellow"),
+                    "player_red_cards": ("cards", "red"),
+                }.get(market)
+                if not player_metric:
+                    continue
+                category, field = player_metric
+                value = (stats.get(category) or {}).get(field)
+                if value is None:
+                    continue
+                outcome = _binary_market_outcome(market, row["selection"], float(value))
+                if outcome is not None:
+                    seen[int(row["id"])] = outcome
+                continue
+            if fixture_key != f"api-football:{fixture_id}":
+                continue
             if market == "half_time_goals":
                 half = (fixture.get("score") or {}).get("halftime") or {}
                 if half.get("home") is None or half.get("away") is None:
