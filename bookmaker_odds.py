@@ -388,7 +388,9 @@ def canonical_team(value):
 
 
 def _team_match_score(left, right):
-    """Return a conservative similarity score for two team names."""
+    """Score common provider naming variations without matching on one shared token."""
+    from difflib import SequenceMatcher
+
     a, b = canonical_team(left), canonical_team(right)
     if not a or not b:
         return 0.0
@@ -397,26 +399,31 @@ def _team_match_score(left, right):
     at, bt = set(a.split()), set(b.split())
     if not at or not bt:
         return 0.0
-    overlap = len(at & bt) / len(at | bt)
-    # Substring matches are useful for known suffixes, but never for tiny names.
-    if min(len(a), len(b)) >= 8 and (a in b or b in a):
-        overlap = max(overlap, 0.88)
-    return overlap
+    union_score = len(at & bt) / len(at | bt)
+    # A provider may omit a city/club suffix or use a shortened official name.
+    containment_score = len(at & bt) / min(len(at), len(bt))
+    sequence_score = SequenceMatcher(None, a, b).ratio()
+    score = max(union_score, containment_score * 0.94, sequence_score * 0.90)
+    # Tiny one-word names are too ambiguous for fuzzy matching.
+    if min(len(a), len(b)) < 5 and a != b:
+        return 0.0
+    return min(score, 1.0)
 
 
 def find_event(games, home, away):
-    """Match only the requested home/away orientation; reject ambiguous matches."""
+    """Match home/away orientation with fuzzy provider-name tolerance and ambiguity rejection."""
     ranked = []
     for game in games:
         home_score = _team_match_score(game.get("home"), home)
         away_score = _team_match_score(game.get("away"), away)
-        # Both sides must be a strong match. Reversed fixtures are deliberately rejected.
-        if home_score >= 0.80 and away_score >= 0.80:
-            ranked.append((min(home_score, away_score) + (home_score + away_score) / 2, game))
-    ranked.sort(key=lambda item: item[0], reverse=True)
+        # Require meaningful similarity on BOTH teams; never accept reversed orientation.
+        if home_score >= 0.70 and away_score >= 0.70:
+            combined = (home_score + away_score) / 2
+            ranked.append((combined, min(home_score, away_score), game))
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
     if not ranked:
         return []
-    # If the top two candidates are effectively tied, do not guess.
-    if len(ranked) > 1 and ranked[0][0] - ranked[1][0] < 0.04:
+    # Demand a clear winner; ties remain unmatched rather than risking a wrong fixture.
+    if len(ranked) > 1 and ranked[0][0] - ranked[1][0] < 0.035:
         return []
-    return [ranked[0][1]]
+    return [ranked[0][2]]
