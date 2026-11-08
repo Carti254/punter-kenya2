@@ -2770,17 +2770,32 @@ def build_pre_match_prediction(raw_fixture, fixture):
 
 
 
-def build_openmatchday_prediction(raw_fixture, fixture):
-    """Forecast a fixture from recent results in its own competition CSV."""
+def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None):
+    """Forecast from competition results strictly before as_of_date when supplied."""
     folder = str(raw_fixture.get("leagueShortcut") or "").strip()
     if not folder:
         return {"available": False, "reason": "The fixture has no competition reference for retrieving its results."}
 
-    try:
-        rows = fetch_openmatchday_csv(folder, "results")
-    except Exception as exc:
-        logger.warning("Could not load historical results for %s: %s", folder, exc)
-        return {"available": False, "reason": "Historical results could not be retrieved for this competition."}
+    if historical_rows is not None:
+        rows = list(historical_rows)
+    else:
+        try:
+            rows = fetch_openmatchday_csv(folder, "results")
+        except Exception as exc:
+            logger.warning("Could not load historical results for %s: %s", folder, exc)
+            return {"available": False, "reason": "Historical results could not be retrieved for this competition."}
+
+    if as_of_date is not None:
+        cutoff_date = as_of_date.date() if isinstance(as_of_date, datetime) else datetime.strptime(str(as_of_date)[:10], "%Y-%m-%d").date()
+        prior_rows = []
+        for row in rows:
+            try:
+                row_date = datetime.strptime(str(row.get("date") or ""), "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if row_date < cutoff_date:
+                prior_rows.append(row)
+        rows = prior_rows
 
     def parse_team_history(team_name):
         parsed = []
