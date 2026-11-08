@@ -2157,11 +2157,38 @@ async def autobuild_sportybet_command(update, context):
 
         if not rows:
             context.user_data.pop("pending_sportybet_booking", None)
-            await reply(
-                update,
-                "NO BET: no usable, correctly matched SportyBet market candidates were produced after fixture, market and price validation. "
-                "No matched fixture produced a usable model-backed market. Please try again when more SportyBet fixtures are available."
-            )
+            day_counts = [
+                (int(match.group(1)), int(match.group(2)))
+                for item in diagnostics
+                if (match := re.search(r": (\d+) fixtures; (\d+) SportyBet events retrieved", str(item)))
+            ]
+            fixture_count = sum(item[0] for item in day_counts)
+            sportybet_count = sum(item[1] for item in day_counts)
+            matched_names = [
+                item for item in diagnostics
+                if "matched SportyBet fixture" in str(item)
+            ]
+            unmatched_names = [
+                item for item in diagnostics
+                if "fixture not matched to SportyBet" in str(item)
+            ]
+            if fixture_count == 0:
+                failure = "FIXTURE RETRIEVAL FAILURE: no upcoming fixtures were available from the connected catalogues or SportyBet fallback."
+            elif sportybet_count == 0:
+                failure = f"SPORTYBET FEED FAILURE: {fixture_count} fixtures were found, but SportyBet returned no priced events for the requested dates."
+            elif not matched_names:
+                failure = f"FIXTURE MATCHING FAILURE: {fixture_count} fixtures and {sportybet_count} SportyBet events were retrieved, but no teams could be confidently matched."
+            else:
+                failure = f"RESEARCH / MARKET FAILURE: {len(matched_names)} SportyBet fixtures were matched, but none produced a supported, evidence-backed market with a valid probability."
+            detail_lines = (matched_names + unmatched_names)[:8]
+            detail_text = "\n".join(detail_lines)
+            diagnostic_text = "\n".join(str(item) for item in diagnostics[-5:])
+            message = "NO BET — " + failure
+            if detail_text:
+                message += "\n\nFixture matching details:\n" + detail_text
+            if diagnostic_text:
+                message += "\n\nTechnical diagnosis:\n" + diagnostic_text
+            await reply(update, message[:3900])
             return
 
         if rank_mode in ("parlay", "odds"):
