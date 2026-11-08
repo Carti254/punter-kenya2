@@ -32,7 +32,6 @@ SESSION.headers.update({
 })
 
 BETIKA_BASE = "https://api.betika.com/v1/uo"
-BETPAWA_BASE = "https://www.betpawa.co.ke/api/sportsbook/v4"
 
 
 def _get(url: str, *, params=None, headers=None, timeout=15):
