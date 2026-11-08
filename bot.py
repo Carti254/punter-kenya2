@@ -1346,10 +1346,20 @@ async def my_slips_command(update, context):
 
 
 async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle slip workflows and persistent home-menu buttons."""
-    if await process_slip_flow(update, context):
-        return
+    """Handle home-menu navigation before treating text as slip input."""
     choice = (update.effective_message.text or "").strip()
+    menu_choices = {
+        "📅 Today's Matches", "🏆 Top Leagues", "🔎 Analyze Match", "ℹ️ iHelp",
+        "🤖 Build a slip", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip",
+        "🔄 Convert bet code", "📋 Bookies & regions", "🎟️ My slips",
+        "⚽ Match intelligence", "📅 Fixtures & leagues", "❓ Contact support",
+    }
+    # A menu tap must always navigate, even if the user was halfway through
+    # entering slip IDs or selection details.
+    if choice in menu_choices:
+        context.user_data.pop("slip_flow", None)
+    elif await process_slip_flow(update, context):
+        return
     prompts = {
         "🤖 Build a slip": ("build", "Send one selection per line in this format:\nFixture | Market | Selection | Odds [| Bookmaker]\n\nExample:\nArsenal vs Chelsea | 1X2 | Arsenal | 1.85 | Betika\nNapoli vs Roma | Over 1.5 | Over 1.5 | 1.42 | SportyBet\n\nYour slip will be saved privately under your Telegram account."),
         "✏️ Edit slip": ("edit", "Edit one leg using:\nSLIP_ID | LEG_NUMBER | FIXTURE | MARKET | SELECTION | ODDS\nExample: 42 | 2 | Arsenal vs Chelsea | 1X2 | Arsenal | 1.85\nUse /myslips to find your slip ID."),
