@@ -158,12 +158,24 @@ def rollover_status(user_id):
             plan = cursor.fetchone()
             if not plan or not plan.get("rollover_days"):
                 return {"configured": False}
+            plan_started = plan.get("rollover_started_on") or plan["updated_at"].date()
+            # Any prior rollover day without an explicit result is a missed day.
+            # Today remains open so the user can still record its outcome.
+            today = datetime.now(ZoneInfo("Africa/Nairobi")).date()
+            elapsed_days = max(0, (today - plan_started).days)
+            missed_through = min(int(plan["rollover_days"]), elapsed_days)
+            for day_number in range(1, missed_through + 1):
+                cursor.execute("""
+                    INSERT IGNORE INTO punter_rollover_progress
+                    (user_id,plan_started,day_number,target_odds,result,actual_odds)
+                    VALUES (%s,%s,%s,%s,'MISSED',NULL)
+                """, (int(user_id), plan_started, day_number, plan["rollover_target"]))
             cursor.execute("""
                 SELECT day_number,result,actual_odds,recorded_at
                 FROM punter_rollover_progress
                 WHERE user_id=%s AND plan_started=%s
                 ORDER BY day_number
-            """, (int(user_id), plan.get("rollover_started_on") or plan["updated_at"].date()))
+            """, (int(user_id), plan_started))
             entries = cursor.fetchall()
         completed = len(entries)
         wins = sum(r["result"] == "WON" for r in entries)
