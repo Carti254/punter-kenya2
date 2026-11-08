@@ -71,6 +71,46 @@ def _binary_market_outcome(market, selection, actual):
     return 1 if won else 0
 
 
+def forecast_fixture_ids(forecasts):
+    """Extract unique API-Football fixture IDs from team and player forecast keys."""
+    ids = set()
+    for row in forecasts or []:
+        parts = str(row.get("fixture_key") or "").split(":")
+        try:
+            if len(parts) >= 2 and parts[0] == "api-football":
+                ids.add(int(parts[1]))
+            elif len(parts) == 3 and parts[0] == "api-football-player":
+                ids.add(int(parts[1]))
+        except (TypeError, ValueError):
+            continue
+    return sorted(ids)
+
+
+def player_prop_actual(stats, market):
+    """Return the provider's actual player statistic for a stored player market."""
+    fields = {
+        "player_shots": ("shots", "total"),
+        "player_shots_on_target": ("shots", "on"),
+        "player_goals": ("goals", "total"),
+        "player_assists": ("goals", "assists"),
+        "player_yellow_cards": ("cards", "yellow"),
+        "player_red_cards": ("cards", "red"),
+    }
+    selected = fields.get(str(market).casefold())
+    if not selected:
+        return None
+    category, field = selected
+    value = (stats or {}).get(category) or {}
+    value = value.get(field)
+    if value is None:
+        return None
+    try:
+        number = float(value)
+        return number if math.isfinite(number) and number >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def refresh_specialist_forecasts(api_key=None, session=None, limit=300):
     """Settle stored specialist over/under forecasts only from completed API-Football fixtures."""
     import requests
@@ -91,17 +131,7 @@ def refresh_specialist_forecasts(api_key=None, session=None, limit=300):
             forecasts = cursor.fetchall()
     finally:
         connection.close()
-    fixture_ids = set()
-    for row in forecasts:
-        parts = str(row["fixture_key"]).split(":")
-        try:
-            if len(parts) >= 2 and parts[0] == "api-football":
-                fixture_ids.add(int(parts[1]))
-            elif len(parts) == 3 and parts[0] == "api-football-player":
-                fixture_ids.add(int(parts[1]))
-        except (TypeError, ValueError):
-            continue
-    fixture_ids = sorted(fixture_ids)
+    fixture_ids = forecast_fixture_ids(forecasts)
     settled_ids, seen = set(), {}
     stat_aliases = {
         "corners": ("corner kicks", "corners"),
@@ -162,21 +192,10 @@ def refresh_specialist_forecasts(api_key=None, session=None, limit=300):
                 stats = player_stats.get(player_id)
                 if not stats:
                     continue
-                player_metric = {
-                    "player_shots": ("shots", "total"),
-                    "player_shots_on_target": ("shots", "on"),
-                    "player_goals": ("goals", "total"),
-                    "player_assists": ("goals", "assists"),
-                    "player_yellow_cards": ("cards", "yellow"),
-                    "player_red_cards": ("cards", "red"),
-                }.get(market)
-                if not player_metric:
-                    continue
-                category, field = player_metric
-                value = (stats.get(category) or {}).get(field)
+                value = player_prop_actual(stats, market)
                 if value is None:
                     continue
-                outcome = _binary_market_outcome(market, row["selection"], float(value))
+                outcome = _binary_market_outcome(market, row["selection"], value)
                 if outcome is not None:
                     seen[int(row["id"])] = outcome
                 continue
