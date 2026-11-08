@@ -132,5 +132,50 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
 
 
 
+    def test_betika_list_malformed_envelope_is_not_empty_day(self):
+        from bookmaker_odds import _betika_items
+        with self.assertRaisesRegex(ValueError, "recognised matches array"):
+            _betika_items({"data": {"unexpected": []}})
+
+    def test_betika_detail_normalizes_prices_and_native_ids(self):
+        from bookmaker_odds import _parse_betika_game
+        from bookmaker_odds import EAT
+        from datetime import datetime
+        kickoff = datetime.now(EAT).replace(microsecond=0).isoformat()
+        base = {"parent_match_id": 123, "home_team": "Home FC",
+                "away_team": "Away FC", "start_time": kickoff}
+        detail = (
+            {"home_team": "Home FC", "away_team": "Away FC",
+             "start_time": kickoff, "competition_name": "Test League"},
+            [{"sub_type_id": 1, "name": "1X2", "odds": [
+                {"id": 11, "display": "Home", "odd_value": "1.85"},
+            ]}],
+        )
+        game = _parse_betika_game(base, detail)
+        self.assertEqual(game["bookmaker"], "Betika")
+        self.assertEqual(game["event_id"], "123")
+        self.assertEqual(game["markets"][0]["market_id"], "1")
+        self.assertEqual(game["markets"][0]["outcome_id"], "11")
+        self.assertEqual(game["markets"][0]["odds"], 1.85)
+
+    def test_betika_fetches_list_then_match_detail(self):
+        from bookmaker_odds import fetch_betika, EAT
+        from datetime import datetime
+        kickoff = datetime.now(EAT).replace(microsecond=0).isoformat()
+        listing = {"data": [{"parent_match_id": 123, "home_team": "Home FC",
+                             "away_team": "Away FC", "start_time": kickoff}]}
+        detail = {"data": {
+            "meta": {"home_team": "Home FC", "away_team": "Away FC",
+                     "start_time": kickoff, "competition_name": "Test League"},
+            "data": [{"sub_type_id": 1, "name": "1X2", "odds": [
+                {"id": 11, "display": "Home", "odd_value": "1.85"}]}],
+        }}
+        with patch("bookmaker_odds._get", side_effect=[listing, detail]):
+            games = fetch_betika(datetime.now(EAT).date())
+        self.assertEqual(len(games), 1)
+        self.assertEqual(games[0]["home"], "Home FC")
+
+
+
 if __name__ == "__main__":
     unittest.main()
