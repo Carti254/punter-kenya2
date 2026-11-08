@@ -161,3 +161,83 @@ def candidate_research_summary(pool: list[dict]) -> str:
         f"Tier B break-even: {counts.get('B', 0)}). "
         f"Evidence coverage: recent form {form}; venue splits {venue}; H2H {h2h}."
     )
+
+
+def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None) -> tuple[list[dict], dict]:
+    """Optionally enrich matching corner/card/shot/first-half prices using API-Football.
+
+    This is deliberately opt-in: without API_FOOTBALL_KEY, candidates are returned
+    unchanged and the report says why. Only exact fixture/date/name matches are used.
+    Specialist estimates replace the base probability only for the exact same
+    market/selection/line; no nearest-line or fuzzy fixture substitution is allowed.
+    """
+    import os
+    import re
+    from collections import defaultdict
+    from datetime import datetime
+    from specialist_models import specialist_council, specialist_price_assessments
+
+    key = api_key or os.getenv("API_FOOTBALL_KEY")
+    output = [dict(row) for row in (rows or [])]
+    if not key:
+        return output, {"enabled": False, "fixtures_checked": 0, "matched_prices": 0,
+                        "reason": "API_FOOTBALL_KEY is not configured; specialist models were not run."}
+
+    grouped = defaultdict(list)
+    for row in output:
+        home, away = str(row.get("home") or "").strip(), str(row.get("away") or "").strip()
+        raw_date = (row.get("match_date") or row.get("date") or row.get("kickoff") or
+                    row.get("start_time") or row.get("commence_time") or row.get("commenceTime"))
+        if not home or not away or not raw_date:
+            continue
+        try:
+            match_date = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00")).date().isoformat()
+        except ValueError:
+            match = re.search(r"\\d{4}-\\d{2}-\\d{2}", str(raw_date))
+            if not match:
+                continue
+            match_date = match.group(0)
+        grouped[(home, away, match_date)].append(row)
+
+    checked = matched = failures = 0
+    for (home, away, match_date), candidates in grouped.items():
+        checked += 1
+        market_rows = []
+        for row in candidates:
+            market_rows.append({"market": row.get("market"), "selection": row.get("selection"),
+                                "odds": row.get("odds")})
+        game = {"home": home, "away": away, "bookmaker": "SportyBet", "markets": market_rows}
+        try:
+            report = specialist_council(home, away, match_date, api_key=key, last=5)
+            assessments = specialist_price_assessments(report, [game])
+        except Exception:
+            failures += 1
+            continue
+        for row in candidates:
+            market_name = str(row.get("market") or "").casefold()
+            selection = str(row.get("selection") or "").strip().casefold()
+            try:
+                odds = float(row.get("odds"))
+            except (TypeError, ValueError):
+                continue
+            match = next((a for a in assessments
+                          if str(a.get("market_name") or "").casefold() == market_name
+                          and str(a.get("selection") or "").strip().casefold() == selection
+                          and abs(float(a.get("odds") or 0) - odds) < 1e-9), None)
+            if not match:
+                continue
+            row["base_probability"] = row.get("probability")
+            row["probability"] = float(match["probability"])
+            row["probability_source"] = "API-Football recent-form specialist Poisson baseline (experimental)"
+            row["specialist_evidence"] = {
+                "provider": report.get("provider"), "model": "recent-form Poisson baseline",
+                "market": match.get("market"), "line": match.get("line"),
+                "expected_total": next((p.get("expected_total") for p in report.get("panels", [])
+                                        if p.get("market") == match.get("market")), None),
+                "edge": match.get("edge"), "expected_roi": match.get("expected_roi"),
+                "warning": report.get("warning"),
+            }
+            matched += 1
+    return output, {"enabled": True, "fixtures_checked": checked, "matched_prices": matched,
+                    "fixture_failures": failures,
+                    "reason": "Exact-match specialist evidence applied where provider data and matching bookmaker lines were available."}
