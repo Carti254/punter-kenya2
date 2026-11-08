@@ -3446,25 +3446,25 @@ async def accumulator_status_command(update, context):
     used = set()
     for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
         fixture_key = (item["home"], item["away"])
-        if fixture_key in used or item["probability"] < 0.62 or item["ev"] < 0.03:
+        if fixture_key in used:
             continue
         if any(x["home"] == item["home"] and x["away"] == item["away"] for x in chosen):
             continue
         chosen.append(item); used.add(fixture_key); combined *= item["odds"]
         if combined >= target: break
         if len(chosen) >= 6: break
-    if not chosen or combined < target:
-        await reply(update, f"🚫 NO ACCUMULATOR RECOMMENDED\n\nCould not reach {target:.2f} using selections that passed the minimum probability (62%) and estimated EV (+3%) filters. PUNTER will not add weak legs just to reach a target.")
+    if not chosen:
+        await reply(update, "⚠️ NO USABLE ACCUMULATOR CANDIDATES\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No model-supported bookmaker prices were retrieved."))
         return
     probability_product = math.prod(x["probability"] for x in chosen)
-    lines = ["🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR", f"Target: {target:.2f} | Combined decimal odds: {combined:.2f}", ""]
+    lines = ["🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR", f"Target: {target:.2f} | Combined decimal odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"), ""]
     for i, item in enumerate(chosen, 1):
         lines.append(f"{i}. {item['home']} vs {item['away']}")
         lines.append(f"   {item['selection']} @ {item['odds']:.2f} — {item['bookmaker']}")
         lines.append(f"   Model probability: {item['probability']:.1%} | Est. EV: {item['ev']:+.1%}")
     lines.extend(["", f"Naive independent-leg probability product: {probability_product:.2%}",
         "This product assumes independence and may be materially wrong. Selections may be correlated; this is not a calibrated accumulator probability.",
-        "All legs are experimental estimates, not guarantees. Check every market and price with the bookmaker. No BTTS or Under 2.5 selections."])
+        "All legs are experimental estimates, not guarantees. Negative-EV picks are not hidden. Check every market and price. No BTTS or Under 2.5 selections."])
     await reply(update, "\n".join(lines))
 
 
