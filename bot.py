@@ -882,10 +882,14 @@ def fetch_openmatchday_fixture_rows(days=14, league_id=None, day_filter=None):
                 continue
             kickoff_naive = kickoff.astimezone(timezone.utc).replace(tzinfo=None)
             kickoff_eat_date = kickoff.astimezone(EAT).date()
+            # Always apply a live UTC cutoff, including exact-day searches.
+            # A calendar-day match is not necessarily still upcoming.
+            if kickoff_naive <= now:
+                continue
             if day_filter:
                 if kickoff_eat_date != target_date:
                     continue
-            elif kickoff_naive < now or kickoff_naive > cutoff:
+            elif kickoff_naive > cutoff:
                 continue
             stable_id = f"{folder}:{match_date}:{home}:{away}"
             output.append({
@@ -2426,7 +2430,8 @@ async def fixtures(
             )
             raw_rows.extend(rows)
 
-        all_selected = upcoming_fixtures(raw_rows, include_past=True)
+        # Re-evaluate against the current clock when rendering; never show elapsed kickoffs.
+        all_selected = upcoming_fixtures(raw_rows, include_past=False)
         page_size = 20
         total = len(all_selected)
         total_pages = max(1, math.ceil(total / page_size))
