@@ -2271,7 +2271,8 @@ async def autobuild_sportybet_command(update, context):
              f"X public leads: {specialist_stats.get('x_posts', 0)}. "
              f"{specialist_stats.get('reason', '')}"),
             f"Research checks: {research_stats['research_scope']}.",
-            "Unsupported markets are not guessed. Team news, xG, tactics, odds movement and cross-fixture correlation are shown as gaps unless their data sources are actually connected and verified.",
+            "Correlation review: " + (", ".join(build.get("correlation_warnings") or []) if build.get("correlation_warnings") else "no same-competition/date cluster detected; other dependencies are not quantified."),
+            "Unsupported markets are not guessed. Verified lineups, injuries, xG, tactics and true closing-line movement remain gaps unless their sources are actually available.",
             "Model probabilities and estimated value are experimental, not calibrated guarantees of profit.",
         ])
         if not target_reached:
