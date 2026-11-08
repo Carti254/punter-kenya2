@@ -2254,7 +2254,10 @@ async def autobuild_sportybet_command(update, context):
             live_leg["probability_source"] = model_leg.get("probability_source") or "PUNTER statistical model"
             for evidence_key in ("specialist_evidence", "specialist_panels", "x_research_evidence",
                                  "x_research_warning", "other_bookmaker_prices",
-                                 "best_other_bookmaker", "cross_bookmaker_edge"):
+                                 "best_other_bookmaker", "cross_bookmaker_edge",
+                                 "external_evidence_sources", "external_market_probability",
+                                 "external_model_disagreement", "bsd_consensus_odds",
+                                 "price_vs_bsd_consensus"):
                 live_leg[evidence_key] = model_leg.get(evidence_key)
         combined = math.prod(float(x["odds"]) for x in resolved)
         combined_probability = math.prod(float(x["probability"]) for x in resolved)
@@ -2277,6 +2280,17 @@ async def autobuild_sportybet_command(update, context):
             )
             assessment = "Positive estimated value" if float(leg.get("ev") or 0) > 0 else "Break-even estimate; no positive edge established"
             lines.append(f"   Internal price assessment: {assessment}")
+            lines.append(
+                f"   Model probability: {float(leg['probability']):.1%} "
+                f"| Source: {leg.get('probability_source') or 'PUNTER statistical model'}"
+            )
+            if leg.get("bsd_consensus_odds"):
+                lines.append(
+                    f"   BSD consensus reference: {float(leg['bsd_consensus_odds']):.2f} "
+                    f"| SportyBet price difference: {float(leg.get('price_vs_bsd_consensus') or 0):+.1%}"
+                )
+            if leg.get("external_model_disagreement") is not None:
+                lines.append(f"   Independent model probability gap: {float(leg['external_model_disagreement']):.1%}")
             specialist = leg.get("research_evidence", {}).get("specialist_evidence")
             if specialist:
                 lines.append(
