@@ -87,7 +87,7 @@ def _resolve_market(event, market_text, selection_text):
     markets = event.get("markets") or []
     m = market_text.strip()
     line = None
-    total_match = re.search(r"(?:over/?under|total|goals?)\s*(\d+(?:\.\d+)?)", m, re.I)
+    total_match = re.search(r"(?:over(?:/under)?|under|total|goals?)\s*(\d+(?:\.\d+)?)", m, re.I)
     if total_match:
         line = total_match.group(1)
     wanted = _norm(m)
