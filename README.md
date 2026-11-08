@@ -75,6 +75,7 @@ The database account needs permission to create and write the tables used by the
 - `/bookies` — check both Betika and SportyBet public feeds.
 - `/odds HOME vs AWAY [today|tomorrow]` — inspect matched prices.
 - `/topvalue`, `/aipicks`, `/accumulator` — experimental scanner tools; may correctly return NO BET.
+- `/autobuild [TARGET] [MARKET FILTER] [rank=value|odds|probability]` — build a SportyBet preview using your chosen market filter, target odds and ranking. Examples: `/autobuild 5 BTTS rank=odds`, `/autobuild 20 Correct Score rank=odds`, or `/autobuild 10 market=1X2,Under 2.5 rank=value`. There is no forced low-risk ranking; the default ranks by estimated value, while `odds` and `probability` are explicit alternatives.
 - `/calculator ODDS STAKE` — calculate implied probability and potential return.
 - `/record`, `/oddshistory`, `/myslips` — prediction history, odds history and saved slips; require the optional database.
 - `/calibrate` — run a date-ordered walk-forward evaluation using only matches before each test date; compare the current Poisson model, a venue-weighted/shrunk candidate and a training-only prevalence baseline on the final 30% holdout. Temperature calibration is reported separately. It requires at least 50 training and 30 holdout forecasts and never changes live model settings automatically.
@@ -83,7 +84,9 @@ The database account needs permission to create and write the tables used by the
 - `/betresults` — refresh completed match results and automatically settle pending logged bets only when home team, away team and match date match one unique result. A six-hour background job performs the same check when the database is enabled.\n- `/betstats` — report logged wins, losses, voids, profit/loss and ROI. This is separate from prediction accuracy.
 - `/fullintel` — full command directory.
 
-The Telegram menu also includes the SportyBet slip builder. It accepts one selection per line in this format:
+The Telegram menu also includes the SportyBet slip builder. AI building accepts a target odds figure and optional market/ranking controls. Manual building lets you request any market and outcome that SportyBet actually returns for the selected fixture; the AI forecast scanner only assigns probabilities to markets supported by its available evidence, and it reports unsupported markets rather than inventing estimates. BTTS and Under 2.5 are not hard-excluded. Match analysis accepts both team names and tolerates small spelling mistakes; use `TEAM A vs TEAM B`.
+
+It accepts one selection per line in this format:
 
 ```text
 Fixture | Market | Selection
