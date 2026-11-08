@@ -9,12 +9,14 @@ from __future__ import annotations
 import math
 
 
-def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_candidates=60, ranking="value"):
+def build_accumulator(candidates, target_odds, max_legs=8, min_legs=1, beam_width=1800, max_candidates=60, ranking="value"):
     target = float(target_odds)
     if not math.isfinite(target) or target <= 1:
         raise ValueError("Target odds must be finite and greater than 1.")
     if not isinstance(max_legs, int) or not 1 <= max_legs <= 20:
         raise ValueError("max_legs must be an integer from 1 to 20.")
+    if not isinstance(min_legs, int) or not 1 <= min_legs <= max_legs:
+        raise ValueError("min_legs must be an integer from 1 to max_legs.")
     clean = []
     for row in candidates or []:
         try:
@@ -56,6 +58,7 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
     # A beam keeps this practical for Telegram requests with large fixture slates.
     states = [([], 1.0, 1.0, frozenset(), 0)]
     completed = []
+    eligible_partials = []
 
     def completed_score(state):
         if ranking == "probability":
@@ -77,10 +80,14 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
                 new_picks = picks + [item]
                 factor = new_odds * new_probability
                 state = (new_picks, new_odds, new_probability, used | {fixture_key}, item_index + 1)
-                if target <= new_odds <= target * 1.20:
+                if len(new_picks) >= min_legs and target <= new_odds <= target * 1.20:
                     completed.append(state)
-                elif new_odds < target:
+                # Continue past the target until the requested number of legs is met.
+                # Stop extending once the permitted 20% overshoot would be exceeded.
+                if len(new_picks) < max_legs and new_odds < target * 1.20:
                     expanded.append(state)
+                if len(new_picks) >= min_legs:
+                    eligible_partials.append(state)
         # Bound completed-state memory on large fixture slates.
         if len(completed) > beam_width * 4:
             completed = sorted(completed, key=completed_score, reverse=True)[:beam_width * 2]
@@ -110,7 +117,7 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
         best = max(completed, key=completion_score)
     else:
         # Return the best available partial construction, never pretend target was met.
-        all_states = states
+        all_states = eligible_partials or states
         if not all_states:
             all_states = [([], 1.0, 1.0, frozenset(), 0)]
         if ranking == "probability":
