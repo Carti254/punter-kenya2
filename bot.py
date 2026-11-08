@@ -1622,7 +1622,7 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
 
 async def build_sportybet_command(update, context):
     """Default /build and /slip commands automatically select qualifying SportyBet picks."""
-    context.args = []
+    # Preserve user-supplied target, market and leg-count arguments.
     await autobuild_sportybet_command(update, context)
 
 
@@ -1926,6 +1926,13 @@ async def autobuild_sportybet_command(update, context):
             await reply(update, "Target odds must be greater than 1.00.")
             return
 
+    # Higher target slips default to at least five different fixtures.
+    min_legs = 5 if target >= 10 else 2
+    max_legs = 20
+    if target > 1000:
+        await reply(update, "Target odds cannot exceed 1,000.")
+        return
+
     # Scan all fixtures and every retrieved market the scoreline model supports.
     # Default parlay excludes BTTS and Under 2.5 per the user's standing preferences.
     rank_mode = "parlay"
@@ -1936,6 +1943,24 @@ async def autobuild_sportybet_command(update, context):
             rank_mode = lowered.split("=", 1)[1]
         elif lowered.startswith("market="):
             market_parts.append(token.split("=", 1)[1])
+        elif lowered.startswith("legs="):
+            try:
+                min_legs = max_legs = int(lowered.split("=", 1)[1])
+            except ValueError:
+                await reply(update, "Use legs=1 to 20, for example /autobuild 50 legs=8.")
+                return
+        elif lowered.startswith("minlegs="):
+            try:
+                min_legs = int(lowered.split("=", 1)[1])
+            except ValueError:
+                await reply(update, "Use minlegs=1 to 20.")
+                return
+        elif lowered.startswith("maxlegs="):
+            try:
+                max_legs = int(lowered.split("=", 1)[1])
+            except ValueError:
+                await reply(update, "Use maxlegs=1 to 20.")
+                return
         elif lowered in ("value", "odds", "probability", "parlay"):
             rank_mode = lowered
         else:
@@ -1943,9 +1968,12 @@ async def autobuild_sportybet_command(update, context):
     if rank_mode not in ("value", "odds", "probability", "parlay"):
         await reply(update, "Ranking must be parlay, value, odds or probability.")
         return
+    if not (1 <= min_legs <= max_legs <= 20):
+        await reply(update, "Leg count must satisfy 1 <= minimum <= maximum <= 20. Use legs=8 or minlegs=5 maxlegs=12.")
+        return
 
     market_filter = ",".join(market_parts) if market_parts else "all"
-    await reply(update, f"🤖 SPORTYBET SCAN — TARGET {target:.2f}\nScanning all upcoming matches and all available supported markets…")
+    await reply(update, f"🤖 SPORTYBET SCAN — TARGET {target:.2f}\nBuilding {min_legs}–{max_legs} different matches; scanning upcoming fixtures and supported markets…")
     try:
         rows, diagnostics = await asyncio.to_thread(
             scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
@@ -1972,7 +2000,7 @@ async def autobuild_sportybet_command(update, context):
             rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
 
         build = build_accumulator(
-            rows, target, max_legs=20,
+            rows, target, min_legs=min_legs, max_legs=max_legs,
             ranking=("odds" if rank_mode == "parlay" else rank_mode),
             max_candidates=250,
         )
@@ -1984,7 +2012,14 @@ async def autobuild_sportybet_command(update, context):
 
         # Keep the exact fixture, market and outcome IDs returned by the odds scan.
         resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
+        # The live SportyBet resolver returns booking fields only. Reattach the
+        # exact scanner probabilities in the same order for transparent reporting.
+        for live_leg, model_leg in zip(resolved, chosen):
+            live_leg["probability"] = float(model_leg["probability"])
+            live_leg["ev"] = model_leg.get("ev")
+            live_leg["probability_source"] = model_leg.get("probability_source") or "PUNTER statistical model"
         combined = math.prod(float(x["odds"]) for x in resolved)
+        combined_probability = math.prod(float(x["probability"]) for x in resolved)
         target_reached = target <= combined <= target * 1.20
         if target_reached:
             context.user_data["pending_sportybet_booking"] = resolved
@@ -2002,6 +2037,12 @@ async def autobuild_sportybet_command(update, context):
                 f"{i}. {leg['fixture']} — {leg['market']}: "
                 f"{leg['selection']} @ {leg['odds']:.2f}"
             )
+            lines.append(f"   PUNTER model hit estimate: {leg['probability']:.1%}")
+        lines.extend([
+            "",
+            f"Estimated accumulator hit probability: {combined_probability:.2%}",
+            "This multiplies individual model estimates and assumes different matches are independent. It is experimental and uncalibrated, not a guarantee.",
+        ])
         if not target_reached:
             lines.append("")
             lines.append("No booking code available because the target was not reached.")
