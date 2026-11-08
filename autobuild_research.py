@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import math
 import time
+
+from candidate_risk import assess_candidate_risk
 from collections import Counter
 
 _SPECIALIST_REPORT_CACHE = {}
@@ -119,6 +121,11 @@ def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.0) -> 
         if item is None:
             rejected += 1
         else:
+            risk = assess_candidate_risk(item)
+            if risk["risk_rejected"]:
+                rejected += 1
+                continue
+            item.update(risk)
             assessed.append(item)
 
     assessed.sort(
@@ -146,6 +153,9 @@ def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.0) -> 
         "tier_b": counts.get("B", 0),
         "tier_c": counts.get("C", 0),
         "rejected": rejected,
+        "risk_screened": len(pool),
+        "high_risk": sum(1 for item in pool if item.get("risk_level") == "HIGH"),
+        "medium_risk": sum(1 for item in pool if item.get("risk_level") == "MEDIUM"),
         "marginal_ev_floor": marginal_ev_floor,
         "research_scope": "Current fixture match, current bookmaker price, supported model probability and price-value calculation",
         "not_verified_by_this_scan": [
