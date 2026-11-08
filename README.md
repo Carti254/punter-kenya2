@@ -135,7 +135,7 @@ The bot must show the resolved current selections and obtain confirmation before
 
 ## Free multi-provider research sources
 
-The automatic SportyBet scan can silently enrich exact fixture matches from these optional free football APIs. The providers supply research evidence only; SportyBet remains the source of the odds used to build a SportyBet preview.
+The automatic SportyBet scan silently unions upcoming fixtures from these optional free football APIs with the existing open-matchday catalogue, deduplicates them, and enriches exact SportyBet matches. The providers supply research evidence only; SportyBet remains the source of the odds used to build a SportyBet preview.
 
 - \`BSD_API_KEY\` — free Bzzoiro Sports Data football API key. Register at https://sports.bzzoiro.com/register/. The published free tier advertises 7,500 football requests/day, fixtures, lineups, statistics, xG, model forecasts and consensus odds across its covered competitions. The free tier does not expose named bookmaker prices or best-price comparison; those are paid features. See https://sports.bzzoiro.com/docs/football/ and https://sports.bzzoiro.com/pricing/.
 - \`PITCHAPI_API_KEY\` — free PitchAPI key. Register at https://pitchapi.dev/ and copy the key from the account dashboard. Its documentation advertises a free football API with no request allowance, 77 leagues and historical data from 2021, including match stats, shots, player stats, lineups, events and advanced analytics. Coverage varies by league and match. See https://pitchapi.dev/.
