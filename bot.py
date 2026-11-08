@@ -1291,7 +1291,7 @@ async def process_slip_flow(update, context):
             for i, leg in enumerate(booking["selections"], 1):
                 lines.append(f"{i}. {leg['fixture']} | {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}")
             lines.extend(["", "Send the leg numbers to REMOVE, separated by commas (e.g. 2,5,7).", "Send KEEP ALL to recreate an unchanged copy, or /cancel."])
-            await reply(update, "\\n".join(lines))
+            await reply(update, "\n".join(lines))
             return True
 
         if state == "sportybet_edit_remove":
@@ -1319,11 +1319,11 @@ async def process_slip_flow(update, context):
             preview = [f"✏️ EDIT PREVIEW — {booking.get('bookingCode')}", f"Kept: {len(kept)} | Removed: {removed_count}", f"New combined odds: {combined:.2f}", ""]
             preview.extend(f"{i}. {x['fixture']} | {x['market']}: {x['selection']} @ {x['odds']:.2f}" for i, x in enumerate(kept, 1))
             preview.extend(["", "Confirm to create a NEW SportyBet code. The original code remains unchanged."])
-            await update.effective_message.reply_text("\\n".join(preview), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate edited code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
+            await update.effective_message.reply_text("\n".join(preview), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate edited code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
             return True
 
         if state == "sportybet_merge_codes":
-            codes = [x.strip().upper() for x in re.split(r"[\\s,]+", message) if x.strip()]
+            codes = [x.strip().upper() for x in re.split(r"[\s,]+", message) if x.strip()]
             if len(codes) < 2 or len(codes) > 10 or len(set(codes)) != len(codes):
                 await reply(update, "Send 2–10 different SportyBet booking codes, separated by spaces or new lines.")
                 return True
@@ -1343,7 +1343,7 @@ async def process_slip_flow(update, context):
             context.user_data["pending_sportybet_groups"] = [selections]
             context.user_data.pop("slip_flow", None)
             odds = math.prod(float(x["odds"]) for x in selections)
-            await update.effective_message.reply_text(f"🔗 SPORTYBET MERGE PREVIEW\\nSource codes: {len(codes)}\\nUnique selections: {len(selections)}\\nCombined odds: {odds:.2f}\\nDuplicate identical selections were removed.\\n\\nConfirm to create one new SportyBet code; source codes remain unchanged.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate merged code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
+            await update.effective_message.reply_text(f"🔗 SPORTYBET MERGE PREVIEW\nSource codes: {len(codes)}\nUnique selections: {len(selections)}\nCombined odds: {odds:.2f}\nDuplicate identical selections were removed.\n\nConfirm to create one new SportyBet code; source codes remain unchanged.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate merged code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
             return True
 
         if state == "sportybet_split_code":
@@ -1351,7 +1351,7 @@ async def process_slip_flow(update, context):
             booking = await asyncio.to_thread(get_sportybet_booking, code)
             context.user_data["sportybet_manage_source"] = booking
             context.user_data["slip_flow"] = "sportybet_split_size"
-            await reply(update, f"✂️ SPORTYBET SPLITTER\\nLoaded {len(booking['selections'])} selections from {booking['bookingCode']}.\\nSend selections per new slip (e.g. 5).")
+            await reply(update, f"✂️ SPORTYBET SPLITTER\nLoaded {len(booking['selections'])} selections from {booking['bookingCode']}.\nSend selections per new slip (e.g. 5).")
             return True
 
         if state == "sportybet_split_size":
@@ -1372,7 +1372,7 @@ async def process_slip_flow(update, context):
             for i, group in enumerate(groups, 1):
                 lines.append(f"Slip {i}: {len(group)} selections | odds {math.prod(float(x['odds']) for x in group):.2f}")
             lines.append("Confirm to generate separate SportyBet codes. Original code remains unchanged.")
-            await update.effective_message.reply_text("\\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate split codes", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
+            await update.effective_message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate split codes", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
             return True
 
         if state == "sportybet_trim_code":
@@ -1381,7 +1381,7 @@ async def process_slip_flow(update, context):
             context.user_data["sportybet_manage_source"] = booking
             context.user_data["slip_flow"] = "sportybet_trim_target"
             odds = math.prod(float(x["odds"]) for x in booking["selections"])
-            await reply(update, f"🎯 TARGET-ODDS TRIM\\nLoaded {len(booking['selections'])} selections. Current combined odds: {odds:.2f}.\\nSend your maximum target odds (e.g. 10).")
+            await reply(update, f"🎯 TARGET-ODDS TRIM\nLoaded {len(booking['selections'])} selections. Current combined odds: {odds:.2f}.\nSend your maximum target odds (e.g. 10).")
             return True
 
         if state == "sportybet_trim_target":
@@ -1407,7 +1407,7 @@ async def process_slip_flow(update, context):
             context.user_data["pending_sportybet_groups"] = [kept]
             context.user_data.pop("slip_flow", None)
             new_odds = math.prod(float(x["odds"]) for x in kept)
-            await update.effective_message.reply_text(f"🎯 TRIM PREVIEW\\nTarget: {target:.2f}\\nNew odds: {new_odds:.2f}\\nRetained: {len(kept)} | Removed: {len(removed)}\\n\\nRemoved legs:\\n" + ("\\n".join(f"• {x['fixture']} — {x['selection']}" for x in removed) or "None") + "\\n\\nConfirm to create a new SportyBet code.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate trimmed code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
+            await update.effective_message.reply_text(f"🎯 TRIM PREVIEW\nTarget: {target:.2f}\nNew odds: {new_odds:.2f}\nRetained: {len(kept)} | Removed: {len(removed)}\n\nRemoved legs:\n" + ("\n".join(f"• {x['fixture']} — {x['selection']}" for x in removed) or "None") + "\n\nConfirm to create a new SportyBet code.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate trimmed code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
             return True
 
         if state == "analyze":
@@ -1534,7 +1534,7 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
                 if url:
                     lines.append(f"   {url}")
             lines.extend(["", "These are new shareable slips. Original booking codes remain unchanged. No wager has been placed."])
-            await query.edit_message_text("\\n".join(lines))
+            await query.edit_message_text("\n".join(lines))
             context.user_data.pop("pending_sportybet_groups", None)
         except SportyBetError as exc:
             lines = ["⚠️ SPORTYBET DID NOT CONFIRM ALL REQUESTED CODES", str(exc)[:300]]
@@ -1542,7 +1542,7 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
                 lines.append("Codes already confirmed by SportyBet:")
                 lines.extend(f"{code} ({count} selections)" for _, code, _, count in results)
             lines.append("The booking request is not automatically repeated.")
-            await query.edit_message_text("\\n".join(lines))
+            await query.edit_message_text("\n".join(lines))
             context.user_data.pop("pending_sportybet_groups", None)
         return
     pending = context.user_data.get("pending_sportybet_booking")
@@ -1610,7 +1610,7 @@ async def build_sportybet_command(update, context):
 
 async def manual_sportybet_command(update, context):
     context.user_data["slip_flow"] = "sportybet_build"
-    await reply(update, "📝 MANUAL SPORTYBET KENYA SLIP\\nSend one selection per line: Fixture | Market | Selection\\n/cancel to stop.")
+    await reply(update, "📝 MANUAL SPORTYBET KENYA SLIP\nSend one selection per line: Fixture | Market | Selection\n/cancel to stop.")
 
 
 async def edit_sportybet_command(update, context):
@@ -1699,16 +1699,16 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Send /cancel to stop.")
     elif choice == "✏️ Edit slip":
         context.user_data["slip_flow"] = "sportybet_edit_code"
-        await reply(update, "✏️ SPORTYBET SLIP EDITOR\\nSend an existing SportyBet Kenya booking code. I will read its selections and let you remove legs before creating a new code. The original code stays unchanged.\\n/cancel to stop.")
+        await reply(update, "✏️ SPORTYBET SLIP EDITOR\nSend an existing SportyBet Kenya booking code. I will read its selections and let you remove legs before creating a new code. The original code stays unchanged.\n/cancel to stop.")
     elif choice == "🔗 Merge slips":
         context.user_data["slip_flow"] = "sportybet_merge_codes"
-        await reply(update, "🔗 MERGE SPORTYBET SLIPS\\nSend 2–10 SportyBet Kenya booking codes, separated by spaces or new lines. I will combine their unique selections and preview the result before generating a new code.\\n/cancel to stop.")
+        await reply(update, "🔗 MERGE SPORTYBET SLIPS\nSend 2–10 SportyBet Kenya booking codes, separated by spaces or new lines. I will combine their unique selections and preview the result before generating a new code.\n/cancel to stop.")
     elif choice == "✂️ Split slip":
         context.user_data["slip_flow"] = "sportybet_split_code"
-        await reply(update, "✂️ SPLIT SPORTYBET SLIP\\nSend an existing SportyBet Kenya booking code. Then choose how many selections should go into each new slip.\\n/cancel to stop.")
+        await reply(update, "✂️ SPLIT SPORTYBET SLIP\nSend an existing SportyBet Kenya booking code. Then choose how many selections should go into each new slip.\n/cancel to stop.")
     elif choice == "🎯 Trim to target odds":
         context.user_data["slip_flow"] = "sportybet_trim_code"
-        await reply(update, "🎯 TRIM SPORTYBET SLIP\\nSend an existing SportyBet Kenya booking code. Then enter your target maximum combined odds. The system removes the highest-odds legs first and previews the result.\\n/cancel to stop.")
+        await reply(update, "🎯 TRIM SPORTYBET SLIP\nSend an existing SportyBet Kenya booking code. Then enter your target maximum combined odds. The system removes the highest-odds legs first and previews the result.\n/cancel to stop.")
     elif choice == "📋 Bookies & regions":
         await bookmakers_command(update, context)
     elif choice == "⚽ Match intelligence":
@@ -1822,7 +1822,7 @@ async def autobuild_sportybet_command(update, context):
         except ValueError:
             await reply(update, "Usage: /autobuild [target odds 1.50–50]. Example: /autobuild 10")
             return
-    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\\nTarget combined odds: {target:.2f}\\nScanning qualifying candidates and checking SportyBet Kenya markets…")
+    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\nTarget combined odds: {target:.2f}\nScanning qualifying candidates and checking SportyBet Kenya markets…")
     try:
         rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "all")
         # The model scan can see both feeds; only use candidates priced by SportyBet.
@@ -1844,9 +1844,9 @@ async def autobuild_sportybet_command(update, context):
         lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"), f"Selections: {len(resolved)}", ""]
         for i, leg in enumerate(resolved, 1):
             source = chosen[i-1]
-            lines.append(f"{i}. {leg['fixture']}\\n   {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}\\n   Model probability: {source['probability']:.1%} | Estimated EV: {source['ev']:+.1%}")
+            lines.append(f"{i}. {leg['fixture']}\n   {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}\n   Model probability: {source['probability']:.1%} | Estimated EV: {source['ev']:+.1%}")
         lines.extend(["", "Model remains experimental and not historically calibrated. Negative-EV legs are shown transparently. Only scoreline-supported markets are evaluated. Odds are re-resolved before code creation. Confirming requests a share code only; no bet is placed."])
-        await update.effective_message.reply_text("\\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel")]]))
+        await update.effective_message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel")]]))
     except Exception as exc:
         logger.exception("SportyBet auto-builder failed")
         await reply(update, f"⚠️ SPORTYBET AUTO-BUILD FAILED: {type(exc).__name__}: {str(exc)[:250]}")
@@ -4490,21 +4490,21 @@ async def calibrate_command(update, context):
         result = await asyncio.to_thread(evaluate_historical_calibration)
         if not result["ready"]:
             await reply(update,
-                "NOT ENOUGH HISTORICAL DATA TO CALIBRATE\\n\\n"
-                f"Settled forecasts: {result['count']}\\n"
-                f"Training sample: {result['train']} (minimum 50)\\n"
-                f"Out-of-sample holdout: {result['holdout']} (minimum 30)\\n\\n"
+                "NOT ENOUGH HISTORICAL DATA TO CALIBRATE\n\n"
+                f"Settled forecasts: {result['count']}\n"
+                f"Training sample: {result['train']} (minimum 50)\n"
+                f"Out-of-sample holdout: {result['holdout']} (minimum 30)\n\n"
                 "No calibration parameter has been fitted or applied. Keep the model labelled experimental.")
             return
         improved = result["calibrated_brier"] < result["raw_brier"] and result["calibrated_logloss"] < result["raw_logloss"]
         await reply(update,
-            "📊 HISTORICAL CALIBRATION CHECK\\n\\n"
-            f"Settled forecasts: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\\n"
-            f"Fitted temperature: {result['temperature']:.2f}\\n\\n"
-            f"Holdout Brier: {result['raw_brier']:.4f} → {result['calibrated_brier']:.4f}\\n"
-            f"Holdout log loss: {result['raw_logloss']:.4f} → {result['calibrated_logloss']:.4f}\\n\\n"
+            "📊 HISTORICAL CALIBRATION CHECK\n\n"
+            f"Settled forecasts: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\n"
+            f"Fitted temperature: {result['temperature']:.2f}\n\n"
+            f"Holdout Brier: {result['raw_brier']:.4f} → {result['calibrated_brier']:.4f}\n"
+            f"Holdout log loss: {result['raw_logloss']:.4f} → {result['calibrated_logloss']:.4f}\n\n"
             + ("Calibration improved both holdout metrics. It is a candidate for controlled deployment." if improved else "Calibration did not improve both holdout metrics. Keep the raw model; do not apply this temperature.")
-            + "\\n\\nThis is a diagnostic only: no live forecast settings are changed automatically.")
+            + "\n\nThis is a diagnostic only: no live forecast settings are changed automatically.")
     except Exception as exc:
         await reply(update, f"⚠️ Calibration evaluation failed: {type(exc).__name__}: {str(exc)[:250]}")
 
