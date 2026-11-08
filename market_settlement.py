@@ -76,14 +76,14 @@ def grade_market_evidence(market, selection, evidence):
 
     full_rows = _stat_rows(evidence.get("statistics_full_time"))
     half_rows = _stat_rows(evidence.get("statistics_half_time"))
-    if "corner" in key:
+    if ("half" in key or key.startswith("ht")) and "corner" in key:
+        stat_key, rows = "cornerkicks", half_rows
+    elif "corner" in key:
         stat_key, rows = "cornerkicks", full_rows
     elif "yellow" in key and "card" in key:
         stat_key, rows = "yellowcards", full_rows
     elif "red" in key and "card" in key:
         stat_key, rows = "redcards", full_rows
-    elif ("half" in key or key.startswith("ht")) and "corner" in key:
-        stat_key, rows = "cornerkicks", half_rows
     else:
         raise ValueError("Market is not yet supported by the evidence grader; left pending.")
 
