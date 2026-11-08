@@ -2325,51 +2325,8 @@ async def autobuild_sportybet_command(update, context):
 
 
 async def accumulator_status_command(update, context):
-    """Build a cautious combination only from scanner-qualified selections."""
-    args = [str(x).strip() for x in (context.args or [])]
-    target = 3.0
-    if args:
-        try:
-            target = float(args[0])
-            if not 1.50 <= target <= 50:
-                raise ValueError
-        except ValueError:
-            await reply(update, "Usage: /accumulator [target decimal odds, 1.50–50]. Example: /accumulator 3.00")
-            return
-
-    try:
-        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "safest")
-    except Exception as exc:
-        logger.exception("Accumulator scan failed")
-        await reply(update, f"❌ ACCUMULATOR SCAN FAILED: {type(exc).__name__}: {str(exc)[:250]}")
-        return
-
-    build = build_accumulator(rows, target, max_legs=6, ranking="probability")
-    chosen, combined = build["selections"], build["combined_odds"]
-
-    if not chosen:
-        await reply(update, "⚠️ NO USABLE ACCUMULATOR CANDIDATES\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No model-supported bookmaker prices were retrieved."))
-        return
-
-    probability_product = math.prod(item["probability"] for item in chosen)
-    lines = [
-        "🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR",
-        f"Target: {target:.2f} | Combined decimal odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"),
-        "",
-    ]
-    for number, item in enumerate(chosen, 1):
-        lines.extend([
-            f"{number}. {item['home']} vs {item['away']} — {item['league']}",
-            f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item['bookmaker']})",
-            f"   Model probability: {item['probability']:.1%} | Estimated EV: {item['ev']:+.1%}",
-        ])
-    lines.extend([
-        "",
-        f"Naive independent-leg probability product: {probability_product:.2%}",
-        "This assumes independence. Correlation is not modelled, so this is NOT a calibrated accumulator probability.",
-        "Experimental estimates only. Confirm every price and market with the bookmaker. No BTTS or Under 2.5.",
-    ])
-    await reply(update, "\n".join(lines))
+    """Use the same target-only automatic builder as the SportyBet slip workflow."""
+    await autobuild_sportybet_command(update, context)
 
 
 async def fullintel_callback(update, context):
