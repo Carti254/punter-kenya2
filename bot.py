@@ -5157,6 +5157,13 @@ async def council_command(update, context):
     try:
         from specialist_models import specialist_council
         report = await asyncio.to_thread(specialist_council, home, away, match_date)
+        x_report = None
+        if os.getenv("X_BEARER_TOKEN"):
+            try:
+                from x_research import search_match_posts
+                x_report = await asyncio.to_thread(search_match_posts, home, away, 12)
+            except Exception as x_exc:
+                x_report = {"posts": [], "warning": f"X research unavailable: {type(x_exc).__name__}: {str(x_exc)[:140]}"}
         lines = [f"🧠 SPECIALIST COUNCIL — {report['fixture']}", f"Date: {report['date']}", ""]
         for panel in report["panels"]:
             if not panel["available"]:
@@ -5175,9 +5182,18 @@ async def council_command(update, context):
                     panel["under_probability"], None, "specialist-poisson-v1",
                 )
                 lines.append(f"{panel['role']}: expected total {panel['expected_total']:.2f}; Over {panel['default_line']} {panel['over_probability']:.1%}; Under {panel['default_line']} {panel['under_probability']:.1%}; samples {panel['home_sample']}+{panel['away_sample']} | forecast #{forecast_id}")
-        lines.extend(["", "Player props: " + report["player_props"]["reason"], report["warning"],
+        lines.extend(["", "Player props: use /playerprop HOME vs AWAY | PLAYER | METRIC | LINE"])
+        if x_report is not None:
+            lines.append("")
+            lines.append(f"PUBLIC X RESEARCH: {x_report.get('result_count', len(x_report.get('posts', [])))} recent posts")
+            for post in x_report.get("posts", [])[:4]:
+                lines.append(f"@{post.get('username') or 'unknown'}: {post.get('text', '')[:180]} {post.get('url') or ''}")
+            lines.append(x_report.get("warning") or "X posts are unverified leads, not confirmed team news.")
+        elif not os.getenv("X_BEARER_TOKEN"):
+            lines.append("PUBLIC X RESEARCH: not configured; set X_BEARER_TOKEN privately to include recent posts.")
+        lines.extend(["", report["warning"],
                       "No consensus bet is issued without comparing a real bookmaker price and market-specific calibration."])
-        await reply(update, "\n".join(lines))
+        await reply(update, "\n".join(lines)[:3900])
     except Exception as exc:
         await reply(update, f"Specialist research unavailable: {type(exc).__name__}: {str(exc)[:220]}")
 
@@ -5198,8 +5214,20 @@ async def playerprop_command(update, context):
         from specialist_models import player_prop_forecast
         report = await asyncio.to_thread(player_prop_forecast, fixture[0].strip(), fixture[1].strip(),
                                          match_date, parts[1], parts[2], line)
+        from forecast_tracker import record_forecast
+        forecast_market = "player_" + report["metric"]
+        fixture_key = f"api-football-player:{report['fixture_id']}:{report['player_id']}"
+        over_id = await asyncio.to_thread(
+            record_forecast, fixture_key, forecast_market, f"Over {line:g}",
+            report["over_probability"], None, "player-poisson-v1",
+        )
+        await asyncio.to_thread(
+            record_forecast, fixture_key, forecast_market, f"Under {line:g}",
+            report["under_probability"], None, "player-poisson-v1",
+        )
         await reply(update,
             f"👤 {report['player']} — {report['metric'].replace('_', ' ').title()}\n"
+            f"Forecast record: #{over_id} (Over)\n"
             f"Recent appearances: {report['appearances']}\n"
             f"Recent values: {', '.join(str(int(x) if x.is_integer() else x) for x in report['recent_values'])}\n"
             f"Expected per appearance: {report['expected_per_appearance']:.2f}\n"
