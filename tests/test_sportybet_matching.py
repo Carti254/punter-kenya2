@@ -182,10 +182,13 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
             "data": [{"sub_type_id": 1, "name": "1X2", "odds": [
                 {"id": 11, "display": "Home", "odd_value": "1.85"}]}],
         }}
-        with patch("bookmaker_odds._get", side_effect=[listing, detail]):
+        with patch("bookmaker_odds._get", side_effect=[listing, detail]) as mocked:
             games = fetch_betika(datetime.now(EAT).date())
         self.assertEqual(len(games), 1)
         self.assertEqual(games[0]["home"], "Home FC")
+        detail_call = mocked.call_args_list[1]
+        self.assertEqual(detail_call.kwargs["headers"]["Origin"], "https://www.betika.com")
+        self.assertEqual(detail_call.kwargs["headers"]["Referer"], "https://www.betika.com/")
 
 
 
