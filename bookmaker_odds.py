@@ -114,6 +114,7 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
                 "marketId": "1,18,10,29,11,26,36,14,60100",
                 "pageSize": 100,
                 "pageNum": page,
+                "option": "2",  # Full upcoming-event catalogue; option=1 is highlights-only.
                 "todayGames": "false",
                 "timeline": 720,
                 "_t": int(time.time() * 1000),
