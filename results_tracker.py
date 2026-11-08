@@ -1,24 +1,26 @@
-"""Auditable bet logging and settlement helpers.
-
-Prediction accuracy and betting returns are deliberately kept separate.
-"""
+"""Auditable bet logging, automatic result matching and settlement helpers."""
 from decimal import Decimal, InvalidOperation
 from database import get_connection
 
 
 def grade_selection(market, selection, home_goals, away_goals, home_team=None, away_team=None):
+    home, away = int(home_goals), int(away_goals)
+    if home < 0 or away < 0:
+        raise ValueError("Full-time goals cannot be negative.")
+    total = home + away
     market_key = "".join(ch for ch in str(market).casefold() if ch.isalnum())
     pick = str(selection).strip().casefold()
-    total = int(home_goals) + int(away_goals)
-    home, away = int(home_goals), int(away_goals)
-
     if market_key in {"1x2", "matchresult", "fulltimeresult", "result"}:
         actual = "home" if home > away else "draw" if home == away else "away"
-        home_names = {"1", "home"}\n        away_names = {"2", "away"}\n        if home_team:\n            home_names.add(str(home_team).strip().casefold())\n        if away_team:\n            away_names.add(str(away_team).strip().casefold())\n        wanted = "home" if pick in home_names else "draw" if pick in {"x", "draw"} else "away" if pick in away_names else None
+        home_names, away_names = {"1", "home"}, {"2", "away"}
+        if home_team:
+            home_names.add(str(home_team).strip().casefold())
+        if away_team:
+            away_names.add(str(away_team).strip().casefold())
+        wanted = "home" if pick in home_names else "draw" if pick in {"x", "draw"} else "away" if pick in away_names else None
         if wanted is None:
             raise ValueError("Unsupported 1X2 selection.")
         return "WON" if wanted == actual else "LOST"
-
     if market_key in {"overunder", "totalgoals", "goals"}:
         import re
         match = re.fullmatch(r"(over|under|o|u)\s*(\d+(?:\.\d+)?)", pick)
@@ -27,19 +29,17 @@ def grade_selection(market, selection, home_goals, away_goals, home_team=None, a
         side = "over" if match.group(1) in {"over", "o"} else "under"
         line = Decimal(match.group(2))
         won = Decimal(total) > line if side == "over" else Decimal(total) < line
-        push = Decimal(total) == line
-        return "VOID" if push else "WON" if won else "LOST"
-
+        return "VOID" if Decimal(total) == line else "WON" if won else "LOST"
     raise ValueError("This tracker currently settles 1X2 and standard total-goals markets only.")
 
 
 def record_bet(user_id, bookmaker, home, away, market, selection, odds, stake, match_date=None):
     try:
         price, amount = Decimal(str(odds)), Decimal(str(stake))
-    except InvalidOperation:
-        raise ValueError("Odds and stake must be valid numbers.")
-    if price <= 1 or amount <= 0:
-        raise ValueError("Decimal odds must exceed 1.00 and stake must be positive.")
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError("Odds and stake must be valid numbers.") from None
+    if not price.is_finite() or not amount.is_finite() or price <= 1 or amount <= 0:
+        raise ValueError("Decimal odds must be finite and exceed 1.00; stake must be finite and positive.")
     fixture_key = "|".join([str(match_date or ""), str(home).casefold(), str(away).casefold()])
     connection = get_connection()
     try:
@@ -57,20 +57,31 @@ def record_bet(user_id, bookmaker, home, away, market, selection, odds, stake, m
         connection.close()
 
 
+def list_pending_bets(user_id=None):
+    connection = get_connection()
+    try:
+        with connection.cursor() as cursor:
+            if user_id is None:
+                cursor.execute("SELECT * FROM punter_bet_records WHERE status='PENDING' ORDER BY match_date ASC, id ASC")
+            else:
+                cursor.execute("SELECT * FROM punter_bet_records WHERE status='PENDING' AND user_id=%s ORDER BY match_date ASC, id ASC", (int(user_id),))
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+
 def settle_bet(user_id, bet_id, home_goals, away_goals):
     connection = get_connection()
     try:
         with connection.cursor() as cursor:
-            cursor.execute("""
-                SELECT * FROM punter_bet_records
-                WHERE id=%s AND user_id=%s AND status='PENDING'
-            """, (int(bet_id), int(user_id)))
+            cursor.execute("SELECT * FROM punter_bet_records WHERE id=%s AND user_id=%s AND status='PENDING'", (int(bet_id), int(user_id)))
             row = cursor.fetchone()
             if not row:
                 raise ValueError("Pending bet record not found.")
-            status = grade_selection(row["market"], row["selection"], home_goals, away_goals,\n                                     row["home_team"], row["away_team"])
+            status = grade_selection(row["market"], row["selection"], home_goals, away_goals,
+                                     row["home_team"], row["away_team"])
             stake, odds = Decimal(str(row["stake"])), Decimal(str(row["decimal_odds"]))
-            pnl = (stake * (odds - 1)) if status == "WON" else Decimal("0") if status == "VOID" else -stake
+            pnl = stake * (odds - 1) if status == "WON" else Decimal("0") if status == "VOID" else -stake
             cursor.execute("""
                 UPDATE punter_bet_records
                 SET status=%s, actual_home_goals=%s, actual_away_goals=%s,
