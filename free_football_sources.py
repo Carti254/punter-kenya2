@@ -149,6 +149,78 @@ def _pitch_date(day_text: str, token: str):
     return tuple(_rows(payload))
 
 
+def fetch_provider_fixtures(target_dates):
+    """Return upcoming fixture rows from configured free providers for the requested EAT dates."""
+    days = sorted(set(target_dates or []))
+    if not days:
+        return []
+    bsd_key = os.getenv("BSD_API_KEY") or os.getenv("BZZOIRO_API_KEY")
+    pitch_key = os.getenv("PITCHAPI_API_KEY") or os.getenv("PITCH_KEY")
+    collected = []
+    seen = set()
+
+    def add_fixture(provider, event_id, home, away, kickoff, league, country):
+        if not event_id or not home or not away or not kickoff:
+            return
+        key = (_normal(home), _normal(away), str(kickoff)[:16])
+        if key in seen:
+            return
+        seen.add(key)
+        collected.append({
+            "id": f"{provider}:{event_id}",
+            "homeTeamName": str(home),
+            "awayTeamName": str(away),
+            "kickoffUtc": str(kickoff),
+            "leagueName": str(league or "Competition"),
+            "countryName": str(country or ""),
+            "matchStatus": "Scheduled",
+            "sourceProvider": provider.upper(),
+        })
+
+    if bsd_key:
+        try:
+            start = (days[0] - timedelta(days=1)).isoformat()
+            end = (days[-1] + timedelta(days=1)).isoformat()
+            for row in _bsd_events_for_window(start, end, bsd_key):
+                if not isinstance(row, dict):
+                    continue
+                home, away = _event_names(row, "bsd")
+                competition = row.get("league") or row.get("competition") or {}
+                country = row.get("country") or {}
+                if isinstance(competition, dict):
+                    competition = competition.get("name") or competition.get("title")
+                if isinstance(country, dict):
+                    country = country.get("name") or country.get("code")
+                add_fixture("bsd", row.get("id") or row.get("event_id"),
+                            home, away, _event_time(row, "bsd"), competition, country)
+        except Exception as exc:
+            LOG.warning("BSD fixture discovery failed: %s", exc)
+
+    if pitch_key:
+        try:
+            query_days = set()
+            for day in days:
+                for offset in (-1, 0, 1):
+                    query_days.add((day + timedelta(days=offset)).isoformat())
+            for day_text in sorted(query_days):
+                for row in _pitch_date(day_text, pitch_key):
+                    if not isinstance(row, dict):
+                        continue
+                    home, away = _event_names(row, "pitch")
+                    league = row.get("league") or {}
+                    country = row.get("country") or {}
+                    if isinstance(league, dict):
+                        league = league.get("name")
+                    if isinstance(country, dict):
+                        country = country.get("name") or country.get("code")
+                    add_fixture("pitchapi", row.get("id"), home, away,
+                                _event_time(row, "pitch"), league, country)
+        except Exception as exc:
+            LOG.warning("PitchAPI fixture discovery failed: %s", exc)
+
+    return collected
+
+
 def _bsd_detail(event_id, suffix, token):
     headers = {"Authorization": f"Token {token}", "Accept": "application/json"}
     return _unwrap(_request(f"{BSD_BASE}/events/{event_id}/{suffix.strip('/')}/", headers))
