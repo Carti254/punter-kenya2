@@ -4962,6 +4962,19 @@ async def marketdata_command(update, context):
         await reply(update, f"⚠️ Match-statistics provider unavailable: {type(exc).__name__}: {str(exc)[:250]}")
 
 
+async def automatic_price_snapshot_job(context):
+    """Capture today's and tomorrow's public bookmaker prices every 30 minutes."""
+    try:
+        result = await asyncio.to_thread(capture_current_prices)
+        logger.info(
+            "Automatic odds snapshot: %s events, %s prices saved for %s; feed errors=%s",
+            result.get("events", 0), result.get("saved", 0),
+            ",".join(result.get("dates", [])), result.get("errors", {}),
+        )
+    except Exception:
+        logger.exception("Scheduled bookmaker price snapshot failed")
+
+
 async def automatic_bet_settlement_job(context):
     try:
         result = await asyncio.to_thread(refresh_pending_bet_records)
@@ -5292,7 +5305,16 @@ def main():
     )
 
     if database_enabled and app.job_queue is not None:
-        app.job_queue.run_repeating(automatic_bet_settlement_job, interval=6 * 60 * 60, first=60, name="automatic-bet-results")
+        app.job_queue.run_repeating(
+            automatic_bet_settlement_job, interval=6 * 60 * 60, first=60,
+            name="automatic-bet-results",
+        )
+        app.job_queue.run_repeating(
+            automatic_price_snapshot_job, interval=30 * 60, first=30,
+            name="automatic-bookmaker-price-snapshots",
+        )
+    elif database_enabled:
+        logger.warning("Telegram JobQueue unavailable; automatic results and price snapshots are disabled.")
 
     handlers = [
         ("start", start),
