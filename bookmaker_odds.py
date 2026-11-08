@@ -34,7 +34,16 @@ SESSION.headers.update({
 
 def _get(url: str, *, params=None, headers=None, timeout=15):
     response = SESSION.get(url, params=params, headers=headers, timeout=timeout)
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.HTTPError:
+        # Preserve the provider's diagnostic response; a bare status code
+        # makes undocumented API changes almost impossible to troubleshoot.
+        body = (response.text or "")[:700]
+        safe_url = response.url.split("?", 1)[0] if response.url else url
+        raise RuntimeError(
+            f"SportyBet HTTP {response.status_code} at {safe_url}: {body}"
+        ) from None
     return response.json()
 
 
@@ -91,8 +100,18 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
     for page in range(1, max_pages + 1):
         payload = _get(
             SPORTYBET_BASE + "/factsCenter/pcUpcomingEvents",
-            params={"sportId": "sr:sport:1", "pageSize": 100,
-                    "pageNum": page, "option": 2, "_t": int(time.time() * 1000)},
+            params={
+                "sportId": "sr:sport:1",
+                # SportyBet's web feed expects an explicit market catalogue.
+                # These IDs cover the common pre-match football markets; each
+                # event's returned markets are still parsed dynamically.
+                "marketId": "1,18,10,29,11,26,36,14,60100",
+                "pageSize": 100,
+                "pageNum": page,
+                "todayGames": "false",
+                "timeline": 720,
+                "_t": int(time.time() * 1000),
+            },
             headers=headers, timeout=(8, 20),
         )
         if not isinstance(payload, dict) or int(payload.get("bizCode", 0) or 0) != 10000:
