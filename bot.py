@@ -34,7 +34,7 @@ from football_stats_provider import fetch_match_market_data, FootballStatsError
 from market_settlement import settle_bet_with_market_evidence
 from ai_assistant import ai_is_configured, interpret_request, read_slip_image
 from premium_intelligence import market_probabilities, assess_price, rollover_projection
-from user_portfolio import save_bankroll, get_settings, save_rollover, calculate_user_stake
+from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
 
@@ -5245,6 +5245,42 @@ async def automatic_odds_snapshot_job(context):
         logger.exception("Scheduled bookmaker price capture failed")
 
 
+async def preferences_command(update, context):
+    """Read, set or clear explicit non-secret user preferences."""
+    args = list(context.args or [])
+    try:
+        if not args:
+            settings = await asyncio.to_thread(get_settings, update.effective_user.id)
+            try:
+                preferences = json.loads(settings.get("preferences_json") or "{}")
+            except (TypeError, ValueError):
+                preferences = {}
+            await reply(update, "🧠 YOUR SAVED PREFERENCES\n" + (json.dumps(preferences, ensure_ascii=False, indent=2) if preferences else "No preferences saved yet.\nExample: /preferences leagues=non-big-five risk=conservative markets=over-1.5"))
+            return
+        if len(args) == 1 and args[0].casefold() == "clear":
+            await asyncio.to_thread(save_preferences, update.effective_user.id, {})
+            await reply(update, "Saved preferences cleared.")
+            return
+        settings = await asyncio.to_thread(get_settings, update.effective_user.id)
+        try:
+            preferences = json.loads(settings.get("preferences_json") or "{}")
+        except (TypeError, ValueError):
+            preferences = {}
+        for token in args:
+            if "=" not in token:
+                raise ValueError("Use key=value pairs, e.g. leagues=non-big-five risk=conservative.")
+            key, value = token.split("=", 1)
+            key = key.strip().casefold()
+            value = value.strip()
+            if not key or not value or len(key) > 50 or len(value) > 300:
+                raise ValueError("Preference keys and values must be non-empty and reasonably short.")
+            preferences[key] = value
+        await asyncio.to_thread(save_preferences, update.effective_user.id, preferences)
+        await reply(update, "✅ Preferences saved. Use /preferences to review or /preferences clear to clear them.")
+    except Exception as exc:
+        await reply(update, f"Could not update preferences: {type(exc).__name__}: {str(exc)[:180]}")
+
+
 async def rollover_command(update, context):
     if len(context.args or []) != 2:
         await reply(update, "Usage: /rollover DAYS DAILY_TARGET_ODDS\nExample: /rollover 5 2")
@@ -5344,7 +5380,7 @@ def main():
         ("betsettle", betsettle_command),
         ("betstats", betstats_command),
         ("performance", betstats_command),
-        ("bankroll", bankroll_command),
+        ("bankroll", bankroll_command),\n        ("preferences", preferences_command),
         ("stake", stake_command),
         ("rollover", rollover_command),
         ("rolloverstatus", rolloverstatus_command),
