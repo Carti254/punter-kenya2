@@ -1838,7 +1838,8 @@ async def autobuild_sportybet_command(update, context):
         if not chosen:
             await reply(update, "⚠️ NO USABLE SPORTYBET PICKS FOUND\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No SportyBet-priced, model-supported candidates were found."))
             return
-        # Keep the exact event/market/outcome IDs from the odds scan; do not fuzzy-match again.\n        resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
+        # Keep exact event/market/outcome IDs from the odds scan; do not fuzzy-match again.
+        resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
         context.user_data["pending_sportybet_booking"] = resolved
         combined = math.prod(float(x["odds"]) for x in resolved)
         lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"), f"Selections: {len(resolved)}", ""]
