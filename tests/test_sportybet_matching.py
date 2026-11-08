@@ -176,12 +176,13 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
         kickoff = datetime.now(EAT).replace(microsecond=0).isoformat()
         listing = {"data": [{"parent_match_id": 123, "home_team": "Home FC",
                              "away_team": "Away FC", "start_time": kickoff}]}
-        detail = {"data": {
+        detail = {
             "meta": {"home_team": "Home FC", "away_team": "Away FC",
                      "start_time": kickoff, "competition_name": "Test League"},
             "data": [{"sub_type_id": 1, "name": "1X2", "odds": [
                 {"id": 11, "display": "Home", "odd_value": "1.85"}]}],
-        }}
+        }
+
         with patch("bookmaker_odds._get", side_effect=[listing, detail]) as mocked:
             games = fetch_betika(datetime.now(EAT).date())
         self.assertEqual(len(games), 1)
