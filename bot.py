@@ -13,7 +13,7 @@ import json
 import time
 import copy
 import uuid
-from sportybet_client import SportyBetError, prepare_slip as prepare_sportybet_slip, create_booking as create_sportybet_booking, get_booking as get_sportybet_booking
+from sportybet_client import SportyBetError, prepare_slip as prepare_sportybet_slip, prepare_slip_from_candidates as prepare_sportybet_candidates, create_booking as create_sportybet_booking, get_booking as get_sportybet_booking
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -27,10 +27,8 @@ from database import get_connection, test_connection
 from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find_bookmaker_event
 from slip_manager import create_slip, get_slip, list_slips, update_slip
 from schema_migrations import run_migrations
-from results_tracker import record_bet, settle_bet, bet_statistics
+from results_tracker import record_bet, settle_bet, bet_statistics, list_pending_bets
 from prediction_validation import brier_score, log_loss, fit_temperature, apply_temperature
-from schema_migrations import run_migrations
-from results_tracker import record_bet, settle_bet, bet_statistics
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -1293,7 +1291,7 @@ async def process_slip_flow(update, context):
             for i, leg in enumerate(booking["selections"], 1):
                 lines.append(f"{i}. {leg['fixture']} | {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}")
             lines.extend(["", "Send the leg numbers to REMOVE, separated by commas (e.g. 2,5,7).", "Send KEEP ALL to recreate an unchanged copy, or /cancel."])
-            await reply(update, "\\n".join(lines))
+            await reply(update, "\n".join(lines))
             return True
 
         if state == "sportybet_edit_remove":
@@ -1321,11 +1319,11 @@ async def process_slip_flow(update, context):
             preview = [f"✏️ EDIT PREVIEW — {booking.get('bookingCode')}", f"Kept: {len(kept)} | Removed: {removed_count}", f"New combined odds: {combined:.2f}", ""]
             preview.extend(f"{i}. {x['fixture']} | {x['market']}: {x['selection']} @ {x['odds']:.2f}" for i, x in enumerate(kept, 1))
             preview.extend(["", "Confirm to create a NEW SportyBet code. The original code remains unchanged."])
-            await update.effective_message.reply_text("\\n".join(preview), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate edited code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
+            await update.effective_message.reply_text("\n".join(preview), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate edited code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
             return True
 
         if state == "sportybet_merge_codes":
-            codes = [x.strip().upper() for x in re.split(r"[\\s,]+", message) if x.strip()]
+            codes = [x.strip().upper() for x in re.split(r"[\s,]+", message) if x.strip()]
             if len(codes) < 2 or len(codes) > 10 or len(set(codes)) != len(codes):
                 await reply(update, "Send 2–10 different SportyBet booking codes, separated by spaces or new lines.")
                 return True
@@ -1345,7 +1343,7 @@ async def process_slip_flow(update, context):
             context.user_data["pending_sportybet_groups"] = [selections]
             context.user_data.pop("slip_flow", None)
             odds = math.prod(float(x["odds"]) for x in selections)
-            await update.effective_message.reply_text(f"🔗 SPORTYBET MERGE PREVIEW\\nSource codes: {len(codes)}\\nUnique selections: {len(selections)}\\nCombined odds: {odds:.2f}\\nDuplicate identical selections were removed.\\n\\nConfirm to create one new SportyBet code; source codes remain unchanged.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate merged code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
+            await update.effective_message.reply_text(f"🔗 SPORTYBET MERGE PREVIEW\nSource codes: {len(codes)}\nUnique selections: {len(selections)}\nCombined odds: {odds:.2f}\nDuplicate identical selections were removed.\n\nConfirm to create one new SportyBet code; source codes remain unchanged.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate merged code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
             return True
 
         if state == "sportybet_split_code":
@@ -1353,7 +1351,7 @@ async def process_slip_flow(update, context):
             booking = await asyncio.to_thread(get_sportybet_booking, code)
             context.user_data["sportybet_manage_source"] = booking
             context.user_data["slip_flow"] = "sportybet_split_size"
-            await reply(update, f"✂️ SPORTYBET SPLITTER\\nLoaded {len(booking['selections'])} selections from {booking['bookingCode']}.\\nSend selections per new slip (e.g. 5).")
+            await reply(update, f"✂️ SPORTYBET SPLITTER\nLoaded {len(booking['selections'])} selections from {booking['bookingCode']}.\nSend selections per new slip (e.g. 5).")
             return True
 
         if state == "sportybet_split_size":
@@ -1374,7 +1372,7 @@ async def process_slip_flow(update, context):
             for i, group in enumerate(groups, 1):
                 lines.append(f"Slip {i}: {len(group)} selections | odds {math.prod(float(x['odds']) for x in group):.2f}")
             lines.append("Confirm to generate separate SportyBet codes. Original code remains unchanged.")
-            await update.effective_message.reply_text("\\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate split codes", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
+            await update.effective_message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate split codes", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
             return True
 
         if state == "sportybet_trim_code":
@@ -1383,7 +1381,7 @@ async def process_slip_flow(update, context):
             context.user_data["sportybet_manage_source"] = booking
             context.user_data["slip_flow"] = "sportybet_trim_target"
             odds = math.prod(float(x["odds"]) for x in booking["selections"])
-            await reply(update, f"🎯 TARGET-ODDS TRIM\\nLoaded {len(booking['selections'])} selections. Current combined odds: {odds:.2f}.\\nSend your maximum target odds (e.g. 10).")
+            await reply(update, f"🎯 TARGET-ODDS TRIM\nLoaded {len(booking['selections'])} selections. Current combined odds: {odds:.2f}.\nSend your maximum target odds (e.g. 10).")
             return True
 
         if state == "sportybet_trim_target":
@@ -1409,7 +1407,7 @@ async def process_slip_flow(update, context):
             context.user_data["pending_sportybet_groups"] = [kept]
             context.user_data.pop("slip_flow", None)
             new_odds = math.prod(float(x["odds"]) for x in kept)
-            await update.effective_message.reply_text(f"🎯 TRIM PREVIEW\\nTarget: {target:.2f}\\nNew odds: {new_odds:.2f}\\nRetained: {len(kept)} | Removed: {len(removed)}\\n\\nRemoved legs:\\n" + ("\\n".join(f"• {x['fixture']} — {x['selection']}" for x in removed) or "None") + "\\n\\nConfirm to create a new SportyBet code.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate trimmed code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
+            await update.effective_message.reply_text(f"🎯 TRIM PREVIEW\nTarget: {target:.2f}\nNew odds: {new_odds:.2f}\nRetained: {len(kept)} | Removed: {len(removed)}\n\nRemoved legs:\n" + ("\n".join(f"• {x['fixture']} — {x['selection']}" for x in removed) or "None") + "\n\nConfirm to create a new SportyBet code.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate trimmed code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
             return True
 
         if state == "analyze":
@@ -1536,7 +1534,7 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
                 if url:
                     lines.append(f"   {url}")
             lines.extend(["", "These are new shareable slips. Original booking codes remain unchanged. No wager has been placed."])
-            await query.edit_message_text("\\n".join(lines))
+            await query.edit_message_text("\n".join(lines))
             context.user_data.pop("pending_sportybet_groups", None)
         except SportyBetError as exc:
             lines = ["⚠️ SPORTYBET DID NOT CONFIRM ALL REQUESTED CODES", str(exc)[:300]]
@@ -1544,7 +1542,7 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
                 lines.append("Codes already confirmed by SportyBet:")
                 lines.extend(f"{code} ({count} selections)" for _, code, _, count in results)
             lines.append("The booking request is not automatically repeated.")
-            await query.edit_message_text("\\n".join(lines))
+            await query.edit_message_text("\n".join(lines))
             context.user_data.pop("pending_sportybet_groups", None)
         return
     pending = context.user_data.get("pending_sportybet_booking")
@@ -1565,6 +1563,11 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
         if not code:
             raise SportyBetError("SportyBet did not return a booking code.")
         actual_legs = result.get("legs") or []
+        try:
+            saved_slip_id = await asyncio.to_thread(create_slip, update.effective_user.id, pending, "SportyBet")
+        except Exception as storage_error:
+            saved_slip_id = None
+            logger.warning("Booking code created but internal slip archive failed: %s", storage_error)
         lines = [
             "✅ SPORTYBET KENYA BOOKING CODE CREATED",
             "━━━━━━━━━━━━━━━━━━━━",
@@ -1574,6 +1577,8 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
             "Open SportyBet Kenya, load this code and verify every selection and the current odds.",
             "No wager has been placed.",
         ]
+        if saved_slip_id is not None:
+            lines.append(f"Saved to PUNTER KENYA slip history as #{saved_slip_id}.")
         if result.get("shareURL"):
             lines.extend(["", f"Slip link: {result['shareURL']}"])
         if result.get("unavailable"):
@@ -1605,7 +1610,7 @@ async def build_sportybet_command(update, context):
 
 async def manual_sportybet_command(update, context):
     context.user_data["slip_flow"] = "sportybet_build"
-    await reply(update, "📝 MANUAL SPORTYBET KENYA SLIP\\nSend one selection per line: Fixture | Market | Selection\\n/cancel to stop.")
+    await reply(update, "📝 MANUAL SPORTYBET KENYA SLIP\nSend one selection per line: Fixture | Market | Selection\n/cancel to stop.")
 
 
 async def edit_sportybet_command(update, context):
@@ -1694,16 +1699,16 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Send /cancel to stop.")
     elif choice == "✏️ Edit slip":
         context.user_data["slip_flow"] = "sportybet_edit_code"
-        await reply(update, "✏️ SPORTYBET SLIP EDITOR\\nSend an existing SportyBet Kenya booking code. I will read its selections and let you remove legs before creating a new code. The original code stays unchanged.\\n/cancel to stop.")
+        await reply(update, "✏️ SPORTYBET SLIP EDITOR\nSend an existing SportyBet Kenya booking code. I will read its selections and let you remove legs before creating a new code. The original code stays unchanged.\n/cancel to stop.")
     elif choice == "🔗 Merge slips":
         context.user_data["slip_flow"] = "sportybet_merge_codes"
-        await reply(update, "🔗 MERGE SPORTYBET SLIPS\\nSend 2–10 SportyBet Kenya booking codes, separated by spaces or new lines. I will combine their unique selections and preview the result before generating a new code.\\n/cancel to stop.")
+        await reply(update, "🔗 MERGE SPORTYBET SLIPS\nSend 2–10 SportyBet Kenya booking codes, separated by spaces or new lines. I will combine their unique selections and preview the result before generating a new code.\n/cancel to stop.")
     elif choice == "✂️ Split slip":
         context.user_data["slip_flow"] = "sportybet_split_code"
-        await reply(update, "✂️ SPLIT SPORTYBET SLIP\\nSend an existing SportyBet Kenya booking code. Then choose how many selections should go into each new slip.\\n/cancel to stop.")
+        await reply(update, "✂️ SPLIT SPORTYBET SLIP\nSend an existing SportyBet Kenya booking code. Then choose how many selections should go into each new slip.\n/cancel to stop.")
     elif choice == "🎯 Trim to target odds":
         context.user_data["slip_flow"] = "sportybet_trim_code"
-        await reply(update, "🎯 TRIM SPORTYBET SLIP\\nSend an existing SportyBet Kenya booking code. Then enter your target maximum combined odds. The system removes the highest-odds legs first and previews the result.\\n/cancel to stop.")
+        await reply(update, "🎯 TRIM SPORTYBET SLIP\nSend an existing SportyBet Kenya booking code. Then enter your target maximum combined odds. The system removes the highest-odds legs first and previews the result.\n/cancel to stop.")
     elif choice == "📋 Bookies & regions":
         await bookmakers_command(update, context)
     elif choice == "⚽ Match intelligence":
@@ -1817,7 +1822,7 @@ async def autobuild_sportybet_command(update, context):
         except ValueError:
             await reply(update, "Usage: /autobuild [target odds 1.50–50]. Example: /autobuild 10")
             return
-    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\\nTarget combined odds: {target:.2f}\\nScanning qualifying candidates and checking SportyBet Kenya markets…")
+    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\nTarget combined odds: {target:.2f}\nScanning qualifying candidates and checking SportyBet Kenya markets…")
     try:
         rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "all")
         # The model scan can see both feeds; only use candidates priced by SportyBet.
@@ -1833,16 +1838,16 @@ async def autobuild_sportybet_command(update, context):
         if not chosen:
             await reply(update, "⚠️ NO USABLE SPORTYBET PICKS FOUND\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No SportyBet-priced, model-supported candidates were found."))
             return
-        raw_lines = [f"{x['home']} vs {x['away']} | {x['market']} | {x['selection']}" for x in chosen]
-        resolved = await asyncio.to_thread(prepare_sportybet_slip, raw_lines)
+        # Keep exact event/market/outcome IDs from the odds scan; do not fuzzy-match again.
+        resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
         context.user_data["pending_sportybet_booking"] = resolved
         combined = math.prod(float(x["odds"]) for x in resolved)
         lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"), f"Selections: {len(resolved)}", ""]
         for i, leg in enumerate(resolved, 1):
             source = chosen[i-1]
-            lines.append(f"{i}. {leg['fixture']}\\n   {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}\\n   Model probability: {source['probability']:.1%} | Estimated EV: {source['ev']:+.1%}")
+            lines.append(f"{i}. {leg['fixture']}\n   {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}\n   Model probability: {source['probability']:.1%} | Estimated EV: {source['ev']:+.1%}")
         lines.extend(["", "Model remains experimental and not historically calibrated. Negative-EV legs are shown transparently. Only scoreline-supported markets are evaluated. Odds are re-resolved before code creation. Confirming requests a share code only; no bet is placed."])
-        await update.effective_message.reply_text("\\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel")]]))
+        await update.effective_message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel")]]))
     except Exception as exc:
         logger.exception("SportyBet auto-builder failed")
         await reply(update, f"⚠️ SPORTYBET AUTO-BUILD FAILED: {type(exc).__name__}: {str(exc)[:250]}")
@@ -2765,17 +2770,32 @@ def build_pre_match_prediction(raw_fixture, fixture):
 
 
 
-def build_openmatchday_prediction(raw_fixture, fixture):
-    """Forecast a fixture from recent results in its own competition CSV."""
+def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None):
+    """Forecast from competition results strictly before as_of_date when supplied."""
     folder = str(raw_fixture.get("leagueShortcut") or "").strip()
     if not folder:
         return {"available": False, "reason": "The fixture has no competition reference for retrieving its results."}
 
-    try:
-        rows = fetch_openmatchday_csv(folder, "results")
-    except Exception as exc:
-        logger.warning("Could not load historical results for %s: %s", folder, exc)
-        return {"available": False, "reason": "Historical results could not be retrieved for this competition."}
+    if historical_rows is not None:
+        rows = list(historical_rows)
+    else:
+        try:
+            rows = fetch_openmatchday_csv(folder, "results")
+        except Exception as exc:
+            logger.warning("Could not load historical results for %s: %s", folder, exc)
+            return {"available": False, "reason": "Historical results could not be retrieved for this competition."}
+
+    if as_of_date is not None:
+        cutoff_date = as_of_date.date() if isinstance(as_of_date, datetime) else datetime.strptime(str(as_of_date)[:10], "%Y-%m-%d").date()
+        prior_rows = []
+        for row in rows:
+            try:
+                row_date = datetime.strptime(str(row.get("date") or ""), "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if row_date < cutoff_date:
+                prior_rows.append(row)
+        rows = prior_rows
 
     def parse_team_history(team_name):
         parsed = []
@@ -3346,6 +3366,11 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                 for row in game.get("markets", []):
                     market_name = str(row.get("market") or "Unknown")
                     selection_name = str(row.get("selection") or "Unknown")
+                    # Respect the configured user exclusions consistently across every builder.
+                    if "btts" in _normal_market_text(market_name) or "both teams to score" in _normal_market_text(market_name):
+                        continue
+                    if re.search(r"\bunder\s*2\.5\b", selection_name, re.I):
+                        continue
                     probability, reason = _market_probability_for_row(prediction, row)
                     if probability is None:
                         if reason:
@@ -4438,22 +4463,77 @@ async def error_handler(
 # APPLICATION STARTUP
 # ============================================================
 
+def collect_walk_forward_forecasts(max_matches=2000):
+    """Reconstruct historical forecasts using only results before each match date."""
+    samples = []
+    leagues = fetch_all_leagues()
+    for league in leagues:
+        folder = str(league.get("leagueShortcut") or "").strip()
+        if not folder:
+            continue
+        try:
+            rows = fetch_openmatchday_csv(folder, "results")
+        except Exception as exc:
+            logger.warning("Backtest skipped %s: %s", folder, str(exc)[:160])
+            continue
+        completed = []
+        for row in rows:
+            try:
+                match_date = datetime.strptime(str(row.get("date") or ""), "%Y-%m-%d").date()
+                hg, ag = int(row.get("ft_home")), int(row.get("ft_away"))
+            except (TypeError, ValueError):
+                continue
+            home, away = str(row.get("home") or "").strip(), str(row.get("away") or "").strip()
+            if home and away and hg >= 0 and ag >= 0:
+                completed.append((match_date, home, away, hg, ag))
+        completed.sort(key=lambda item: item[0])
+        for match_date, home, away, hg, ag in completed:
+            prediction = build_openmatchday_prediction(
+                {"leagueShortcut": folder},
+                {"home_team": home, "away_team": away},
+                historical_rows=rows,
+                as_of_date=match_date,
+            )
+            if not prediction.get("available"):
+                continue
+            samples.append({
+                "match_date": match_date,
+                "p_home": prediction["home_win"],
+                "p_draw": prediction["draw"],
+                "p_away": prediction["away_win"],
+                "actual_home_goals": hg,
+                "actual_away_goals": ag,
+            })
+            if len(samples) >= max_matches:
+                return sorted(samples, key=lambda item: item["match_date"])
+    return sorted(samples, key=lambda item: item["match_date"])
+
+
 def evaluate_historical_calibration():
-    """Chronological train/holdout evaluation of stored 1X2 forecasts."""
-    connection = get_connection()
+    """Chronological walk-forward calibration test; never uses same-day/future results."""
+    rows = []
+    source = "stored pre-match prediction records"
     try:
-        with connection.cursor() as cursor:
-            ensure_prediction_records_table(cursor)
-            cursor.execute("""
-                SELECT p_home, p_draw, p_away, actual_home_goals, actual_away_goals
-                FROM punter_prediction_records
-                WHERE status='SETTLED' AND actual_home_goals IS NOT NULL
-                  AND actual_away_goals IS NOT NULL
-                ORDER BY match_date ASC, id ASC
-            """)
-            rows = cursor.fetchall()
-    finally:
-        connection.close()
+        connection = get_connection()
+        try:
+            with connection.cursor() as cursor:
+                ensure_prediction_records_table(cursor)
+                cursor.execute("""
+                    SELECT match_date, p_home, p_draw, p_away, actual_home_goals, actual_away_goals
+                    FROM punter_prediction_records
+                    WHERE status='SETTLED' AND actual_home_goals IS NOT NULL
+                      AND actual_away_goals IS NOT NULL
+                    ORDER BY match_date ASC, id ASC
+                """)
+                rows = cursor.fetchall()
+        finally:
+            connection.close()
+    except Exception as exc:
+        logger.warning("Stored prediction history unavailable; using walk-forward reconstruction: %s", str(exc)[:180])
+
+    if len(rows) < 80:
+        rows = collect_walk_forward_forecasts()
+        source = "walk-forward reconstruction from historical competition results"
 
     probabilities, outcomes = [], []
     for row in rows:
@@ -4462,16 +4542,26 @@ def evaluate_historical_calibration():
         outcomes.append(0 if hg > ag else 1 if hg == ag else 2)
 
     count = len(rows)
-    split = int(count * 0.70)
-    if split < 50 or count - split < 30:
-        return {"ready": False, "count": count, "train": split, "holdout": count - split}
+    dates = sorted({row["match_date"] for row in rows})
+    date_split = int(len(dates) * 0.70)
+    if date_split < 1 or date_split >= len(dates):
+        return {"ready": False, "count": count, "train": 0, "holdout": 0, "source": source}
+    cutoff = dates[date_split]
+    train_indices = [i for i, row in enumerate(rows) if row["match_date"] < cutoff]
+    test_indices = [i for i, row in enumerate(rows) if row["match_date"] >= cutoff]
+    if len(train_indices) < 50 or len(test_indices) < 30:
+        return {"ready": False, "count": count, "train": len(train_indices),
+                "holdout": len(test_indices), "source": source}
 
-    train_p, train_y = probabilities[:split], outcomes[:split]
-    test_p, test_y = probabilities[split:], outcomes[split:]
+    train_p = [probabilities[i] for i in train_indices]
+    train_y = [outcomes[i] for i in train_indices]
+    test_p = [probabilities[i] for i in test_indices]
+    test_y = [outcomes[i] for i in test_indices]
     fitted = fit_temperature(train_p, train_y, minimum_samples=50)
     calibrated = [apply_temperature(p, fitted["temperature"]) for p in test_p]
     return {
-        "ready": True, "count": count, "train": split, "holdout": count - split,
+        "ready": True, "count": count, "train": len(train_indices),
+        "holdout": len(test_indices), "source": source,
         "temperature": fitted["temperature"],
         "raw_brier": brier_score(test_p, test_y),
         "calibrated_brier": brier_score(calibrated, test_y),
@@ -4486,101 +4576,138 @@ async def calibrate_command(update, context):
         result = await asyncio.to_thread(evaluate_historical_calibration)
         if not result["ready"]:
             await reply(update,
-                "NOT ENOUGH HISTORICAL DATA TO CALIBRATE\\n\\n"
-                f"Settled forecasts: {result['count']}\\n"
-                f"Training sample: {result['train']} (minimum 50)\\n"
-                f"Out-of-sample holdout: {result['holdout']} (minimum 30)\\n\\n"
+                "NOT ENOUGH HISTORICAL DATA TO CALIBRATE\n\n"
+                f"Forecast sample: {result['count']}\n"
+                f"Training sample: {result['train']} (minimum 50)\n"
+                f"Out-of-sample holdout: {result['holdout']} (minimum 30)\n\n"
                 "No calibration parameter has been fitted or applied. Keep the model labelled experimental.")
             return
         improved = result["calibrated_brier"] < result["raw_brier"] and result["calibrated_logloss"] < result["raw_logloss"]
         await reply(update,
-            "📊 HISTORICAL CALIBRATION CHECK\\n\\n"
-            f"Settled forecasts: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\\n"
-            f"Fitted temperature: {result['temperature']:.2f}\\n\\n"
-            f"Holdout Brier: {result['raw_brier']:.4f} → {result['calibrated_brier']:.4f}\\n"
-            f"Holdout log loss: {result['raw_logloss']:.4f} → {result['calibrated_logloss']:.4f}\\n\\n"
+            "📊 HISTORICAL CALIBRATION CHECK\n\n"
+            f"Forecast sample: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\n"
+            f"Data source: {result['source']}\n"
+            f"Fitted temperature: {result['temperature']:.2f}\n\n"
+            f"Holdout Brier: {result['raw_brier']:.4f} → {result['calibrated_brier']:.4f}\n"
+            f"Holdout log loss: {result['raw_logloss']:.4f} → {result['calibrated_logloss']:.4f}\n\n"
             + ("Calibration improved both holdout metrics. It is a candidate for controlled deployment." if improved else "Calibration did not improve both holdout metrics. Keep the raw model; do not apply this temperature.")
-            + "\\n\\nThis is a diagnostic only: no live forecast settings are changed automatically.")
+            + "\n\nThis is a diagnostic only: no live forecast settings are changed automatically.")
     except Exception as exc:
         await reply(update, f"⚠️ Calibration evaluation failed: {type(exc).__name__}: {str(exc)[:250]}")
 
 
+
+def refresh_pending_bet_records():
+    """Settle logged bets only when one exact team/date result exists in source CSV."""
+    pending = list_pending_bets()
+    if not pending:
+        return {"checked": 0, "settled": 0, "ambiguous": 0, "pending": 0}
+    leagues = fetch_all_leagues()
+    result_cache = {}
+    settled = ambiguous = checked = 0
+    for bet in pending:
+        match_date = bet.get("match_date")
+        if not match_date:
+            continue
+        date_text = match_date.isoformat() if hasattr(match_date, "isoformat") else str(match_date)[:10]
+        matches = []
+        for league in leagues:
+            folder = str(league.get("leagueShortcut") or "").strip()
+            if not folder:
+                continue
+            if folder not in result_cache:
+                try:
+                    result_cache[folder] = fetch_openmatchday_csv(folder, "results")
+                except Exception as exc:
+                    logger.warning("Could not load results CSV for %s: %s", folder, exc)
+                    result_cache[folder] = []
+            for row in result_cache[folder]:
+                if str(row.get("date") or "").strip() != date_text:
+                    continue
+                if canonical_team_key(row.get("home")) != canonical_team_key(bet.get("home_team")):
+                    continue
+                if canonical_team_key(row.get("away")) != canonical_team_key(bet.get("away_team")):
+                    continue
+                try:
+                    hg, ag = int(row.get("ft_home")), int(row.get("ft_away"))
+                except (TypeError, ValueError):
+                    continue
+                matches.append((hg, ag))
+        checked += 1
+        if len(matches) != 1:
+            if len(matches) > 1:
+                ambiguous += 1
+            continue
+        try:
+            settle_bet(int(bet["user_id"]), int(bet["id"]), matches[0][0], matches[0][1])
+            settled += 1
+        except ValueError:
+            # Another worker/manual action may already have settled it.
+            continue
+        except Exception:
+            logger.exception("Automatic settlement failed for bet #%s", bet.get("id"))
+    return {"checked": checked, "settled": settled, "ambiguous": ambiguous,
+            "pending": max(0, len(pending) - settled)}
+
+
+async def automatic_bet_settlement_job(context):
+    try:
+        result = await asyncio.to_thread(refresh_pending_bet_records)
+        if result["settled"]:
+            logger.info("Automatically settled %s logged bets from completed-results CSV.", result["settled"])
+    except Exception:
+        logger.exception("Scheduled bet-result refresh failed")
+
+
+async def betresults_command(update, context):
+    await reply(update, "🔄 Checking completed results and settling only exact fixture/date matches...")
+    try:
+        result = await asyncio.to_thread(refresh_pending_bet_records)
+        await reply(update,
+            "📊 AUTOMATIC BET SETTLEMENT\n\n"
+            f"Pending bets checked: {result['checked']}\n"
+            f"Newly settled: {result['settled']}\n"
+            f"Ambiguous results left untouched: {result['ambiguous']}\n"
+            f"Still pending: {result['pending']}\n\n"
+            "Results are matched by exact home team, away team and match date. Unmatched or ambiguous records are never guessed; use /betsettle for those.")
+    except Exception as exc:
+        await reply(update, f"⚠️ Result refresh failed: {type(exc).__name__}: {str(exc)[:250]}")
+
+
+def resolve_bet_match_date(home, away):
+    """Resolve a logged fixture's EAT date only when the upcoming catalogue has one unique match."""
+    rows = fetch_openmatchday_fixture_rows(30)
+    matches = []
+    for raw in rows:
+        fixture = normalise_fixture(raw)
+        if not fixture or not fixture.get("kickoff_at"):
+            continue
+        if canonical_team_key(fixture.get("home_team")) == canonical_team_key(home) and canonical_team_key(fixture.get("away_team")) == canonical_team_key(away):
+            matches.append(fixture["kickoff_at"].replace(tzinfo=timezone.utc).astimezone(EAT).date())
+    dates = set(matches)
+    return next(iter(dates)) if len(dates) == 1 else None
+
+
 async def betlog_command(update, context):
     """Log a real bookmaker selection and its original price/stake."""
     raw = " ".join(context.args or [])
     parts = [part.strip() for part in raw.split("|")]
-    if len(parts) not in (5, 6):
-        await reply(update, "Usage: /betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER]\nExample: /betlog Arsenal vs Chelsea | 1X2 | Arsenal | 2.10 | 100 | SportyBet")
-        return
-    fixture = re.split(r"\\s+vs\\.?\\s+|\\s+v\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
-    if len(fixture) != 2:
-        await reply(update, "Enter the fixture as HOME vs AWAY.")
-        return
-    bookmaker = parts[5] if len(parts) == 6 else "SportyBet"
-    try:
-        bet_id = await asyncio.to_thread(
-            record_bet, update.effective_user.id, bookmaker,
-            fixture[0], fixture[1], parts[1], parts[2], parts[3], parts[4]
-        )
-        await reply(update, f"✅ BET RECORD SAVED — #{bet_id}\n{fixture[0]} vs {fixture[1]}\n{parts[1]}: {parts[2]} @ {float(parts[3]):.2f}\nStake: {float(parts[4]):.2f} KSh\nOriginal odds and stake are now preserved.")
-    except Exception as exc:
-        await reply(update, f"⚠️ Could not save bet record: {type(exc).__name__}: {str(exc)[:250]}")
-
-
-async def betsettle_command(update, context):
-    """Settle a logged selection against the confirmed full-time score."""
-    if len(context.args or []) != 3:
-        await reply(update, "Usage: /betsettle BET_ID HOME_GOALS AWAY_GOALS\nExample: /betsettle 12 2 1")
-        return
-    try:
-        bet_id, home_goals, away_goals = map(int, context.args)
-        if min(home_goals, away_goals) < 0:
-            raise ValueError
-        result = await asyncio.to_thread(
-            settle_bet, update.effective_user.id, bet_id, home_goals, away_goals
-        )
-        await reply(update, f"📊 BET #{bet_id} SETTLED: {result['status']}\nFull-time: {home_goals}-{away_goals}\nProfit/loss: {float(result['profit_loss']):+.2f} KSh")
-    except Exception as exc:
-        await reply(update, f"⚠️ Could not settle bet: {type(exc).__name__}: {str(exc)[:250]}")
-
-
-async def betstats_command(update, context):
-    try:
-        stats = await asyncio.to_thread(bet_statistics, update.effective_user.id)
-        total = int(stats.get("total") or 0)
-        pending = int(stats.get("pending") or 0)
-        won, lost, voided = int(stats.get("won") or 0), int(stats.get("lost") or 0), int(stats.get("voided") or 0)
-        pnl = float(stats.get("profit_loss") or 0)
-        turnover = float(stats.get("settled_stakes") or 0)
-        settled = won + lost + voided
-        roi = pnl / turnover if turnover else 0.0
-        await reply(update, "📈 PUNTER BET PERFORMANCE\n\n"
-            f"Logged: {total} | Settled: {settled} | Pending: {pending}\n"
-            f"Wins: {won} | Losses: {lost} | Voids: {voided}\n"
-            f"Settled stakes: {turnover:.2f} KSh\nProfit/loss: {pnl:+.2f} KSh\nROI: {roi:+.2%}\n\n"
-            "This report uses only bets you logged and settled; it is separate from prediction accuracy.")
-    except Exception as exc:
-        await reply(update, f"⚠️ Bet statistics unavailable: {type(exc).__name__}: {str(exc)[:250]}")
-
-
-async def betlog_command(update, context):
-    """Log a real bookmaker selection and its original price/stake."""
-    raw = " ".join(context.args or [])
-    parts = [part.strip() for part in raw.split("|")]
-    if len(parts) not in (5, 6):
-        await reply(update, "Usage: /betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER]\nExample: /betlog Arsenal vs Chelsea | 1X2 | Arsenal | 2.10 | 100 | SportyBet")
+    if len(parts) not in (5, 6, 7):
+        await reply(update, "Usage: /betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER | YYYY-MM-DD]\nExample: /betlog Arsenal vs Chelsea | 1X2 | Arsenal | 2.10 | 100 | SportyBet | 2026-11-08")
         return
     fixture = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", parts[0], maxsplit=1, flags=re.I)
     if len(fixture) != 2:
         await reply(update, "Enter the fixture as HOME vs AWAY.")
         return
-    bookmaker = parts[5] if len(parts) == 6 else "SportyBet"
+    bookmaker = parts[5] if len(parts) >= 6 and parts[5] else "SportyBet"
     try:
+        match_date = datetime.strptime(parts[6], "%Y-%m-%d").date() if len(parts) == 7 else await asyncio.to_thread(resolve_bet_match_date, fixture[0], fixture[1])
         bet_id = await asyncio.to_thread(
             record_bet, update.effective_user.id, bookmaker,
-            fixture[0], fixture[1], parts[1], parts[2], parts[3], parts[4]
+            fixture[0], fixture[1], parts[1], parts[2], parts[3], parts[4], match_date
         )
-        await reply(update, f"✅ BET RECORD SAVED — #{bet_id}\n{fixture[0]} vs {fixture[1]}\n{parts[1]}: {parts[2]} @ {float(parts[3]):.2f}\nStake: {float(parts[4]):.2f} KSh\nOriginal odds and stake are now preserved.")
+        date_note = match_date.isoformat() if match_date else "Not resolved — automatic settlement unavailable until date is supplied"
+        await reply(update, f"✅ BET RECORD SAVED — #{bet_id}\n{fixture[0]} vs {fixture[1]}\n{parts[1]}: {parts[2]} @ {float(parts[3]):.2f}\nStake: {float(parts[4]):.2f} KSh\nMatch date: {date_note}\nOriginal odds and stake are preserved.")
     except Exception as exc:
         await reply(update, f"⚠️ Could not save bet record: {type(exc).__name__}: {str(exc)[:250]}")
 
@@ -4647,6 +4774,9 @@ def main():
         .build()
     )
 
+    if database_enabled and app.job_queue is not None:
+        app.job_queue.run_repeating(automatic_bet_settlement_job, interval=6 * 60 * 60, first=60, name="automatic-bet-results")
+
     handlers = [
         ("start", start),
         ("help", help_command),
@@ -4674,9 +4804,7 @@ def main():
         ("betlog", betlog_command),
         ("betsettle", betsettle_command),
         ("betstats", betstats_command),
-        ("betlog", betlog_command),
-        ("betsettle", betsettle_command),
-        ("betstats", betstats_command),
+        ("betresults", betresults_command),
         ("fixtures", fixtures),
         ("syncfixtures", syncfixtures),
         ("live", live),
