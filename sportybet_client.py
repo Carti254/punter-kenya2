@@ -120,8 +120,30 @@ def _resolve_market(event, market_text, selection_text):
             targets = {pnorm}
         outcome = next((o for o in outcomes if _norm(o.get("desc")) in targets), None)
     elif line and (pnorm.startswith("over") or pnorm.startswith("o") or pnorm.startswith("under") or pnorm.startswith("u")):
+        # SportyBet commonly labels outcomes "Over 6.5" / "Under 6.5".
+        # Match the full side + line first; matching only "over"/"under"
+        # incorrectly rejects valid outcomes carrying the handicap in desc.
         wanted_side = "over" if pnorm.startswith(("over", "o")) else "under"
-        outcome = next((o for o in outcomes if _norm(o.get("desc")) in {wanted_side, wanted_side[0]}), None)
+        wanted_line = re.search(r"\\d+(?:\\.\\d+)?", pick)
+        wanted_line = wanted_line.group(0) if wanted_line else line
+
+        def outcome_matches_total(outcome):
+            desc = str(outcome.get("desc") or "").strip()
+            normalized = _norm(desc)
+            if normalized == pnorm:
+                return True
+            desc_match = re.match(r"^\\s*(over|under|o|u)\\s*(\\d+(?:\\.\\d+)?)?\\s*$", desc, re.I)
+            if not desc_match:
+                return False
+            side = desc_match.group(1).lower()
+            side = "over" if side in ("over", "o") else "under"
+            desc_line = desc_match.group(2)
+            if side != wanted_side:
+                return False
+            # Some feeds put the line in the market specifier, not outcome desc.
+            return desc_line is None or str(float(desc_line)) == str(float(wanted_line))
+
+        outcome = next((o for o in outcomes if outcome_matches_total(o)), None)
     else:
         outcome = next((o for o in outcomes if _norm(o.get("desc")) == pnorm), None)
     if not outcome or int(outcome.get("isActive", 1)) != 1:
