@@ -1,5 +1,6 @@
 import unittest
-from unittest.mock import patch\nfrom bookmaker_odds import canonical_team, find_event, _number, _eat_time, fetch_sportybet
+from unittest.mock import patch
+from bookmaker_odds import canonical_team, find_event, _number, _eat_time, fetch_sportybet
 
 
 class BookmakerOddsTests(unittest.TestCase):
