@@ -137,6 +137,17 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
     selections = []
     for item in picks:
         selections.append({k: v for k, v in item.items() if not k.startswith("_")})
+    competition_days = {}
+    for item in selections:
+        league = str(item.get("league") or "").strip()
+        day = str(item.get("day") or "").strip()
+        if league and day:
+            competition_days.setdefault((league.casefold(), day), {"league": league, "day": day, "count": 0})
+            competition_days[(league.casefold(), day)]["count"] += 1
+    correlation_warnings = [
+        f"{group['count']} legs from {group['league']} on {group['day']}"
+        for group in competition_days.values() if group["count"] > 1
+    ]
     return {
         "selections": selections,
         "combined_odds": odds_product,
@@ -145,5 +156,7 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
         "expected_roi": odds_product * probability_product - 1,
         "target_reached": target <= odds_product <= target * 1.20,
         "independence_assumption": True,
+        "correlation_warnings": correlation_warnings,
+        "correlation_note": "Same-competition/date clustering is flagged; other cross-fixture dependencies are not quantified.",
         "reason": None if target <= odds_product <= target * 1.20 else "No combination found within 20% above target.",
     }
