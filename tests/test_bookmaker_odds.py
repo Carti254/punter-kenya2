@@ -1,5 +1,5 @@
 import unittest
-from bookmaker_odds import canonical_team, find_event, _number, _eat_time
+from unittest.mock import patch\nfrom bookmaker_odds import canonical_team, find_event, _number, _eat_time, fetch_sportybet
 
 
 class BookmakerOddsTests(unittest.TestCase):
@@ -28,6 +28,20 @@ class BookmakerOddsTests(unittest.TestCase):
 
     def test_unparseable_time_is_not_fabricated(self):
         self.assertIsNone(_eat_time("not-a-date"))
+
+    @patch("bookmaker_odds._get")
+    def test_upcoming_feed_sends_required_market_catalogue(self, mocked_get):
+        mocked_get.return_value = {
+            "bizCode": 10000,
+            "data": {"tournaments": [], "totalNum": 0},
+        }
+        fetch_sportybet()
+        params = mocked_get.call_args.kwargs["params"]
+        self.assertEqual(params["sportId"], "sr:sport:1")
+        self.assertIn("marketId", params)
+        self.assertEqual(params["pageSize"], 100)
+        self.assertEqual(params["todayGames"], "false")
+        self.assertEqual(params["timeline"], 720)
 
 
 if __name__ == "__main__":
