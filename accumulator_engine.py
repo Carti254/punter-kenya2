@@ -9,14 +9,14 @@ from __future__ import annotations
 import math
 
 
-def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_candidates=60, ranking="value", min_legs=1):
+def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, max_candidates=None, ranking="value", min_legs=1):
     target = float(target_odds)
     if not math.isfinite(target) or target <= 1:
         raise ValueError("Target odds must be finite and greater than 1.")
-    if not isinstance(max_legs, int) or not 1 <= max_legs <= 20:
-        raise ValueError("max_legs must be an integer from 1 to 20.")
-    if not isinstance(min_legs, int) or not 1 <= min_legs <= max_legs:
-        raise ValueError("min_legs must be an integer from 1 to max_legs.")
+    if max_legs is not None and (not isinstance(max_legs, int) or max_legs < 1):
+        raise ValueError("max_legs must be a positive integer or None.")
+    if not isinstance(min_legs, int) or min_legs < 1:
+        raise ValueError("min_legs must be a positive integer.")
     clean = []
     for row in candidates or []:
         try:
@@ -44,16 +44,19 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
         clean.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
     else:
         clean.sort(key=lambda x: (x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
-    # Large target odds must be built as a multi-match parlay, not one or two
-    # extreme longshots. For targets >= 10, cap each leg at 4.00 and let the
-    # accumulator add independent fixtures until the requested total is reached.
-    per_leg_cap = 4.00 if target >= 10 else target * 1.20
-    clean = [item for item in clean if item["odds"] <= per_leg_cap]
-    clean = clean[:max_candidates]
+    # No arbitrary leg or candidate ceiling: each fixture can contribute at most one leg.
+    fixture_count = len({item["_fixture_key"] for item in clean})
+    max_legs = min(max_legs, fixture_count) if max_legs is not None else fixture_count
+    if min_legs > max_legs:
+        return {"selections": [], "combined_odds": 1.0, "combined_probability": 0.0,
+                "expected_return_factor": 0.0, "target_reached": False,
+                "reason": f"Only {fixture_count} distinct eligible fixtures are available."}
+    if max_candidates is not None:
+        clean = clean[:max_candidates]
     if not clean:
         return {"selections": [], "combined_odds": 1.0, "combined_probability": 0.0,
                 "expected_return_factor": 0.0, "target_reached": False,
-                "reason": f"No valid candidates within the {per_leg_cap:.2f} per-selection odds cap; no slip generated."}
+                "reason": "No valid model-supported priced candidates; no slip generated."}
 
     # A beam keeps this practical for Telegram requests with large fixture slates.
     states = [([], 1.0, 1.0, frozenset(), 0)]
@@ -82,8 +85,7 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
                 state = (new_picks, new_odds, new_probability, used | {fixture_key}, item_index + 1)
                 if len(new_picks) >= min_legs and target <= new_odds <= target * 1.20:
                     completed.append(state)
-                # Continue past the target until the requested number of legs is met.
-                # Stop extending once the permitted 20% overshoot would be exceeded.
+                # Continue adding distinct fixtures while target tolerance allows.
                 if len(new_picks) < max_legs and new_odds < target * 1.20:
                     expanded.append(state)
                 if len(new_picks) >= min_legs:
