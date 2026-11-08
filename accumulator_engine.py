@@ -30,6 +30,10 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
         item["odds"], item["probability"] = odds, probability
         item["_fixture_key"] = (home.casefold(), away.casefold())
         item["_expected_factor"] = odds * probability
+        # Never include a leg whose own expected return is negative or break-even.
+        # A candidate is eligible only when odds * model_probability > 1.0.
+        if item["_expected_factor"] <= 1.0:
+            continue
         clean.append(item)
     if ranking not in {"value", "probability", "odds"}:
         raise ValueError("ranking must be value, probability or odds.")
@@ -43,7 +47,8 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
     clean = clean[:max_candidates]
     if not clean:
         return {"selections": [], "combined_odds": 1.0, "combined_probability": 0.0,
-                "expected_return_factor": 0.0, "target_reached": False, "reason": "No valid candidates."}
+                "expected_return_factor": 0.0, "target_reached": False,
+                "reason": "No positive-EV candidates available; no slip generated."}
 
     # A beam keeps this practical for Telegram requests with large fixture slates.
     states = [([], 1.0, 1.0, frozenset(), 0)]
