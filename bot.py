@@ -3973,6 +3973,63 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     except Exception as exc:
         raise RuntimeError(f"Bookmaker feed failed: {type(exc).__name__}: {str(exc)[:180]}") from exc
 
+    # SportyBet is also a fixture source. Do not discard an event merely because
+    # the external fixture catalogues omitted it: add a clearly marked fallback
+    # record so its live markets can still be evaluated by independent sources.
+    sportybet_only_added = 0
+    existing_fixture_keys = set()
+    for day, day_rows in fixtures_by_day.items():
+        for _, known in day_rows:
+            existing_fixture_keys.add((
+                day.isoformat(),
+                canonical_team_key(known.get("home_team")),
+                canonical_team_key(known.get("away_team")),
+            ))
+    for game in priced_games:
+        home_name = str(game.get("home") or "").strip()
+        away_name = str(game.get("away") or "").strip()
+        kickoff_text = str(game.get("kickoff_eat") or "").strip()
+        if not home_name or not away_name or not kickoff_text:
+            continue
+        try:
+            kickoff_local = datetime.strptime(kickoff_text, "%Y-%m-%d %H:%M").replace(tzinfo=EAT)
+            kickoff_utc = kickoff_local.astimezone(timezone.utc)
+            local_day = kickoff_local.date()
+        except ValueError:
+            continue
+        if local_day not in target_dates or kickoff_utc <= datetime.now(timezone.utc):
+            continue
+        fixture_key = (
+            local_day.isoformat(),
+            canonical_team_key(home_name),
+            canonical_team_key(away_name),
+        )
+        if fixture_key in existing_fixture_keys:
+            continue
+        existing_fixture_keys.add(fixture_key)
+        raw_fallback = {
+            "id": f"sportybet:{game.get('event_id') or fixture_key}",
+            "home": home_name,
+            "away": away_name,
+            "kickoffUtc": kickoff_utc.isoformat(),
+            "leagueName": game.get("competition") or "SportyBet fixture catalogue",
+            "leagueShortcut": "",
+        }
+        fixture_fallback = {
+            "provider_match_id": f"sportybet:{game.get('event_id') or fixture_key}",
+            "home_team": home_name,
+            "away_team": away_name,
+            "kickoff_at": kickoff_utc.astimezone(timezone.utc).replace(tzinfo=None),
+            "competition": game.get("competition") or "SportyBet fixture catalogue",
+        }
+        fixtures_by_day[local_day].append((raw_fallback, fixture_fallback))
+        sportybet_only_added += 1
+    if sportybet_only_added:
+        logger.info(
+            "Added %s upcoming SportyBet-only fixtures missing from external fixture catalogues.",
+            sportybet_only_added,
+        )
+
     for day in sorted(target_dates):
         day_fixtures = fixtures_by_day[day]
         day_games = []
