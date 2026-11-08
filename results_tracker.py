@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from database import get_connection
 
 
-def grade_selection(market, selection, home_goals, away_goals):
+def grade_selection(market, selection, home_goals, away_goals, home_team=None, away_team=None):
     market_key = "".join(ch for ch in str(market).casefold() if ch.isalnum())
     pick = str(selection).strip().casefold()
     total = int(home_goals) + int(away_goals)
@@ -14,7 +14,7 @@ def grade_selection(market, selection, home_goals, away_goals):
 
     if market_key in {"1x2", "matchresult", "fulltimeresult", "result"}:
         actual = "home" if home > away else "draw" if home == away else "away"
-        wanted = "home" if pick in {"1", "home"} else "draw" if pick in {"x", "draw"} else "away" if pick in {"2", "away"} else None
+        home_names = {"1", "home", str(home_team or "").strip().casefold()}\n        away_names = {"2", "away", str(away_team or "").strip().casefold()}\n        wanted = "home" if pick in home_names else "draw" if pick in {"x", "draw"} else "away" if pick in away_names else None
         if wanted is None:
             raise ValueError("Unsupported 1X2 selection.")
         return "WON" if wanted == actual else "LOST"
@@ -68,7 +68,7 @@ def settle_bet(user_id, bet_id, home_goals, away_goals):
             row = cursor.fetchone()
             if not row:
                 raise ValueError("Pending bet record not found.")
-            status = grade_selection(row["market"], row["selection"], home_goals, away_goals)
+            status = grade_selection(row["market"], row["selection"], home_goals, away_goals,\n                                     row["home_team"], row["away_team"])
             stake, odds = Decimal(str(row["stake"])), Decimal(str(row["decimal_odds"]))
             pnl = (stake * (odds - 1)) if status == "WON" else Decimal("0") if status == "VOID" else -stake
             cursor.execute("""
@@ -95,7 +95,7 @@ def bet_statistics(user_id):
                        SUM(status='LOST') AS lost,
                        SUM(status='VOID') AS voided,
                        COALESCE(SUM(profit_loss),0) AS profit_loss,
-                       COALESCE(SUM(CASE WHEN status IN ('WON','LOST','VOID') THEN stake ELSE 0 END),0) AS settled_stakes
+                       COALESCE(SUM(CASE WHEN status IN ('WON','LOST') THEN stake ELSE 0 END),0) AS settled_stakes
                 FROM punter_bet_records WHERE user_id=%s
             """, (int(user_id),))
             return cursor.fetchone()
