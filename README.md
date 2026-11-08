@@ -39,19 +39,21 @@ Requirements: Python 3.11+ and a Telegram bot token from BotFather.
    $env:BOT_TOKEN="your-telegram-bot-token"
    ```
 
-4. Start the bot:
+4. (Optional) Configure GOAL API supplementary results/statistics access by setting `GOAL_API_BASE` and `GOAL_API_KEY` from the existing provider account. The main open-matchday fixture and competition catalogue does not require these values.
+
+5. Start the bot:
 
    ```bash
    python bot.py
    ```
 
-Keep the terminal/process running while you use the bot. Local polling stops when the computer is shut down or the process exits. Never paste your token into source code, GitHub, screenshots or public chats.
+Keep the terminal/process running while you use the bot. Local polling stops when the computer is shut down or the process exits. Never paste tokens or API keys into source code, GitHub, screenshots or public chats.
 
 ## Database (optional)
 
 The bot can start without a database. In database-free local mode, commands that need persistent storage (for example saved slips, forecast records, odds history and database diagnostics) will not be available.
 
-To enable those features, configure a MySQL-compatible database using:
+To enable those features, configure a MySQL-compatible database using the variables below. The bot runs idempotent, versioned schema migrations at startup when the database is configured; migration version records are stored in `punter_schema_migrations`. The migration also adds the optional `matches.last_synced_at` column when the legacy `matches` table exists and lacks it.
 
 - `DB_HOST`
 - `DB_PORT`
@@ -74,7 +76,10 @@ The database account needs permission to create and write the tables used by the
 - `/odds HOME vs AWAY [today|tomorrow]` — inspect matched prices.
 - `/topvalue`, `/aipicks`, `/accumulator` — experimental scanner tools; may correctly return NO BET.
 - `/calculator ODDS STAKE` — calculate implied probability and potential return.
-- `/record`, `/oddshistory`, `/myslips` — persistent tools; require the optional database.
+- `/record`, `/oddshistory`, `/myslips` — prediction history, odds history and saved slips; require the optional database.
+- `/betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER]` — preserve the original odds and stake for a real bet you choose to log.
+- `/betsettle BET_ID HOME_GOALS AWAY_GOALS` — settle a logged 1X2 or standard total-goals selection against the confirmed full-time score.
+- `/betstats` — report logged wins, losses, voids, profit/loss and ROI. This is separate from prediction accuracy.
 - `/fullintel` — full command directory.
 
 The Telegram menu also includes the SportyBet slip builder. It accepts one selection per line in this format:
