@@ -1920,18 +1920,18 @@ async def aipicks_status_command(update, context):
 async def autobuild_sportybet_command(update, context):
     args = list(context.args or [])
     target = 2.0
-    if args and re.fullmatch(r"\d+(?:\.\d+)?", str(args[0])):
-        target = float(args.pop(0))
+    # Accept decimal odds and shorthand such as /autobuild 50odds.
+    if args and re.fullmatch(r"\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
+        target = float(re.sub(r"odds$", "", str(args.pop(0)), flags=re.I))
         if not math.isfinite(target) or target <= 1.0:
             await reply(update, "Target odds must be greater than 1.00.")
             return
 
-    # Higher target slips default to at least five different fixtures.
-    min_legs = 5 if target >= 10 else 2
-    max_legs = 20
-    if target > 1000:
-        await reply(update, "Target odds cannot exceed 1,000.")
-        return
+    # No fixed leg ceiling: use the available distinct fixtures unless the user
+    # explicitly requests a maxlegs/legs value.
+    min_legs = 1
+    max_legs = None
+    explicit_max_legs = False
 
     # Scan all fixtures and every retrieved market the scoreline model supports.
     # Default parlay excludes BTTS and Under 2.5 per the user's standing preferences.
@@ -1947,20 +1947,22 @@ async def autobuild_sportybet_command(update, context):
             try:
                 min_legs = max_legs = int(lowered.split("=", 1)[1])
             except ValueError:
-                await reply(update, "Use legs=1 to 20, for example /autobuild 50 legs=8.")
+                await reply(update, "Use a positive whole number for legs, for example /autobuild 50 legs=8.")
                 return
+            explicit_max_legs = True
         elif lowered.startswith("minlegs="):
             try:
                 min_legs = int(lowered.split("=", 1)[1])
             except ValueError:
-                await reply(update, "Use minlegs=1 to 20.")
+                await reply(update, "Use a positive whole number for minlegs.")
                 return
         elif lowered.startswith("maxlegs="):
             try:
                 max_legs = int(lowered.split("=", 1)[1])
             except ValueError:
-                await reply(update, "Use maxlegs=1 to 20.")
+                await reply(update, "Use a positive whole number for maxlegs.")
                 return
+            explicit_max_legs = True
         elif lowered in ("value", "odds", "probability", "parlay"):
             rank_mode = lowered
         else:
@@ -1968,8 +1970,8 @@ async def autobuild_sportybet_command(update, context):
     if rank_mode not in ("value", "odds", "probability", "parlay"):
         await reply(update, "Ranking must be parlay, value, odds or probability.")
         return
-    if not (1 <= min_legs <= max_legs <= 20):
-        await reply(update, "Leg count must satisfy 1 <= minimum <= maximum <= 20. Use legs=8 or minlegs=5 maxlegs=12.")
+    if min_legs < 1 or (max_legs is not None and (max_legs < 1 or min_legs > max_legs)):
+        await reply(update, "Leg count must use positive whole numbers and minimum cannot exceed maximum.")
         return
 
     market_filter = ",".join(market_parts) if market_parts else "all"
@@ -1999,10 +2001,17 @@ async def autobuild_sportybet_command(update, context):
         else:
             rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
 
+        available_fixtures = len({(str(x.get("home") or "").casefold(), str(x.get("away") or "").casefold()) for x in rows})
+        effective_max_legs = max_legs if explicit_max_legs else available_fixtures
+        if effective_max_legs is None:
+            effective_max_legs = available_fixtures
+        if effective_max_legs < min_legs:
+            await reply(update, f"Only {available_fixtures} distinct eligible fixtures are available; cannot satisfy minlegs={min_legs}.")
+            return
         build = build_accumulator(
-            rows, target, min_legs=min_legs, max_legs=max_legs,
+            rows, target, min_legs=min_legs, max_legs=effective_max_legs,
             ranking=("odds" if rank_mode == "parlay" else rank_mode),
-            max_candidates=250,
+            max_candidates=None,
         )
         chosen = build["selections"]
         if not chosen:
