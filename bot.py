@@ -12,6 +12,8 @@ import threading
 import json
 import time
 import copy
+import uuid
+from convat_client import ConvatError, preview_betika_code, convert_betika_to_sportybet
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -1144,7 +1146,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━━\n"
         "Research matches, compare available bookmaker prices and review potential value.\n\n"
         "🎟️ SLIP MANAGEMENT\n"
-        "Convert, edit, merge and split booking codes are shown in the menu; these provider-specific tools are not connected yet.\n\n"
+        "Booking-code conversion: Betika → SportyBet Kenya (Convat API; evaluation key required).\n\n"
         "🧠 INTELLIGENCE\n"
         "/fullintel — all research and analysis commands\n"
         "/deepdive HOME vs AWAY — full match report\n"
@@ -1227,6 +1229,55 @@ async def process_slip_flow(update, context):
         return True
 
     try:
+        if state == "convat_code":
+            clean_code = "".join(message.split())
+            if not 3 <= len(clean_code) <= 40 or not clean_code.isalnum():
+                await reply(update, "Please send a valid Betika booking code only, or /cancel.")
+                return True
+            preview = await asyncio.to_thread(preview_betika_code, clean_code)
+            context.user_data.pop("slip_flow", None)
+            context.user_data["pending_convat"] = {
+                "code": clean_code,
+                "preview": preview,
+                "idempotency_key": str(uuid.uuid4()),
+            }
+            legs = preview.get("legs") or []
+            convertible = int(preview.get("convertibleLegs") or 0)
+            lines = [
+                "🔄 BETIKA → SPORTYBET KENYA",
+                "━━━━━━━━━━━━━━━━━━━━",
+                f"Booking code: {preview.get('sourceCode') or 'Received'}",
+                f"Selections: {len(legs)}",
+                f"Potentially convertible: {convertible}/{len(legs)}",
+                f"Betika total odds: {preview.get('totalOdds') if preview.get('totalOdds') is not None else 'Not supplied'}",
+                "",
+            ]
+            for index, leg in enumerate(legs[:12], 1):
+                event = leg.get("eventName") or "Unknown event"
+                market = leg.get("sourceMarket") or leg.get("market") or "Unknown market"
+                pick = leg.get("selection") or "Unknown selection"
+                odds = leg.get("odds")
+                status = "✓" if leg.get("convertible") else "⚠️"
+                lines.append(f"{index}. {status} {event}\n   {market}: {pick} @ {odds if odds is not None else 'N/A'}")
+                if not leg.get("convertible") and leg.get("unsupportedReason"):
+                    lines.append(f"   Not convertible: {leg.get('unsupportedReason')}")
+            if len(legs) > 12:
+                lines.append(f"…and {len(legs) - 12} more selections.")
+            if preview.get("blocker"):
+                lines.extend(["", f"⚠️ Conversion warning: {preview['blocker']}"])
+            if convertible < 1:
+                lines.extend(["", "No selections are currently convertible. No target code can be created."])
+                context.user_data.pop("pending_convat", None)
+                await reply(update, "\n".join(lines))
+                return True
+            lines.extend(["", "Review the selections. Nothing has been booked on SportyBet yet."])
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Confirm conversion", callback_data="bc:confirm"),
+                InlineKeyboardButton("✖️ Cancel", callback_data="bc:cancel"),
+            ]])
+            await update.effective_message.reply_text("\n".join(lines), reply_markup=keyboard)
+            return True
+
         if state == "analyze":
             if " vs " not in message.casefold():
                 await reply(update, "Please use: HOME TEAM vs AWAY TEAM. Example: Arsenal vs Chelsea.")
@@ -1323,6 +1374,60 @@ async def process_slip_flow(update, context):
     return False
 
 
+async def convat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    action = (query.data or "").split(":", 1)[-1]
+    pending = context.user_data.get("pending_convat")
+    if action == "cancel":
+        context.user_data.pop("pending_convat", None)
+        await query.edit_message_text("Conversion cancelled. No SportyBet booking code was created.")
+        return
+    if action != "confirm" or not pending:
+        await query.edit_message_text("This conversion preview has expired. Start again from 🔄 Convert bet code.")
+        return
+    await query.edit_message_text("⏳ Converting your Betika slip to SportyBet Kenya. Please wait.")
+    try:
+        result = await asyncio.to_thread(
+            convert_betika_to_sportybet,
+            pending["code"],
+            exact_lines=True,
+            idempotency_key=pending["idempotency_key"],
+        )
+        target_code = result.get("targetCode")
+        matched = int(result.get("matched") or 0)
+        total = int(result.get("total") or 0)
+        if not target_code:
+            raise ConvatError("The provider did not return a SportyBet booking code.")
+        lines = [
+            "✅ SPORTYBET KENYA BOOKING CODE CREATED",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"New code: {target_code}",
+            f"Selections transferred: {matched}/{total}",
+            f"Betika odds: {result.get('sourceOddsTotal') if result.get('sourceOddsTotal') is not None else 'N/A'}",
+            f"SportyBet odds: {result.get('targetOddsTotal') if result.get('targetOddsTotal') is not None else 'N/A'}",
+            "",
+            "Open SportyBet and verify the code and selections before placing any bet.",
+        ]
+        unmatched = result.get("unmatched") or []
+        if unmatched:
+            lines.extend(["", f"⚠️ NOT TRANSFERRED ({len(unmatched)}):"])
+            for item in unmatched[:10]:
+                lines.append(f"• {item.get('eventName') or 'Unknown event'} — {item.get('reasonText') or item.get('reason') or 'Not available'}")
+            if len(unmatched) > 10:
+                lines.append(f"…and {len(unmatched) - 10} more.")
+        if matched < total:
+            lines.extend(["", "This is a PARTIAL conversion. Unmatched selections are not in the new code."])
+        await query.edit_message_text("\n".join(lines))
+        context.user_data.pop("pending_convat", None)
+    except ConvatError as exc:
+        logger.warning("Convat conversion rejected: status=%s code=%s", exc.status, exc.code)
+        await query.edit_message_text("⚠️ CONVERSION NOT COMPLETED\n\n" + str(exc)[:250] + "\n\nNo new booking code is being claimed. The pending request is retained for a safe retry.")
+    except Exception as exc:
+        logger.exception("Unexpected Convat conversion error")
+        await query.edit_message_text(f"⚠️ Conversion could not be verified ({type(exc).__name__}). No code will be displayed unless the provider returns one.")
+
+
 async def cancel_slip_command(update, context):
     context.user_data.pop("slip_flow", None)
     await reply(update, "Cancelled. Your existing slips have not been changed.")
@@ -1360,12 +1465,7 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("slip_flow", None)
     elif await process_slip_flow(update, context):
         return
-    prompts = {
-        "🤖 Build a slip": ("build", "Send one selection per line in this format:\nFixture | Market | Selection | Odds [| Bookmaker]\n\nExample:\nArsenal vs Chelsea | 1X2 | Arsenal | 1.85 | Betika\nNapoli vs Roma | Over 1.5 | Over 1.5 | 1.42 | SportyBet\n\nYour slip will be saved privately under your Telegram account."),
-        "✏️ Edit slip": ("edit", "Edit one leg using:\nSLIP_ID | LEG_NUMBER | FIXTURE | MARKET | SELECTION | ODDS\nExample: 42 | 2 | Arsenal vs Chelsea | 1X2 | Arsenal | 1.85\nUse /myslips to find your slip ID."),
-        "🔗 Merge slips": ("merge", "Send two of your saved slip IDs separated by a space. Example: 12 15. A new combined slip is created; the originals remain unchanged."),
-        "✂️ Split slip": ("split", "Send: SLIP_ID | LEGS_PER_NEW_SLIP\nExample: 21 | 3. New slips are created in groups of three; the original remains unchanged."),
-    }
+    prompts = {}
     if choice == "📅 Today's Matches":
         context.args = ["today"]
         await fixtures(update, context)
@@ -1380,13 +1480,19 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif choice in prompts:
         context.user_data["slip_flow"] = prompts[choice][0]
         await reply(update, prompts[choice][1] + "\n\nSend /cancel to stop.")
-    elif choice == "🔄 Convert bet code":
+    elif choice in ("🤖 Build a slip", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip"):
         await reply(update,
-            "🔄 BOOKING-CODE CONVERSION\n\n"
-            "I can store and manage internal PUNTER slips, but cross-bookmaker conversion "
-            "requires working integrations for both source and destination bookmakers. "
-            "Those public-feed adapters do not expose booking-code conversion. I will not "
-            "invent a converted code. You can build, edit, merge and split your own slips here.")
+            "🎟️ BOOKING-CODE TOOLS\n\n"
+            "The genuine Betika → SportyBet conversion workflow is being connected first. "
+            "Building, editing, merging and splitting bookmaker-issued codes are not yet "
+            "available through the current provider API. I won't present internal records as real bookmaker codes.")
+    elif choice == "🔄 Convert bet code":
+        context.user_data["slip_flow"] = "convat_code"
+        await reply(update,
+            "🔄 BETIKA → SPORTYBET KENYA\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Send your existing Betika booking code. I'll read the slip first, show its selections and odds, then ask you to confirm before creating a SportyBet Kenya code.\n"
+            "No bet is placed. Send /cancel to stop.")
     elif choice == "📋 Bookies & regions":
         await bookmakers_command(update, context)
     elif choice == "⚽ Match intelligence":
@@ -4048,6 +4154,7 @@ def main():
         )
 
     app.add_handler(CallbackQueryHandler(fullintel_callback, pattern=r"^fi:"))
+    app.add_handler(CallbackQueryHandler(convat_callback, pattern=r"^bc:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_text_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^/myslips$"), my_slips_command))
     
