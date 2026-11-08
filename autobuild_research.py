@@ -8,7 +8,11 @@ unavailable when absent.
 from __future__ import annotations
 
 import math
+import time
 from collections import Counter
+
+_SPECIALIST_REPORT_CACHE = {}
+_SPECIALIST_CACHE_TTL = 900
 
 
 def assess_candidate(row: dict, marginal_ev_floor: float = 0.0) -> dict | None:
@@ -217,7 +221,13 @@ def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None, 
                                 "odds": row.get("odds")})
         game = {"home": home, "away": away, "bookmaker": "SportyBet", "markets": market_rows}
         try:
-            report = specialist_council(home, away, match_date, api_key=key, last=5)
+            cache_key = (home.casefold(), away.casefold(), match_date)
+            cached = _SPECIALIST_REPORT_CACHE.get(cache_key)
+            if cached and time.time() - cached[0] < _SPECIALIST_CACHE_TTL:
+                report = cached[1]
+            else:
+                report = specialist_council(home, away, match_date, api_key=key, last=5)
+                _SPECIALIST_REPORT_CACHE[cache_key] = (time.time(), report)
             assessments = specialist_price_assessments(report, [game])
         except Exception:
             failures += 1
