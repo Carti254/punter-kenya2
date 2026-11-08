@@ -5188,7 +5188,7 @@ async def council_command(update, context):
                 )
                 lines.append(f"{panel['role']}: expected total {panel['expected_total']:.2f}; Over {panel['default_line']} {panel['over_probability']:.1%}; Under {panel['default_line']} {panel['under_probability']:.1%}; samples {panel['home_sample']}+{panel['away_sample']} | forecast #{forecast_id}")
         lines.extend(["", "💹 LIVE BOOKMAKER PRICE CHECK"])
-        if price_report and price_report.get("error"):
+        if isinstance(price_report, dict) and price_report.get("error"):
             lines.append("Price check unavailable: " + price_report["error"])
         elif price_report:
             for priced in price_report[:6]:
