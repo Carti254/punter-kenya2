@@ -1,7 +1,7 @@
 """Versioned, idempotent MySQL schema migrations for PUNTER KENYA."""
 from database import get_connection
 
-LATEST_VERSION = 2
+LATEST_VERSION = 3
 
 
 def _table_exists(cursor, table_name):
@@ -108,6 +108,16 @@ def run_migrations():
                 """)
                 cursor.execute("INSERT INTO punter_schema_migrations (version) VALUES (2)")
                 applied_now.append(2)
+
+            if 3 not in applied:
+                # Persist source and raw evidence for auditable non-score settlements.
+                if _table_exists(cursor, "punter_bet_records"):
+                    if not _column_exists(cursor, "punter_bet_records", "settlement_source"):
+                        cursor.execute("ALTER TABLE punter_bet_records ADD COLUMN settlement_source VARCHAR(40) NULL")
+                    if not _column_exists(cursor, "punter_bet_records", "settlement_evidence_json"):
+                        cursor.execute("ALTER TABLE punter_bet_records ADD COLUMN settlement_evidence_json LONGTEXT NULL")
+                cursor.execute("INSERT INTO punter_schema_migrations (version) VALUES (3)")
+                applied_now.append(3)
 
         return {"applied": applied_now, "latest_version": LATEST_VERSION}
     finally:
