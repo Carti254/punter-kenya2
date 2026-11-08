@@ -33,6 +33,10 @@ from prediction_validation import brier_score, log_loss, fit_temperature, apply_
 from football_stats_provider import fetch_match_market_data, FootballStatsError
 from market_settlement import settle_bet_with_market_evidence
 from ai_assistant import ai_is_configured, interpret_request, read_slip_image
+from premium_intelligence import market_probabilities, assess_price, rollover_projection
+from user_portfolio import save_bankroll, get_settings, save_rollover, calculate_user_stake
+from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
+from accumulator_engine import build_accumulator
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -1676,7 +1680,7 @@ async def ai_natural_language_handler(update: Update, context: ContextTypes.DEFA
     if not ai_is_configured():
         await reply(update,
             "🧠 AI assistant is not connected yet. The bot's existing commands still work. "
-            "To enable natural-language requests, add OPENAI_API_KEY to Railway Variables "
+            "To enable natural-language requests, add GEMINI_API_KEY to Railway Variables "
             "and redeploy. Never send the key in Telegram.")
         return True
     await reply(update, "🧠 Understanding your request and connecting it to PUNTER's live tools…")
@@ -1729,7 +1733,7 @@ async def ai_natural_language_handler(update: Update, context: ContextTypes.DEFA
 async def ai_slip_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Read a slip screenshot, then pass extracted legs through live SportyBet validation."""
     if not ai_is_configured():
-        await reply(update, "Screenshot reading needs OPENAI_API_KEY. Add it privately in Railway Variables, then redeploy.")
+        await reply(update, "Screenshot reading needs GEMINI_API_KEY. Add it privately in Railway Variables, then redeploy.")
         return
     photo = update.effective_message.photo
     if not photo:
@@ -1946,13 +1950,8 @@ async def autobuild_sportybet_command(update, context):
             rows.sort(key=lambda x: (x["probability"], x["ev"]), reverse=True)
         else:
             rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
-        chosen, product = [], 1.0
-        for item in rows:
-            # Keep the builder open to multiple markets from the same fixture.
-            chosen.append(item)
-            product *= float(item["odds"])
-            if product >= target or len(chosen) >= 20:
-                break
+        build = build_accumulator(rows, target, max_legs=20, ranking=rank_mode)
+        chosen, product = build["selections"], build["combined_odds"]
         if not chosen:
             await reply(update, "⚠️ NO USABLE SPORTYBET PICKS FOUND\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No SportyBet-priced, model-supported candidates were found."))
             return
@@ -1992,16 +1991,8 @@ async def accumulator_status_command(update, context):
         await reply(update, f"❌ ACCUMULATOR SCAN FAILED: {type(exc).__name__}: {str(exc)[:250]}")
         return
 
-    chosen, combined, used = [], 1.0, set()
-    for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
-        fixture_key = (item["home"], item["away"])
-        if fixture_key in used:
-            continue
-        chosen.append(item)
-        used.add(fixture_key)
-        combined *= item["odds"]
-        if combined >= target or len(chosen) >= 6:
-            break
+    build = build_accumulator(rows, target, max_legs=6, ranking="probability")
+    chosen, combined = build["selections"], build["combined_odds"]
 
     if not chosen:
         await reply(update, "⚠️ NO USABLE ACCUMULATOR CANDIDATES\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No model-supported bookmaker prices were retrieved."))
@@ -4467,55 +4458,8 @@ async def compare(
 # ============================================================
 
 def save_bookmaker_odds_snapshots(games):
-    """Persist timestamped prices for later movement review; fail safely."""
-    if not games:
-        return 0
-    connection = get_connection()
-    saved = 0
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS punter_odds_snapshots (
-                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-                    bookmaker VARCHAR(40) NOT NULL,
-                    event_id VARCHAR(100) NOT NULL,
-                    home_team VARCHAR(180) NOT NULL,
-                    away_team VARCHAR(180) NOT NULL,
-                    kickoff_eat VARCHAR(32) NULL,
-                    market_name VARCHAR(180) NOT NULL,
-                    selection_name VARCHAR(180) NOT NULL,
-                    handicap_value VARCHAR(80) NULL,
-                    decimal_odds DECIMAL(10,3) NOT NULL,
-                    fetched_at DATETIME NOT NULL,
-                    INDEX idx_odds_event (bookmaker, event_id),
-                    INDEX idx_odds_fixture (home_team, away_team),
-                    INDEX idx_odds_time (fetched_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """)
-            fetched_at = now_utc_naive()
-            for game in games:
-                for market in game.get("markets", []):
-                    cursor.execute("""
-                        INSERT INTO punter_odds_snapshots
-                        (bookmaker, event_id, home_team, away_team, kickoff_eat,
-                         market_name, selection_name, handicap_value, decimal_odds, fetched_at)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    """, (
-                        str(game.get("bookmaker") or "Unknown")[:40],
-                        str(game.get("event_id") or "")[:100],
-                        str(game.get("home") or "Unknown")[:180],
-                        str(game.get("away") or "Unknown")[:180],
-                        str(game.get("kickoff_eat") or "")[:32] or None,
-                        str(market.get("market") or "Unknown")[:180],
-                        str(market.get("selection") or "Unknown")[:180],
-                        str(market.get("handicap"))[:80] if market.get("handicap") is not None else None,
-                        market.get("odds"),
-                        fetched_at,
-                    ))
-                    saved += 1
-        return saved
-    finally:
-        connection.close()
+    """Persist timestamped prices through the shared tracking service."""
+    return save_price_observations(games)
 
 
 async def bookmakers_command(update, context):
@@ -4979,7 +4923,7 @@ async def marketdata_command(update, context):
     if len(parts) != 2 or " vs " not in parts[0].casefold():
         await reply(update, "Usage: /marketdata HOME vs AWAY | YYYY-MM-DD\\nExample: /marketdata Arsenal vs Chelsea | 2026-11-08")
         return
-    teams = re.split(r"\\s+vs\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
+    teams = re.split(r"\s+vs\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
     if len(teams) != 2:
         await reply(update, "Use HOME vs AWAY | YYYY-MM-DD.")
         return
@@ -5124,6 +5068,203 @@ async def betstats_command(update, context):
         await reply(update, f"⚠️ Bet statistics unavailable: {type(exc).__name__}: {str(exc)[:250]}")
 
 
+
+
+async def bankroll_command(update, context):
+    try:
+        if context.args:
+            await asyncio.to_thread(save_bankroll, update.effective_user.id, float(context.args[0]))
+        settings = await asyncio.to_thread(get_settings, update.effective_user.id)
+        amount = settings.get("bankroll")
+        if amount is None:
+            await reply(update, "Bankroll not set. Use /bankroll AMOUNT (KSh).")
+        else:
+            await reply(update, f"Saved planning bankroll: KSh {float(amount):,.2f}\nUse /stake PROBABILITY ODDS for a capped fractional-Kelly illustration.")
+    except Exception as exc:
+        await reply(update, f"Bankroll setting failed: {type(exc).__name__}: {str(exc)[:180]}\nUsage: /bankroll 1000")
+
+
+async def stake_command(update, context):
+    if len(context.args or []) != 2:
+        await reply(update, "Usage: /stake PROBABILITY ODDS\nExample: /stake 0.58 2.10")
+        return
+    try:
+        probability, odds = map(float, context.args)
+        result = await asyncio.to_thread(calculate_user_stake, update.effective_user.id, probability, odds)
+        await reply(update, f"STAKE SCENARIO\nBankroll: KSh {result['bankroll']:,.2f}\nStake (25% Kelly, capped at 2%): KSh {result['stake']:,.2f}\n{result['warning']}")
+    except Exception as exc:
+        await reply(update, f"Stake calculation unavailable: {type(exc).__name__}: {str(exc)[:180]}")
+
+
+async def council_command(update, context):
+    args = list(context.args or [])
+    if not args:
+        await reply(update, "Usage: /council HOME TEAM vs AWAY TEAM [YYYY-MM-DD]\nRequires API_FOOTBALL_KEY. Example: /council Brighton vs Brentford 2026-11-08")
+        return
+    match_date = datetime.now(EAT).date()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", args[-1]):
+        match_date = datetime.strptime(args.pop(), "%Y-%m-%d").date()
+    raw = " ".join(args)
+    split = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", raw, maxsplit=1, flags=re.I)
+    if len(split) != 2:
+        await reply(update, "Enter the fixture as HOME vs AWAY.")
+        return
+    home, away = split[0].strip(), split[1].strip()
+    await reply(update, f"🧠 SPECIALIST COUNCIL\nResearching recent corners, cards, shots and first-half evidence for {home} vs {away}...")
+    try:
+        from specialist_models import specialist_council
+        report = await asyncio.to_thread(specialist_council, home, away, match_date)
+        lines = [f"🧠 SPECIALIST COUNCIL — {report['fixture']}", f"Date: {report['date']}", ""]
+        for panel in report["panels"]:
+            if not panel["available"]:
+                lines.append(f"{panel['role']}: unavailable — {panel['reason']}")
+            else:
+                lines.append(f"{panel['role']}: expected total {panel['expected_total']:.2f}; Over {panel['default_line']} {panel['over_probability']:.1%}; Under {panel['default_line']} {panel['under_probability']:.1%}; samples {panel['home_sample']}+{panel['away_sample']}")
+        lines.extend(["", "Player props: " + report["player_props"]["reason"], report["warning"],
+                      "No consensus bet is issued without comparing a real bookmaker price and market-specific calibration."])
+        await reply(update, "\\n".join(lines))
+    except Exception as exc:
+        await reply(update, f"Specialist research unavailable: {type(exc).__name__}: {str(exc)[:220]}")
+
+
+async def playerprop_command(update, context):
+    parts = [x.strip() for x in " ".join(context.args or []).split("|")]
+    if len(parts) not in (4, 5):
+        await reply(update, "Usage: /playerprop HOME vs AWAY | PLAYER NAME | METRIC | LINE [| YYYY-MM-DD]\nMetrics: shots, shots_on_target, goals, assists, yellow_cards, red_cards")
+        return
+    fixture = re.split(r"\s+vs\\.?\\s+|\\s+v\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
+    if len(fixture) != 2:
+        await reply(update, "Enter the fixture as HOME vs AWAY.")
+        return
+    match_date = parts[4] if len(parts) == 5 else datetime.now(EAT).date().isoformat()
+    try:
+        line = float(parts[3])
+        await reply(update, f"👤 PLAYER PROP RESEARCH\nChecking {parts[1]} recent appearances for {fixture[0]} vs {fixture[1]}...")
+        from specialist_models import player_prop_forecast
+        report = await asyncio.to_thread(player_prop_forecast, fixture[0].strip(), fixture[1].strip(),
+                                         match_date, parts[1], parts[2], line)
+        await reply(update,
+            f"👤 {report['player']} — {report['metric'].replace('_', ' ').title()}\n"
+            f"Recent appearances: {report['appearances']}\n"
+            f"Recent values: {', '.join(str(int(x) if x.is_integer() else x) for x in report['recent_values'])}\n"
+            f"Expected per appearance: {report['expected_per_appearance']:.2f}\n"
+            f"Over {line:g}: {report['over_probability']:.1%} | Under {line:g}: {report['under_probability']:.1%}\n"
+            f"{report['warning']}")
+    except Exception as exc:
+        await reply(update, f"Player prop unavailable: {type(exc).__name__}: {str(exc)[:220]}")
+
+
+async def xresearch_command(update, context):
+    raw = " ".join(context.args or [])
+    split = re.split(r"\s+vs\\.?\\s+|\\s+v\\.?\\s+", raw, maxsplit=1, flags=re.I)
+    if len(split) != 2:
+        await reply(update, "Usage: /xresearch HOME TEAM vs AWAY TEAM")
+        return
+    await reply(update, "🔎 Searching recent public X posts. Posts are leads, not verified team news...")
+    try:
+        from x_research import search_match_posts
+        report = await asyncio.to_thread(search_match_posts, split[0].strip(), split[1].strip())
+        if not report["posts"]:
+            await reply(update, "No matching recent public posts were returned by X.")
+            return
+        lines = ["🗣️ PUBLIC X RESEARCH", f"Results: {report['result_count']}", ""]
+        for post in report["posts"][:10]:
+            stamp = post.get("created_at") or "time unavailable"
+            verified = "✓ " if post.get("verified") else ""
+            lines.append(f"{verified}@{post.get('username') or 'unknown'} | {stamp} | ♥{post['likes']} ↻{post['reposts']}\n{post['text'][:500]}\n{post.get('url') or ''}")
+        lines.extend(["", report["warning"], "Social posts are not independently verified and must not be treated as confirmed injuries or line-ups."])
+        await reply(update, "\\n".join(lines)[:3900])
+    except Exception as exc:
+        await reply(update, f"X research unavailable: {type(exc).__name__}: {str(exc)[:220]}")
+
+
+async def clv_command(update, context):
+    try:
+        report = await asyncio.to_thread(closing_line_value, update.effective_user.id)
+        if not report["matched"]:
+            await reply(update, f"📉 CLOSING-LINE VALUE\nMatched bets: 0 of {report['bets_checked']} settled bets.\nExact matching odds snapshots are required. Automatic price capture runs every 30 minutes while the bot is online.")
+            return
+        lines = ["📉 CLOSING-LINE VALUE",
+                 f"Matched bets: {report['matched']} of {report['bets_checked']}",
+                 f"Average CLV: {report['average_clv']:+.2%}",
+                 f"Positive: {report['positive']} | Negative: {report['negative']}", "",
+                 "Positive CLV means your taken price beat the latest captured price. This measures price quality, not profit."]
+        await reply(update, "\n".join(lines))
+    except Exception as exc:
+        await reply(update, f"CLV report unavailable: {type(exc).__name__}: {str(exc)[:180]}")
+
+
+async def rolloverstatus_command(update, context):
+    try:
+        report = await asyncio.to_thread(rollover_status, update.effective_user.id)
+        if not report["configured"]:
+            await reply(update, "No rollover plan saved. Use /rollover DAYS DAILY_TARGET_ODDS.")
+            return
+        lines = ["🔁 ROLLOVER PROGRESS", f"Status: {report['status']}",
+                 f"Progress: {report['completed']}/{report['days']} days",
+                 f"Target odds/day: {report['target']:.2f}", f"Remaining: {report['remaining']}",
+                 f"Wins: {report['wins']} | Losses: {report['losses']}", "",
+                 "Record honestly with /rolloverday WON|LOST|MISSED [ACTUAL_ODDS]. A loss breaks the sequence."]
+        await reply(update, "\n".join(lines))
+    except Exception as exc:
+        await reply(update, f"Rollover progress unavailable: {type(exc).__name__}: {str(exc)[:180]}")
+
+
+async def rolloverday_command(update, context):
+    args = list(context.args or [])
+    if not args:
+        await reply(update, "Usage: /rolloverday WON|LOST|MISSED [ACTUAL_ODDS]")
+        return
+    try:
+        result = await asyncio.to_thread(record_rollover_day, update.effective_user.id, args[0],
+                                         float(args[1]) if len(args) > 1 else None)
+        await reply(update, f"Rollover day {result['day']}/{result['days']} recorded: {result['result']}. Status: {result['status']}. Use /rolloverstatus.")
+    except Exception as exc:
+        await reply(update, f"Could not record rollover day: {type(exc).__name__}: {str(exc)[:180]}")
+
+
+async def automatic_odds_snapshot_job(context):
+    try:
+        result = await asyncio.to_thread(capture_current_prices)
+        logger.info("Scheduled odds capture saved %s prices across %s events; feed errors=%s",
+                    result["saved"], result["events"], list(result["errors"]))
+    except Exception:
+        logger.exception("Scheduled bookmaker price capture failed")
+
+
+async def rollover_command(update, context):
+    if len(context.args or []) != 2:
+        await reply(update, "Usage: /rollover DAYS DAILY_TARGET_ODDS\nExample: /rollover 5 2")
+        return
+    try:
+        days, target = int(context.args[0]), float(context.args[1])
+        await asyncio.to_thread(save_rollover, update.effective_user.id, days, target)
+        settings = await asyncio.to_thread(get_settings, update.effective_user.id)
+        projection = rollover_projection(float(settings.get("bankroll") or 0), days, target)
+        await reply(update, f"ROLLOVER PLAN SAVED\nDuration: {days} days\nDaily target odds: {target:.2f}\nIllustrative gross if every day won: KSh {projection['illustrative_gross_if_every_day_won']:,.2f}\n{projection['warning']}")
+    except Exception as exc:
+        await reply(update, f"Rollover setup failed: {type(exc).__name__}: {str(exc)[:180]}")
+
+
+async def marketsim_command(update, context):
+    raw = " ".join(context.args or [])
+    parts = [part.strip() for part in raw.split("|")]
+    if len(parts) != 4:
+        await reply(update, "Usage: /marketsim HOME_RATE | AWAY_RATE | MARKET | BOOKMAKER_ODDS\nExample: /marketsim 1.45 | 1.10 | Over 2.5 | 2.05\nSupply researched rates; this is a scenario calculator, not a fixture forecast.")
+        return
+    try:
+        home_rate, away_rate = float(parts[0]), float(parts[1])
+        markets = await asyncio.to_thread(market_probabilities, home_rate, away_rate)
+        market = parts[2]
+        if market not in markets or market.startswith("_"):
+            raise ValueError("Unsupported market label. Use: " + ", ".join(k for k in markets if not k.startswith("_")))
+        assessment = assess_price(markets[market], float(parts[3]))
+        await reply(update, f"MODEL SCENARIO — NOT A VERIFIED PICK\nAssumed rates: {home_rate:.2f} / {away_rate:.2f}\nMarket: {market}\nEstimated probability: {assessment['probability']:.1%}\nImplied probability: {assessment['implied_probability']:.1%}\nEstimated edge: {assessment['edge']:+.1%}\nFair odds: {assessment['fair_odds']:.2f}\nExpected ROI estimate: {assessment['expected_roi']:+.1%}\nPoisson tail mass omitted: {markets['_tail_mass']:.2%}\nIndependent-Poisson assumptions; not calibrated.")
+    except Exception as exc:
+        await reply(update, f"Market scenario failed: {type(exc).__name__}: {str(exc)[:220]}")
+
+
+
 def main():
 
     if not BOT_TOKEN:
@@ -5180,6 +5321,17 @@ def main():
         ("betlog", betlog_command),
         ("betsettle", betsettle_command),
         ("betstats", betstats_command),
+        ("performance", betstats_command),
+        ("bankroll", bankroll_command),
+        ("stake", stake_command),
+        ("rollover", rollover_command),
+        ("rolloverstatus", rolloverstatus_command),
+        ("rolloverday", rolloverday_command),
+        ("clv", clv_command),
+        ("council", council_command),
+        ("xresearch", xresearch_command),
+        ("playerprop", playerprop_command),
+        ("marketsim", marketsim_command),
         ("betresults", betresults_command),
         ("marketdata", marketdata_command),
         ("fixtures", fixtures),

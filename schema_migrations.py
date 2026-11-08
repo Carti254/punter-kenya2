@@ -1,7 +1,7 @@
 """Versioned, idempotent MySQL schema migrations for PUNTER KENYA."""
 from database import get_connection
 
-LATEST_VERSION = 3
+LATEST_VERSION = 5
 
 
 def _table_exists(cursor, table_name):
@@ -118,6 +118,71 @@ def run_migrations():
                         cursor.execute("ALTER TABLE punter_bet_records ADD COLUMN settlement_evidence_json LONGTEXT NULL")
                 cursor.execute("INSERT INTO punter_schema_migrations (version) VALUES (3)")
                 applied_now.append(3)
+
+
+            if 4 not in applied:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS punter_user_settings (
+                        user_id BIGINT NOT NULL PRIMARY KEY,
+                        bankroll DECIMAL(14,2) NULL,
+                        preferences_json LONGTEXT NULL,
+                        rollover_days INT NULL,
+                        rollover_target DECIMAL(10,3) NULL,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS punter_price_snapshots (
+                        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        fixture_key VARCHAR(500) NOT NULL,
+                        bookmaker VARCHAR(80) NOT NULL,
+                        market VARCHAR(120) NOT NULL,
+                        selection VARCHAR(180) NOT NULL,
+                        decimal_odds DECIMAL(10,3) NOT NULL,
+                        captured_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        INDEX idx_price_fixture_market (fixture_key(191), market),
+                        INDEX idx_price_captured (captured_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS punter_forecast_results (
+                        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        fixture_key VARCHAR(500) NOT NULL,
+                        market VARCHAR(120) NOT NULL,
+                        selection VARCHAR(180) NOT NULL,
+                        probability DECIMAL(8,6) NOT NULL,
+                        decimal_odds DECIMAL(10,3) NULL,
+                        outcome TINYINT NULL,
+                        model_version VARCHAR(80) NOT NULL,
+                        forecast_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        settled_at TIMESTAMP NULL,
+                        INDEX idx_forecast_fixture (fixture_key(191)),
+                        INDEX idx_forecast_market (market, settled_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                cursor.execute("INSERT INTO punter_schema_migrations (version) VALUES (4)")
+                applied_now.append(4)
+
+            if 5 not in applied:
+                if not _column_exists(cursor, "punter_user_settings", "rollover_started_on"):
+                    cursor.execute("ALTER TABLE punter_user_settings ADD COLUMN rollover_started_on DATE NULL")
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS punter_rollover_progress (
+                        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        plan_started DATE NOT NULL,
+                        day_number INT NOT NULL,
+                        target_odds DECIMAL(10,3) NOT NULL,
+                        result VARCHAR(12) NOT NULL,
+                        actual_odds DECIMAL(10,3) NULL,
+                        recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE KEY uq_rollover_day (user_id, plan_started, day_number),
+                        INDEX idx_rollover_user (user_id, plan_started)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                cursor.execute("INSERT INTO punter_schema_migrations (version) VALUES (5)")
+                applied_now.append(5)
 
         return {"applied": applied_now, "latest_version": LATEST_VERSION}
     finally:

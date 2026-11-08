@@ -16,18 +16,35 @@ Telegram-based football fixtures, match research, bookmaker-odds inspection and 
 
 ## AI assistant (optional)
 
-PUNTER can use the official OpenAI Python SDK for natural-language navigation and football slip screenshot reading. The AI routes requests into the bot's existing fixture, match-research, odds and slip-preview workflows; it does not invent bookmaker odds or calculate model probabilities. Screenshot selections are only candidates until they are checked against current SportyBet Kenya fixtures, markets and prices.
+PUNTER uses Google Gemini for natural-language request routing and football slip screenshot reading. Gemini interprets requests and extracts candidate selections; deterministic PUNTER tools remain responsible for fixture lookup, live bookmaker prices, probability calculations and validation. Screenshot selections must be reviewed and checked against current SportyBet Kenya markets before a booking code can be requested.
 
-Set these variables in Railway **Variables** (or your local environment):
+Configure these variables privately in Railway **Variables** (or your local environment):
 
-- `OPENAI_API_KEY` — your OpenAI API key (keep it secret; never commit it).
-- `OPENAI_MODEL` — optional text model; defaults to `gpt-4.1-mini`.
-- `OPENAI_VISION_MODEL` — optional image-capable model; defaults to `gpt-4.1-mini`.
+- `GEMINI_API_KEY` — Google AI Studio API key. Never commit or share it.
+- `GEMINI_MODEL` — optional model name; defaults to `gemini-2.5-flash`.
 
-After adding the key, redeploy the service. In Telegram you can ask questions such as “Analyse Brighton vs Brentford”, “Show me today's fixtures”, “Compare the odds for Arsenal vs Chelsea”, or “Build a slip preview to combined odds 5”. You can also send a betting-slip screenshot, inspect the extracted legs, and reply `VALIDATE` to check them against live SportyBet Kenya prices.
+Without the key, existing non-AI commands continue to work. Gemini usage and quotas depend on the Google AI Studio account and current model availability.
 
-AI usage is billed separately by OpenAI and requires an API account with billing enabled. No OpenAI key is included in this repository. Without the key, existing commands and manual slip workflows continue to work.
+## SportyClaw Premium capability programme
 
+PUNTER's target is a complete, integrated research and betting-workflow assistant. The following capabilities are part of the product scope; a capability is not considered complete until its data source, implementation, tests and Telegram workflow have been verified.
+
+- **Natural-language control:** understand requests, preferences, constraints and multi-step tasks; route them to deterministic bot functions.
+- **Research desk:** fixture discovery, recent form, home/away splits, head-to-head, goals, team news where sourced, match context, risk and evidence citations.
+- **Slip intelligence:** read screenshots, parse pasted slips, split/trim/combine/edit slips, remove or replace legs, change markets, validate each leg against live bookmaker markets and preview booking codes.
+- **Edge hunter:** scan fixtures and available prices, estimate only model-supported probabilities, remove bookmaker margin where possible, compare fair prices and rank candidates with transparent uncertainty.
+- **Specialist market models:** goals and scorelines; corners; cards; shots and shots on target; player props; half-time markets; handicaps and Asian lines. Each market needs its own suitable data and settlement logic. Unsupported markets remain unavailable until validated.
+- **Bookmaker comparison:** compare available Betika and SportyBet prices, retain timestamps and identify price differences. Additional bookmakers require a lawful, stable and tested data source; no bookmaker coverage is implied until connected.
+- **Analyst council:** separate evidence checks for form, goals, corners, cards, player data, odds and risk, followed by a final decision that exposes disagreements and missing evidence rather than fabricating consensus.
+- **Performance laboratory:** persist forecasts and closing prices; report hit rate, Brier score, log loss, calibration, ROI, yield and closing-line value by market, league and time period. Use chronological out-of-sample testing.
+- **Persistent user memory:** save explicit user preferences, prior forecasts, results and workflow state in the database, with controls to inspect and clear stored preferences.
+- **Smart stake adviser:** configurable bankroll, conservative fractional-Kelly or flat-stake scenarios, exposure limits and risk warnings. Never promise returns or encourage chasing losses.
+- **Rollover manager:** user-defined duration and daily combined-odds targets (including 2, 5, 10 and 20), with progress tracking and transparent risk warnings. It must not imply a rollover is safe or profitable.
+- **Natural-language X/social post intake:** accept user-provided public post URLs or text where accessible, extract claims and verify them against independent sources. Do not treat social posts as confirmed team news.
+- **User-first Telegram experience:** concise menus, ordinary-language controls, saved workflows and clear confirmations before any external booking-code request.
+
+**Implementation status:** this programme is broader than the current AI-routing and screenshot-reading work. Live X ingestion, full specialist models, analyst council, persistent preference memory, complete slip editing, advanced bankroll/rollover tools, and broad bookmaker integrations must not be described as finished until implemented and tested. Probabilities remain experimental until supported by sufficient out-of-sample evidence.
+ 
 ## Run locally (no hosting provider)
 
 Requirements: Python 3.11+ and a Telegram bot token from BotFather.
@@ -96,7 +113,12 @@ The database account needs permission to create and write the tables used by the
 - `/calibrate` — run a date-ordered walk-forward evaluation using only matches before each test date; compare the current Poisson model, a venue-weighted/shrunk candidate and a training-only prevalence baseline on the final 30% holdout. Temperature calibration is reported separately. It requires at least 50 training and 30 holdout forecasts and never changes live model settings automatically.
 - `/betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER | YYYY-MM-DD]` — preserve original odds and stake; the fixture date is resolved from the fixture catalogue where uniquely possible.
 - `/betsettle BET_ID HOME_GOALS AWAY_GOALS` — settle a logged 1X2 or standard total-goals selection against the confirmed full-time score.
-- `/betresults` — refresh completed match results and automatically settle pending logged bets only when home team, away team and match date match one unique result. A six-hour background job performs the same check when the database is enabled.\n- `/betstats` — report logged wins, losses, voids, profit/loss and ROI. This is separate from prediction accuracy.
+- `/betresults` — refresh completed match results and automatically settle pending logged bets only when home team, away team and match date match one unique result. A six-hour background job performs the same check when the database is enabled.\n- `/betstats` — report logged wins, losses, voids, profit/loss and ROI.
+- `/performance` — alias for the settled-bet performance report.
+- `/bankroll [AMOUNT]` — save or inspect your planning bankroll in KSh; requires the database.
+- `/stake PROBABILITY ODDS` — capped 25% fractional-Kelly illustration using the saved bankroll; probability is supplied by the user and is not validated as a prediction.
+- `/rollover DAYS DAILY_TARGET_ODDS` — save a rollover target and show the mathematical all-days-win projection; this is not a forecast or a recommendation.
+- `/marketsim HOME_GOALS_RATE | AWAY_GOALS_RATE | MARKET | BOOKMAKER_ODDS` — transparent independent-Poisson scenario and price comparison using user-supplied goal rates. It is not a fixture prediction and reports truncated tail mass. This is separate from prediction accuracy.
 - `/fullintel` — full command directory.
 
 The Telegram menu also includes the SportyBet slip builder. AI building accepts a target odds figure and optional market/ranking controls. Manual building lets you request any market and outcome that SportyBet actually returns for the selected fixture; the AI forecast scanner only assigns probabilities to markets supported by its available evidence, and it reports unsupported markets rather than inventing estimates. BTTS and Under 2.5 are not hard-excluded. Match analysis accepts both team names and tolerates small spelling mistakes; use `TEAM A vs TEAM B`.
@@ -111,7 +133,18 @@ Liverpool vs Brighton | 1X2 | Draw
 
 The bot must show the resolved current selections and obtain confirmation before requesting a booking/share code from SportyBet. It must never claim that a bet has been placed.
 
-## Optional match-statistics provider\n\nSet `API_FOOTBALL_KEY` to enable the API-Sports / API-Football adapter in `football_stats_provider.py`. It requests the fixture by UTC date and exact home/away team names, then retrieves full-time statistics, half-time statistics, player statistics and match events. It refuses ambiguous fixture matches. API-Football documents corners, yellow/red cards and the `half=true` statistics option (available from the 2024 season); player-statistics coverage varies by competition. A valid API key and provider coverage are required. The free plan is limited to 100 requests/day; pricing and coverage must be checked before production use. The automatic settlement job now uses this provider as a fallback when the community results CSV cannot settle a bet or when the market needs non-score evidence. The evidence grader currently supports half-time 1X2, half-time total goals, standard full-time total corners, separate total yellow-card and red-card lines, and exact-name player goalscorer, goals, shots, shots-on-target, assists, yellow-card and red-card selections when the provider supplies the required fields. Player Over/Under selections must include an exact provider player name. Each evidence-based settlement stores its provider source and raw evidence JSON in the bet record. Missing provider data, integer-line push cases, bookmaker-specific card-points rules, ambiguous player names and unsupported Asian lines remain pending; they are never guessed. Provider use is opt-in through API_FOOTBALL_KEY and consumes API quota, so monitor the provider's current plan limits.\n\n## Data sources and bookmaker coverage
+## Optional match-statistics provider\n\nSet `API_FOOTBALL_KEY` to enable the API-Sports / API-Football adapter in `football_stats_provider.py`. It requests the fixture by UTC date and exact home/away team names, then retrieves full-time statistics, half-time statistics, player statistics and match events. It refuses ambiguous fixture matches. API-Football documents corners, yellow/red cards and the `half=true` statistics option (available from the 2024 season); player-statistics coverage varies by competition. A valid API key and provider coverage are required. The free plan is limited to 100 requests/day; pricing and coverage must be checked before production use. The automatic settlement job now uses this provider as a fallback when the community results CSV cannot settle a bet or when the market needs non-score evidence. The evidence grader currently supports half-time 1X2, half-time total goals, standard full-time total corners, separate total yellow-card and red-card lines, and exact-name player goalscorer, goals, shots, shots-on-target, assists, yellow-card and red-card selections when the provider supplies the required fields. Player Over/Under selections must include an exact provider player name. Each evidence-based settlement stores its provider source and raw evidence JSON in the bet record. Missing provider data, integer-line push cases, bookmaker-specific card-points rules, ambiguous player names and unsupported Asian lines remain pending; they are never guessed. Provider use is opt-in through API_FOOTBALL_KEY and consumes API quota, so monitor the provider's current plan limits.\n\n## Premium research and tracking additions
+
+- `/council HOME vs AWAY [YYYY-MM-DD]` — queries API-Football recent-match samples for corners, yellow cards, total shots, shots on target and first-half goals. Each panel reports its sample size and a transparent Poisson baseline. This is experimental and uncalibrated; it does not issue a consensus bet without an independently checked bookmaker price.\n- `/playerprop HOME vs AWAY | PLAYER | METRIC | LINE [| YYYY-MM-DD]` — estimates a named player's shots, shots on target, goals, assists or cards from their last five available appearances; refuses to forecast with fewer than four appearances or an ambiguous player match.
+- `/xresearch HOME vs AWAY` — searches recent public X posts through the official X API v2. Configure `X_BEARER_TOKEN` privately. X API recent-search access may require a paid/eligible developer plan. Posts are unverified leads, not confirmed injury or lineup news.
+- Automatic read-only odds snapshots run every 30 minutes for today's and tomorrow's fixtures while the database and Telegram job queue are running.
+- `/clv` — compares logged settled selections with the latest exact matching captured price on the match date. It reports coverage and average closing-line value; missing snapshots are excluded, and CLV is a price-quality metric rather than proof of profitability.
+- `/rolloverstatus` — inspect recorded progress. `/rolloverday WON|LOST|MISSED [ACTUAL_ODDS]` records a day's outcome. A loss or missed day breaks the sequence. Progress is user-entered and is not inferred from a win or forecast.
+- Migration v5 adds rollover plan dates and daily progress storage. Existing odds history is stored in `punter_odds_snapshots`.
+
+The accumulator builder already scans supported priced markets, ranks candidates and combines selections to a requested target. It remains an experimental builder: probability coverage is limited to markets for which the current fixture model can produce evidence, and the model has not been demonstrated to be calibrated or profitable. Specialist estimates are not yet validated on a sufficiently large chronological holdout. API quota, data coverage, exact fixture matching and bookmaker settlement rules remain constraints.
+
+## Data sources and bookmaker coverage
 
 - Fixtures and competition catalogue: [open-matchday](https://github.com/oladeeayo/open-matchday). This is a community-maintained dataset, not a real-time live-score service.
 - Bookmaker adapters: Betika Kenya and SportyBet Kenya. BetPawa is not configured. Betika odds use the public `/v1/uo/matches` list and `/v1/uo/match?parent_match_id=` detail requests; these endpoints are undocumented.

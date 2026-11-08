@@ -3,7 +3,7 @@ name: Validate Python
 on:
   workflow_dispatch:
   push:
-    branches: [main, 'fix/**']
+    branches: [main, 'fix/**', 'feature/sportyclaw-premium-parity']
   pull_request:
     branches: [main]
 
@@ -74,12 +74,20 @@ jobs:
           from bookmaker_odds import smoke_test_bookmakers
           result = smoke_test_bookmakers()
           print(json.dumps(result, indent=2))
-          if not all(item.get("request_ok") for item in result.values()):
-              sys.exit(1)
-          if result.get("Betika", {}).get("priced_events", 0) < 1:
-              raise SystemExit("Betika returned no priced football events; feed is not verified.")
-          if result.get("SportyBet", {}).get("priced_events", 0) < 1:
-              raise SystemExit("SportyBet returned no priced football events; feed is not verified.")
+          # Public bookmaker endpoints can intermittently return HTML/429 for one date.
+          # Require at least one successful, priced observation per provider across
+          # the checked dates; preserve individual failures in the printed diagnostics.
+          for provider in ("Betika", "SportyBet"):
+              observations = [
+                  item for name, item in result.items()
+                  if name == provider or name.startswith(provider + " ")
+              ]
+              successful = [
+                  item for item in observations
+                  if item.get("request_ok") and item.get("priced_events", 0) >= 1
+              ]
+              if not successful:
+                  raise SystemExit(f"{provider} returned no successful priced football events across checked dates.")
           PY
 
   historical-calibration:

@@ -1,8 +1,8 @@
-"""OpenAI-powered natural-language and screenshot interface for PUNTER KENYA.
+"""Gemini-powered natural-language and screenshot interface for PUNTER KENYA.
 
-The language model interprets requests and reads slip images. It never invents
-bookmaker prices or calculates betting probabilities; those remain the job of
-PUNTER's deterministic data and prediction code.
+Gemini interprets requests and reads slip images. It never invents bookmaker
+prices or calculates betting probabilities; those remain the job of PUNTER's
+deterministic data and prediction code.
 """
 from __future__ import annotations
 
@@ -12,34 +12,66 @@ import os
 import re
 from typing import Any
 
+import requests
+
 ALLOWED_ACTIONS = {"deepdive", "odds", "fixtures", "topvalue", "autobuild", "help", "explain"}
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
 def ai_is_configured() -> bool:
-    return bool(os.getenv("OPENAI_API_KEY", "").strip())
+    return bool(os.getenv("GEMINI_API_KEY", "").strip())
 
 
-def _client():
-    if not ai_is_configured():
-        raise RuntimeError("AI is not configured. Add OPENAI_API_KEY to the hosting environment.")
+def _generate(parts: list[dict[str, Any]], max_tokens: int = 1200) -> str:
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("AI is not configured. Add GEMINI_API_KEY to the hosting environment.")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    url = GEMINI_API_URL.format(model=model)
+    payload = {
+        "system_instruction": {"parts": [{"text":
+            "You are the request router and slip-image reader for PUNTER KENYA, a Kenyan football research Telegram bot. "
+            "Never invent fixtures, bookmaker prices, statistics or probabilities. Numeric probabilities and odds must "
+            "come from PUNTER's own data and deterministic models. Be conservative and return only the requested JSON."
+        }]},
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": max_tokens,
+            "responseMimeType": "application/json",
+        },
+    }
     try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise RuntimeError("OpenAI SDK is not installed. Redeploy after installing requirements.txt.") from exc
-    return OpenAI(api_key=os.environ["OPENAI_API_KEY"].strip(), timeout=40.0, max_retries=2)
+        response = requests.post(
+            url, headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            json=payload, timeout=45,
+        )
+        if response.status_code == 429:
+            raise RuntimeError("Gemini's free request quota is temporarily exhausted. Please try again later.")
+        response.raise_for_status()
+        body = response.json()
+    except requests.RequestException as exc:
+        detail = ""
+        try:
+            detail = response.json().get("error", {}).get("message", "")
+        except Exception:
+            pass
+        raise RuntimeError(f"Gemini API request failed: {detail or str(exc)[:240]}") from exc
+    candidates = body.get("candidates") or []
+    try:
+        return str(candidates[0]["content"]["parts"][0]["text"]).strip()
+    except (IndexError, KeyError, TypeError) as exc:
+        raise RuntimeError("Gemini returned no readable response. Check model availability and API quota.") from exc
 
 
-def _json_from_response(response) -> dict[str, Any]:
-    raw = str(getattr(response, "output_text", "") or "").strip()
-    if not raw:
-        raise RuntimeError("The AI returned an empty response.")
-    raw = re.sub(r"^\`\`\`(?:json)?\s*|\s*\`\`\`$", "", raw, flags=re.I)
+def _json_from_response(raw: str) -> dict[str, Any]:
+    raw = re.sub(r"^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$", "", raw.strip(), flags=re.I)
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("The AI response could not be read as structured data.") from exc
+        raise RuntimeError("Gemini's response could not be read as structured data.") from exc
     if not isinstance(value, dict):
-        raise RuntimeError("The AI response had an unexpected format.")
+        raise RuntimeError("Gemini returned an unexpected response format.")
     return value
 
 
@@ -47,29 +79,18 @@ def interpret_request(message: str) -> dict[str, Any]:
     """Translate a user's natural-language request into an existing bot workflow."""
     if not message or len(message) > 2000:
         raise ValueError("Message must contain 1–2,000 characters.")
-    response = _client().responses.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip(),
-        instructions=(
-            "You are the request router for PUNTER KENYA, a Kenyan football research "
-            "Telegram bot. Return JSON only with keys action, fixture, date, market, "
-            "target_odds, explanation. action must be one of deepdive, odds, fixtures, "
-            "topvalue, autobuild, help, explain. Route match research to deepdive; "
-            "current bookmaker prices to odds; fixture lists to fixtures; ranked "
-            "research/picks to topvalue; a requested slip/accumulator preview to "
-            "autobuild; help requests to help; general betting concept questions to "
-            "explain. Extract a fixture only when both teams are clear, formatted "
-            "'Home vs Away'. date must be today, tomorrow, or both. target_odds must "
-            "be a number >1 only if the user specified a target, otherwise 5.0. "
-            "market is a concise filter such as all, 1X2, goals, corners, cards, "
-            "or a specific market. Do not make predictions, invent odds, promise "
-            "profit, or claim to have researched a match. If intent is unclear, use help. "
-            "explanation is a short answer only for explain; otherwise empty."
-        ),
-        input=message,
-        text={"format": {"type": "json_object"}},
-        max_output_tokens=250,
+    prompt = (
+        "Translate this user request into JSON with keys action, fixture, date, market, target_odds, explanation. "
+        "action must be one of deepdive, odds, fixtures, topvalue, autobuild, help, explain. "
+        "Route match research to deepdive; current bookmaker prices to odds; fixture lists to fixtures; "
+        "ranked research/picks to topvalue; requested slip/accumulator preview to autobuild; help to help; "
+        "general betting concept questions to explain. Extract fixture only when both teams are clear, formatted "
+        "'Home vs Away'. date must be today, tomorrow, or both. target_odds must be a number >1 only if specified, "
+        "otherwise 5.0. market is a concise filter such as all, 1X2, goals, corners, cards, or a specific market. "
+        "Do not make predictions, invent odds, promise profit, or claim research was done. If unclear, use help. "
+        "explanation is a short answer only for explain; otherwise empty.\n\nUSER REQUEST:\n" + message
     )
-    data = _json_from_response(response)
+    data = _json_from_response(_generate([{"text": prompt}], max_tokens=350))
     action = str(data.get("action", "help")).strip().lower()
     if action not in ALLOWED_ACTIONS:
         action = "help"
@@ -86,14 +107,8 @@ def interpret_request(message: str) -> dict[str, Any]:
             target = 5.0
     except (TypeError, ValueError, OverflowError):
         target = 5.0
-    return {
-        "action": action,
-        "fixture": fixture,
-        "date": date,
-        "market": market,
-        "target_odds": target,
-        "explanation": str(data.get("explanation") or "")[:1200],
-    }
+    return {"action": action, "fixture": fixture, "date": date, "market": market,
+            "target_odds": target, "explanation": str(data.get("explanation") or "")[:1200]}
 
 
 def read_slip_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> list[str]:
@@ -103,28 +118,21 @@ def read_slip_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> list[s
     if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
         mime_type = "image/jpeg"
     encoded = base64.b64encode(image_bytes).decode("ascii")
-    response = _client().responses.create(
-        model=os.getenv("OPENAI_VISION_MODEL", os.getenv("OPENAI_MODEL", "gpt-4.1-mini")).strip(),
-        instructions=(
-            "Read this sportsbook slip image. Extract only clearly legible football "
-            "selections. Return JSON only: {\"selections\":[{\"fixture\":"
-            "\"Home vs Away\",\"market\":\"market name and line\","
-            "\"selection\":\"selected outcome\"}]}. Do not guess missing "
-            "teams, markets, lines or selections. Exclude non-football selections. "
-            "Do not include odds in the output because PUNTER will fetch and validate "
-            "current SportyBet Kenya prices separately."
-        ),
-        input=[{"role": "user", "content": [
-            {"type": "input_text", "text": "Extract the clearly visible football slip selections."},
-            {"type": "input_image", "image_url": f"data:{mime_type};base64,{encoded}"},
-        ]}],
-        text={"format": {"type": "json_object"}},
-        max_output_tokens=1200,
+    prompt = (
+        "Read this sportsbook slip image. Extract only clearly legible football selections. "
+        "Return JSON: {\"selections\":[{\"fixture\":\"Home vs Away\","
+        "\"market\":\"market name and line\",\"selection\":\"selected outcome\"}]}. "
+        "Do not guess missing teams, markets, lines or selections. Exclude non-football selections. "
+        "Do not include odds; PUNTER will fetch and validate current SportyBet Kenya prices separately."
     )
-    data = _json_from_response(response)
+    raw = _generate([
+        {"text": prompt},
+        {"inline_data": {"mime_type": mime_type, "data": encoded}},
+    ], max_tokens=1600)
+    data = _json_from_response(raw)
     rows = data.get("selections")
     if not isinstance(rows, list):
-        raise RuntimeError("No readable selections were returned.")
+        raise RuntimeError("Gemini did not return a readable selections list.")
     lines = []
     for row in rows[:20]:
         if not isinstance(row, dict):
