@@ -2171,7 +2171,13 @@ async def autobuild_sportybet_command(update, context):
         else:
             rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
 
-        available_fixtures = len({(str(x.get("home") or "").casefold(), str(x.get("away") or "").casefold()) for x in rows})
+        available_fixtures = len({
+            ("event", str(x.get("event_id")))
+            if x.get("event_id") not in (None, "")
+            else ("fixture", str(x.get("day") or x.get("match_date") or ""),
+                  str(x.get("home") or "").casefold(), str(x.get("away") or "").casefold())
+            for x in rows
+        })
         effective_max_legs = min(available_fixtures, SPORTYBET_MAX_SELECTIONS)
         if effective_max_legs < 1:
             await reply(update, "Fixtures were retrieved, but none produced a distinct eligible SportyBet selection.")
