@@ -1164,11 +1164,6 @@ def main_menu_keyboard():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = (
         "⚽ PUNTER KENYA\n"
-        "FOOTBALL INTELLIGENCE & BETTING CENTRE\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "Research matches, compare available bookmaker prices async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = (
-        "⚽ PUNTER KENYA\n"
         "YOUR FOOTBALL RESEARCH ASSISTANT\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "Choose what you want to do. I'll keep the process simple.\n\n"
@@ -1183,7 +1178,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
         message,
         reply_markup=main_menu_keyboard(),
-    )strip()
+    )
+
+
+def parse_slip_lines(raw_text):
+    """Parse one selection per line: Fixture | Market | Pick | Decimal odds [| Bookmaker]."""
+    selections = []
+    bookmaker = "Manual"
+    for line_number, raw in enumerate(raw_text.splitlines(), 1):
+        line = raw.strip()
         if not line:
             continue
         parts = [part.strip() for part in line.split("|")]
