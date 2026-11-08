@@ -52,11 +52,21 @@ def main() -> None:
                 for event in (tournament.get("events") or [])
                 if isinstance(event, dict)
             ]
+            date_counts = {}
+            for event in events:
+                stamp = event.get("estimateStartTime")
+                if stamp:
+                    date_text = datetime.fromtimestamp(
+                        int(stamp) / 1000, timezone.utc
+                    ).astimezone(ZoneInfo("Africa/Nairobi")).date().isoformat()
+                    date_counts[date_text] = date_counts.get(date_text, 0) + 1
             output[name] = {
                 "http_status": response.status_code,
                 "biz_code": payload.get("bizCode"),
+                "total_num": data.get("totalNum") if isinstance(data, dict) else None,
                 "tournaments": len(tournaments),
                 "events": len(events),
+                "kickoff_dates_eat": dict(sorted(date_counts.items())),
                 "sample_fixtures": [
                     {
                         "fixture": f"{event.get('homeTeamName')} vs {event.get('awayTeamName')}",
@@ -77,6 +87,33 @@ def main() -> None:
             }
         except Exception as exc:
             output[name] = {"error": f"{type(exc).__name__}: {str(exc)[:220]}"}
+    # Verify whether pageNum is honoured or whether the endpoint repeats page 1.
+    try:
+        params = dict(BASE_PARAMS, pageNum=2)
+        params["marketId"] = VARIANTS["current_market_catalogue"]
+        response = requests.get(BASE, params=params, headers=HEADERS, timeout=(8, 20))
+        response.raise_for_status()
+        payload = response.json()
+        data = payload.get("data") or {}
+        tournaments = data.get("tournaments") or []
+        page2_events = [
+            event
+            for tournament in tournaments if isinstance(tournament, dict)
+            for event in (tournament.get("events") or [])
+            if isinstance(event, dict)
+        ]
+        output["page_2_check"] = {
+            "http_status": response.status_code,
+            "events": len(page2_events),
+            "unique_event_ids": len({str(event.get("eventId")) for event in page2_events}),
+            "sample_fixtures": [
+                f"{event.get('homeTeamName')} vs {event.get('awayTeamName')}"
+                for event in page2_events[:5]
+            ],
+        }
+    except Exception as exc:
+        output["page_2_check"] = {"error": f"{type(exc).__name__}: {str(exc)[:220]}"}
+
     print(json.dumps(output, indent=2, ensure_ascii=False))
 
 
