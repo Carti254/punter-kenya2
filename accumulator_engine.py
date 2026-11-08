@@ -33,6 +33,7 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
         # Aggressive target building may include high-variance, negative-EV legs.
         # Keep the model probability and expected factor visible to ranking/reporting;
         # the caller explicitly chooses the risk profile.
+        clean.append(item)
     if ranking not in {"value", "probability", "odds"}:
         raise ValueError("ranking must be value, probability or odds.")
     if ranking == "probability":
@@ -46,7 +47,7 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
     if not clean:
         return {"selections": [], "combined_odds": 1.0, "combined_probability": 0.0,
                 "expected_return_factor": 0.0, "target_reached": False,
-                "reason": "No positive-EV candidates available; no slip generated."}
+                "reason": "No valid candidates available; no slip generated."}
 
     # A beam keeps this practical for Telegram requests with large fixture slates.
     states = [([], 1.0, 1.0, frozenset(), 0)]
