@@ -3350,6 +3350,11 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                 for row in game.get("markets", []):
                     market_name = str(row.get("market") or "Unknown")
                     selection_name = str(row.get("selection") or "Unknown")
+                    # Respect the configured user exclusions consistently across every builder.
+                    if "btts" in _normal_market_text(market_name) or "both teams to score" in _normal_market_text(market_name):
+                        continue
+                    if re.search(r"\bunder\s*2\.5\b", selection_name, re.I):
+                        continue
                     probability, reason = _market_probability_for_row(prediction, row)
                     if probability is None:
                         if reason:
@@ -4449,7 +4454,7 @@ def evaluate_historical_calibration():
         with connection.cursor() as cursor:
             ensure_prediction_records_table(cursor)
             cursor.execute("""
-                SELECT p_home, p_draw, p_away, actual_home_goals, actual_away_goals
+                SELECT match_date, p_home, p_draw, p_away, actual_home_goals, actual_away_goals
                 FROM punter_prediction_records
                 WHERE status='SETTLED' AND actual_home_goals IS NOT NULL
                   AND actual_away_goals IS NOT NULL
@@ -4466,12 +4471,22 @@ def evaluate_historical_calibration():
         outcomes.append(0 if hg > ag else 1 if hg == ag else 2)
 
     count = len(rows)
-    split = int(count * 0.70)
-    if split < 50 or count - split < 30:
-        return {"ready": False, "count": count, "train": split, "holdout": count - split}
+    # Split on whole match dates, never between fixtures played on the same day.
+    dates = sorted({row["match_date"] for row in rows})
+    date_split = int(len(dates) * 0.70)
+    if date_split < 1 or date_split >= len(dates):
+        return {"ready": False, "count": count, "train": 0, "holdout": 0}
+    cutoff = dates[date_split]
+    train_indices = [i for i, row in enumerate(rows) if row["match_date"] < cutoff]
+    test_indices = [i for i, row in enumerate(rows) if row["match_date"] >= cutoff]
+    if len(train_indices) < 50 or len(test_indices) < 30:
+        return {"ready": False, "count": count, "train": len(train_indices), "holdout": len(test_indices)}
 
-    train_p, train_y = probabilities[:split], outcomes[:split]
-    test_p, test_y = probabilities[split:], outcomes[split:]
+    train_p = [probabilities[i] for i in train_indices]
+    train_y = [outcomes[i] for i in train_indices]
+    test_p = [probabilities[i] for i in test_indices]
+    test_y = [outcomes[i] for i in test_indices]
+    split = len(train_indices)
     fitted = fit_temperature(train_p, train_y, minimum_samples=50)
     calibrated = [apply_temperature(p, fitted["temperature"]) for p in test_p]
     return {
