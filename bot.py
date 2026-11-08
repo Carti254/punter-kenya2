@@ -4712,36 +4712,42 @@ def refresh_pending_bet_records(user_id=None):
                     continue
                 matches.append((hg, ag))
         checked += 1
-        if len(matches) != 1:
-            if len(matches) > 1:
-                ambiguous += 1
-            continue
-        try:
-            settle_bet(int(bet["user_id"]), int(bet["id"]), matches[0][0], matches[0][1])
-            settled += 1
-        except ValueError as exc:
-            # First try exact, market-specific provider evidence for unsupported score markets.
-            # Missing API credentials, coverage or bookmaker rules leave the bet pending.
-            if "Pending bet record not found" in str(exc):
+        unsupported_score_market = False
+        if len(matches) == 1:
+            try:
+                settle_bet(int(bet["user_id"]), int(bet["id"]), matches[0][0], matches[0][1])
+                settled += 1
                 continue
-            if os.getenv("API_FOOTBALL_KEY"):
-                cache_key = (date_text, str(bet.get("home_team")), str(bet.get("away_team")))
-                try:
-                    if cache_key not in market_evidence_cache:
-                        market_evidence_cache[cache_key] = fetch_match_market_data(
-                            bet.get("home_team"), bet.get("away_team"), date_text
-                        )
-                    settle_bet_with_market_evidence(
-                        int(bet["user_id"]), int(bet["id"]), market_evidence_cache[cache_key]
-                    )
-                    settled += 1
+            except ValueError as exc:
+                if "Pending bet record not found" in str(exc):
                     continue
-                except Exception as provider_error:
-                    logger.info("Market evidence did not settle bet #%s: %s", bet.get("id"), provider_error)
+                unsupported_score_market = True
+            except Exception:
+                logger.exception("CSV-based automatic settlement failed for bet #%s", bet.get("id"))
+                continue
+        elif len(matches) > 1:
+            ambiguous += 1
+
+        # Optional provider fallback covers fixtures absent from the community CSV
+        # and markets that require half-time or match-stat evidence.
+        if os.getenv("API_FOOTBALL_KEY"):
+            cache_key = (date_text, str(bet.get("home_team")), str(bet.get("away_team")))
+            try:
+                if cache_key not in market_evidence_cache:
+                    market_evidence_cache[cache_key] = fetch_match_market_data(
+                        bet.get("home_team"), bet.get("away_team"), date_text
+                    )
+                settle_bet_with_market_evidence(
+                    int(bet["user_id"]), int(bet["id"]), market_evidence_cache[cache_key]
+                )
+                settled += 1
+                continue
+            except Exception as provider_error:
+                logger.info("Provider evidence did not settle bet #%s: %s", bet.get("id"), provider_error)
+                if unsupported_score_market or len(matches) > 0:
+                    requires_market_data += 1
+        elif unsupported_score_market:
             requires_market_data += 1
-            continue
-        except Exception:
-            logger.exception("Automatic settlement failed for bet #%s", bet.get("id"))
     return {"checked": checked, "settled": settled, "ambiguous": ambiguous,
             "requires_market_data": requires_market_data,
             "pending": max(0, len(pending) - settled)}
