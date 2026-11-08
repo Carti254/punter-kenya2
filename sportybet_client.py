@@ -193,3 +193,63 @@ def create_booking(resolved):
         "unavailable": data.get("unavailableOutcomes") or [],
         "deadline": data.get("deadline"),
     }
+
+
+
+def get_booking(code):
+    """Read a SportyBet share code (read-only) and normalize its legs."""
+    clean = re.sub(r"[^A-Za-z0-9]", "", str(code or "")).upper()
+    if not re.fullmatch(r"[A-Z0-9]{4,12}", clean):
+        raise SportyBetError("Enter a valid SportyBet booking code (4–12 letters/numbers).")
+    try:
+        response = SESSION.get(
+            f"{BASE}/orders/share/{clean}",
+            headers=HEADERS,
+            timeout=(6, 18),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        raise SportyBetError(f"Could not read SportyBet booking code: {type(exc).__name__}.") from None
+    except ValueError:
+        raise SportyBetError("SportyBet returned an unreadable booking-code response.") from None
+    if payload.get("bizCode") not in (None, 10000):
+        raise SportyBetError(str(payload.get("message") or "SportyBet rejected this booking code.")[:250])
+    data = payload.get("data") or {}
+    if not data.get("shareCode"):
+        raise SportyBetError("Booking code was not found or has expired.")
+    selections = []
+    for leg in data.get("outcomes") or []:
+        markets = leg.get("markets") or []
+        market = markets[0] if markets else {}
+        outcomes = market.get("outcomes") or []
+        outcome = outcomes[0] if outcomes else {}
+        event_id = str(leg.get("eventId") or "")
+        market_id = str(market.get("id") or "")
+        outcome_id = str(outcome.get("id") or "")
+        if not (event_id and market_id and outcome_id):
+            raise SportyBetError("SportyBet returned a leg without reusable event/market/outcome IDs. This code cannot safely be edited.")
+        start_time = leg.get("estimateStartTime")
+        if start_time and int(start_time) <= int(time.time() * 1000):
+            raise SportyBetError(f"{leg.get('homeTeamName', 'A fixture')} vs {leg.get('awayTeamName', '')} has already started; this selection cannot be rebuilt.")
+        selections.append({
+            "eventId": event_id,
+            "marketId": market_id,
+            "specifier": market.get("specifier"),
+            "outcomeId": outcome_id,
+            "fixture": f"{leg.get('homeTeamName', '')} vs {leg.get('awayTeamName', '')}".strip(" vs"),
+            "league": "",
+            "market": str(market.get("desc") or market.get("name") or market_id),
+            "selection": str(outcome.get("desc") or outcome_id),
+            "odds": float(outcome.get("odds") or 0),
+            "startTime": start_time,
+        })
+    if not selections:
+        raise SportyBetError("SportyBet returned no readable selections for this code.")
+    return {
+        "bookingCode": str(data.get("shareCode")),
+        "shareURL": str(data.get("shareURL") or ""),
+        "selections": selections,
+        "deadline": data.get("deadline"),
+        "unavailable": data.get("unavailableOutcomes") or [],
+    }
