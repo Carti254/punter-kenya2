@@ -28,6 +28,8 @@ from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find
 from slip_manager import create_slip, get_slip, list_slips, update_slip
 from schema_migrations import run_migrations
 from results_tracker import record_bet, settle_bet, bet_statistics
+from schema_migrations import run_migrations
+from results_tracker import record_bet, settle_bet, bet_statistics
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -4487,6 +4489,64 @@ async def betstats_command(update, context):
         await reply(update, f"⚠️ Bet statistics unavailable: {type(exc).__name__}: {str(exc)[:250]}")
 
 
+async def betlog_command(update, context):
+    """Log a real bookmaker selection and its original price/stake."""
+    raw = " ".join(context.args or [])
+    parts = [part.strip() for part in raw.split("|")]
+    if len(parts) not in (5, 6):
+        await reply(update, "Usage: /betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER]\nExample: /betlog Arsenal vs Chelsea | 1X2 | Arsenal | 2.10 | 100 | SportyBet")
+        return
+    fixture = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", parts[0], maxsplit=1, flags=re.I)
+    if len(fixture) != 2:
+        await reply(update, "Enter the fixture as HOME vs AWAY.")
+        return
+    bookmaker = parts[5] if len(parts) == 6 else "SportyBet"
+    try:
+        bet_id = await asyncio.to_thread(
+            record_bet, update.effective_user.id, bookmaker,
+            fixture[0], fixture[1], parts[1], parts[2], parts[3], parts[4]
+        )
+        await reply(update, f"✅ BET RECORD SAVED — #{bet_id}\n{fixture[0]} vs {fixture[1]}\n{parts[1]}: {parts[2]} @ {float(parts[3]):.2f}\nStake: {float(parts[4]):.2f} KSh\nOriginal odds and stake are now preserved.")
+    except Exception as exc:
+        await reply(update, f"⚠️ Could not save bet record: {type(exc).__name__}: {str(exc)[:250]}")
+
+
+async def betsettle_command(update, context):
+    """Settle a logged selection against the confirmed full-time score."""
+    if len(context.args or []) != 3:
+        await reply(update, "Usage: /betsettle BET_ID HOME_GOALS AWAY_GOALS\nExample: /betsettle 12 2 1")
+        return
+    try:
+        bet_id, home_goals, away_goals = map(int, context.args)
+        if min(home_goals, away_goals) < 0:
+            raise ValueError
+        result = await asyncio.to_thread(
+            settle_bet, update.effective_user.id, bet_id, home_goals, away_goals
+        )
+        await reply(update, f"📊 BET #{bet_id} SETTLED: {result['status']}\nFull-time: {home_goals}-{away_goals}\nProfit/loss: {float(result['profit_loss']):+.2f} KSh")
+    except Exception as exc:
+        await reply(update, f"⚠️ Could not settle bet: {type(exc).__name__}: {str(exc)[:250]}")
+
+
+async def betstats_command(update, context):
+    try:
+        stats = await asyncio.to_thread(bet_statistics, update.effective_user.id)
+        total = int(stats.get("total") or 0)
+        pending = int(stats.get("pending") or 0)
+        won, lost, voided = int(stats.get("won") or 0), int(stats.get("lost") or 0), int(stats.get("voided") or 0)
+        pnl = float(stats.get("profit_loss") or 0)
+        turnover = float(stats.get("settled_stakes") or 0)
+        settled = won + lost + voided
+        roi = pnl / turnover if turnover else 0.0
+        await reply(update, "📈 PUNTER BET PERFORMANCE\n\n"
+            f"Logged: {total} | Settled: {settled} | Pending: {pending}\n"
+            f"Wins: {won} | Losses: {lost} | Voids: {voided}\n"
+            f"Settled stakes: {turnover:.2f} KSh\nProfit/loss: {pnl:+.2f} KSh\nROI: {roi:+.2%}\n\n"
+            "This report uses only bets you logged and settled; it is separate from prediction accuracy.")
+    except Exception as exc:
+        await reply(update, f"⚠️ Bet statistics unavailable: {type(exc).__name__}: {str(exc)[:250]}")
+
+
 def main():
 
     if not BOT_TOKEN:
@@ -4532,6 +4592,9 @@ def main():
         ("value", value_command),
         ("topvalue", topvalue_command),
         ("record", record_command),
+        ("betlog", betlog_command),
+        ("betsettle", betsettle_command),
+        ("betstats", betstats_command),
         ("betlog", betlog_command),
         ("betsettle", betsettle_command),
         ("betstats", betstats_command),
