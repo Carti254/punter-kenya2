@@ -148,6 +148,7 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
     available = [p for p in panels if p["available"]]
     return {
         "fixture": f"{home} vs {away}", "date": target.isoformat(),
+        "fixture_id": int(((exact[0].get("fixture") or {}).get("id") or 0)),
         "provider": "API-Football", "panels": panels,
         "council": {
             "available_panels": len(available),
