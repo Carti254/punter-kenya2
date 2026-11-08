@@ -256,7 +256,8 @@ def enrich_candidates(rows: list[dict], max_fixtures: int = 30):
         "fixtures_enriched": 0,
         "bsd_matches": 0,
         "pitchapi_matches": 0,
-        "corner_probabilities_added": 0,\n        "external_probabilities_added": 0,
+        "corner_probabilities_added": 0,
+        "external_probabilities_added": 0,
         "errors": [],
     }
     if not output or not (bsd_key or pitch_key):
