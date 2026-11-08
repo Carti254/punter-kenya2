@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 
 
-def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_candidates=60):
+def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_candidates=60, ranking="value"):
     target = float(target_odds)
     if not math.isfinite(target) or target <= 1:
         raise ValueError("Target odds must be finite and greater than 1.")
@@ -31,7 +31,14 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
         item["_fixture_key"] = (home.casefold(), away.casefold())
         item["_expected_factor"] = odds * probability
         clean.append(item)
-    clean.sort(key=lambda x: (x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
+    if ranking not in {"value", "probability", "odds"}:
+        raise ValueError("ranking must be value, probability or odds.")
+    if ranking == "probability":
+        clean.sort(key=lambda x: (x["probability"], x["_expected_factor"]), reverse=True)
+    elif ranking == "odds":
+        clean.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
+    else:
+        clean.sort(key=lambda x: (x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
     clean = clean[:max_candidates]
     if not clean:
         return {"selections": [], "combined_odds": 1.0, "combined_probability": 0.0,
@@ -71,13 +78,23 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
 
     if completed:
         # Highest expected payout factor; then probability; then fewer legs.
-        best = max(completed, key=lambda s: (s[1] * s[2], s[2], -len(s[0])))
+        if ranking == "probability":
+            best = max(completed, key=lambda s: (s[2], s[1] * s[2], -len(s[0])))
+        elif ranking == "odds":
+            best = max(completed, key=lambda s: (s[1], s[1] * s[2], -len(s[0])))
+        else:
+            best = max(completed, key=lambda s: (s[1] * s[2], s[2], -len(s[0])))
     else:
         # Return the best available partial construction, never pretend target was met.
         all_states = states
         if not all_states:
             all_states = [([], 1.0, 1.0, frozenset(), 0)]
-        best = max(all_states, key=lambda s: (s[1], s[2], -len(s[0])))
+        if ranking == "probability":
+            best = max(all_states, key=lambda s: (s[2], s[1], -len(s[0])))
+        elif ranking == "odds":
+            best = max(all_states, key=lambda s: (s[1], s[2], -len(s[0])))
+        else:
+            best = max(all_states, key=lambda s: (s[1] * s[2], s[2], -len(s[0])))
     picks, odds_product, probability_product, _, _ = best
     selections = []
     for item in picks:
