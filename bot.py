@@ -4577,7 +4577,7 @@ async def calibrate_command(update, context):
         if not result["ready"]:
             await reply(update,
                 "NOT ENOUGH HISTORICAL DATA TO CALIBRATE\n\n"
-                f"Settled forecasts: {result['count']}\n"
+                f"Forecast sample: {result['count']}\n"
                 f"Training sample: {result['train']} (minimum 50)\n"
                 f"Out-of-sample holdout: {result['holdout']} (minimum 30)\n\n"
                 "No calibration parameter has been fitted or applied. Keep the model labelled experimental.")
@@ -4585,7 +4585,8 @@ async def calibrate_command(update, context):
         improved = result["calibrated_brier"] < result["raw_brier"] and result["calibrated_logloss"] < result["raw_logloss"]
         await reply(update,
             "📊 HISTORICAL CALIBRATION CHECK\n\n"
-            f"Settled forecasts: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\n"
+            f"Forecast sample: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\n"
+            f"Data source: {result['source']}\n"
             f"Fitted temperature: {result['temperature']:.2f}\n\n"
             f"Holdout Brier: {result['raw_brier']:.4f} → {result['calibrated_brier']:.4f}\n"
             f"Holdout log loss: {result['raw_logloss']:.4f} → {result['calibrated_logloss']:.4f}\n\n"
