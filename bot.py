@@ -1925,8 +1925,9 @@ async def autobuild_sportybet_command(update, context):
         if not math.isfinite(target) or target <= 1.0:
             await reply(update, "Target odds must be a finite decimal number greater than 1.00.")
             return
-    # High targets use an aggressive, odds-led profile by default; lower targets use value ranking.
-    rank_mode = "odds" if target >= 10.0 else "value"
+    # Autobuild is a multi-leg parlay builder: favour smaller-league fixtures and
+    # ordinary leg prices, rather than solving large targets with one-off longshots.
+    rank_mode = "parlay"
     market_parts = []
     for token in args:
         lowered = token.casefold()
@@ -1934,25 +1935,36 @@ async def autobuild_sportybet_command(update, context):
             rank_mode = lowered.split("=", 1)[1]
         elif lowered.startswith("market="):
             market_parts.append(token.split("=", 1)[1])
-        elif lowered in ("value", "odds", "probability"):
+        elif lowered in ("value", "odds", "probability", "parlay"):
             rank_mode = lowered
         else:
             market_parts.append(token)
-    if rank_mode not in ("value", "odds", "probability"):
-        await reply(update, "Ranking must be value, odds or probability.")
+    if rank_mode not in ("value", "odds", "probability", "parlay"):
+        await reply(update, "Ranking must be parlay, value, odds or probability.")
         return
     market_filter = ",".join(market_parts) if market_parts else "all"
     await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\nTarget combined odds: {target:.2f}\nMarket filter: {market_filter}\nRisk profile: {("AGGRESSIVE / ODDS-LED" if rank_mode == "odds" else "VALUE-LED")}\nScanning available model-supported SportyBet markets…\n\nControls: /autobuild 5 BTTS rank=odds | /autobuild 20 Correct Score rank=odds | /autobuild 10 market=1X2,Under 2.5 rank=value")
     try:
         rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet")
         rows = [x for x in rows if str(x.get("bookmaker", "")).casefold() == "sportybet"]
-        if rank_mode == "odds":
+        major_competitions = ("premier league", "la liga", "laliga", "bundesliga", "serie a", "ligue 1", "ligue 1")
+        smaller_league_rows = [x for x in rows if not any(tag in str(x.get("league", "")).casefold() for tag in major_competitions)]
+        # Keep realistic accumulator legs; high target odds must come from multiplying
+        # several matches, not from a single 8x–20x outsider.
+        parlay_rows = [x for x in smaller_league_rows if 1.25 <= float(x.get("odds") or 0) <= 4.50]
+        if rank_mode == "parlay":
+            rows = parlay_rows
+            rows.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
+        elif rank_mode == "odds":
             rows.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
         elif rank_mode == "probability":
             rows.sort(key=lambda x: (x["probability"], x["ev"]), reverse=True)
         else:
             rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
-        build = build_accumulator(rows, target, max_legs=20, ranking=rank_mode)
+        if rank_mode == "parlay" and len(rows) < 2:
+            await reply(update, "⚠️ NOT ENOUGH SMALLER-LEAGUE PARLAY LEGS\nI found fewer than two qualifying SportyBet selections in smaller leagues priced 1.25–4.50. I will not replace them with a single extreme longshot or silently switch to major leagues.")
+            return
+        build = build_accumulator(rows, target, max_legs=20, ranking=("odds" if rank_mode == "parlay" else rank_mode))
         chosen, product = build["selections"], build["combined_odds"]
         if not chosen:
             await reply(update, "⚠️ NO USABLE SPORTYBET PICKS FOUND\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No SportyBet-priced, model-supported candidates were found."))
@@ -1965,11 +1977,11 @@ async def autobuild_sportybet_command(update, context):
             context.user_data["pending_sportybet_booking"] = resolved
         else:
             context.user_data.pop("pending_sportybet_booking", None)
-        lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f} | " + ("TARGET REACHED" if within_target_band else "TARGET NOT MET — NO CODE"), f"Selections: {len(resolved)}", ""]
+        lines = ["🤖 SPORTYBET KENYA — SMALLER-LEAGUE PARLAY PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f} | " + ("TARGET REACHED" if within_target_band else "TARGET NOT MET — NO CODE"), f"Selections: {len(resolved)}", ""]
         for i, leg in enumerate(resolved, 1):
             source = chosen[i-1]
             lines.append(f"{i}. {leg['fixture']}\n   {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}\n   Model probability: {source['probability']:.1%} | Estimated EV: {source['ev']:+.1%}")
-        lines.extend(["", "AGGRESSIVE target-building may include high-variance and negative-EV legs. Model estimates are experimental and not historically calibrated; review each leg and its risk. Only scoreline-supported markets are evaluated. Odds are re-resolved before code creation. Confirming requests a share code only; no bet is placed."])
+        lines.extend(["", "Built as a multi-match parlay from smaller leagues, with preferred leg odds of 1.25–4.50. No single extreme longshot is used to manufacture the target. Model estimates are experimental and not historically calibrated. Odds are re-resolved before code creation. Confirming requests a share code only; no bet is placed."])
         if not within_target_band:
             lines.append(f"Requested target band: {target:.2f}–{target * 1.20:.2f}. No booking code will be offered.")
         markup = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel")]]) if within_target_band else None
