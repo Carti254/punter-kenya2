@@ -28,6 +28,7 @@ from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find
 from slip_manager import create_slip, get_slip, list_slips, update_slip
 from schema_migrations import run_migrations
 from results_tracker import record_bet, settle_bet, bet_statistics
+from prediction_validation import brier_score, log_loss, fit_temperature, apply_temperature
 from schema_migrations import run_migrations
 from results_tracker import record_bet, settle_bet, bet_statistics
 
@@ -4437,6 +4438,73 @@ async def error_handler(
 # APPLICATION STARTUP
 # ============================================================
 
+def evaluate_historical_calibration():
+    """Chronological train/holdout evaluation of stored 1X2 forecasts."""
+    connection = get_connection()
+    try:
+        with connection.cursor() as cursor:
+            ensure_prediction_records_table(cursor)
+            cursor.execute("""
+                SELECT p_home, p_draw, p_away, actual_home_goals, actual_away_goals
+                FROM punter_prediction_records
+                WHERE status='SETTLED' AND actual_home_goals IS NOT NULL
+                  AND actual_away_goals IS NOT NULL
+                ORDER BY match_date ASC, id ASC
+            """)
+            rows = cursor.fetchall()
+    finally:
+        connection.close()
+
+    probabilities, outcomes = [], []
+    for row in rows:
+        hg, ag = int(row["actual_home_goals"]), int(row["actual_away_goals"])
+        probabilities.append([float(row["p_home"]), float(row["p_draw"]), float(row["p_away"])])
+        outcomes.append(0 if hg > ag else 1 if hg == ag else 2)
+
+    count = len(rows)
+    split = int(count * 0.70)
+    if split < 50 or count - split < 30:
+        return {"ready": False, "count": count, "train": split, "holdout": count - split}
+
+    train_p, train_y = probabilities[:split], outcomes[:split]
+    test_p, test_y = probabilities[split:], outcomes[split:]
+    fitted = fit_temperature(train_p, train_y, minimum_samples=50)
+    calibrated = [apply_temperature(p, fitted["temperature"]) for p in test_p]
+    return {
+        "ready": True, "count": count, "train": split, "holdout": count - split,
+        "temperature": fitted["temperature"],
+        "raw_brier": brier_score(test_p, test_y),
+        "calibrated_brier": brier_score(calibrated, test_y),
+        "raw_logloss": log_loss(test_p, test_y),
+        "calibrated_logloss": log_loss(calibrated, test_y),
+    }
+
+
+async def calibrate_command(update, context):
+    await reply(update, "🧪 Evaluating historical 1X2 forecasts using an earlier-train / later-holdout split...")
+    try:
+        result = await asyncio.to_thread(evaluate_historical_calibration)
+        if not result["ready"]:
+            await reply(update,
+                "NOT ENOUGH HISTORICAL DATA TO CALIBRATE\\n\\n"
+                f"Settled forecasts: {result['count']}\\n"
+                f"Training sample: {result['train']} (minimum 50)\\n"
+                f"Out-of-sample holdout: {result['holdout']} (minimum 30)\\n\\n"
+                "No calibration parameter has been fitted or applied. Keep the model labelled experimental.")
+            return
+        improved = result["calibrated_brier"] < result["raw_brier"] and result["calibrated_logloss"] < result["raw_logloss"]
+        await reply(update,
+            "📊 HISTORICAL CALIBRATION CHECK\\n\\n"
+            f"Settled forecasts: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\\n"
+            f"Fitted temperature: {result['temperature']:.2f}\\n\\n"
+            f"Holdout Brier: {result['raw_brier']:.4f} → {result['calibrated_brier']:.4f}\\n"
+            f"Holdout log loss: {result['raw_logloss']:.4f} → {result['calibrated_logloss']:.4f}\\n\\n"
+            + ("Calibration improved both holdout metrics. It is a candidate for controlled deployment." if improved else "Calibration did not improve both holdout metrics. Keep the raw model; do not apply this temperature.")
+            + "\\n\\nThis is a diagnostic only: no live forecast settings are changed automatically.")
+    except Exception as exc:
+        await reply(update, f"⚠️ Calibration evaluation failed: {type(exc).__name__}: {str(exc)[:250]}")
+
+
 async def betlog_command(update, context):
     """Log a real bookmaker selection and its original price/stake."""
     raw = " ".join(context.args or [])
@@ -4602,6 +4670,7 @@ def main():
         ("value", value_command),
         ("topvalue", topvalue_command),
         ("record", record_command),
+        ("calibrate", calibrate_command),
         ("betlog", betlog_command),
         ("betsettle", betsettle_command),
         ("betstats", betstats_command),
