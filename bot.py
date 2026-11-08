@@ -37,7 +37,7 @@ from premium_intelligence import market_probabilities, assess_price, rollover_pr
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
-from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models as enrich_specialist_candidates
+from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models, enrich_with_specialist_models as enrich_specialist_candidates
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
@@ -2129,7 +2129,7 @@ async def autobuild_sportybet_command(update, context):
 
     market_filter = ",".join(market_parts) if market_parts else "all"
     leg_plan = f"exactly {min_legs} legs"
-    await reply(update, f"🔎 Scanning fixtures and every model-supported SportyBet market for target {target:.2f}, {leg_plan}…")
+    await reply(update, f"🔎 Scanning today and tomorrow fixtures, extended bookmaker event window, and every model-supported SportyBet market for target {target:.2f}, {leg_plan}…")
     try:
         rows, diagnostics = await asyncio.to_thread(
             scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
@@ -2145,14 +2145,14 @@ async def autobuild_sportybet_command(update, context):
         rows, specialist_stats = await asyncio.to_thread(enrich_with_specialist_models, rows)
         # Apply one auditable research/value gate. Keep non-negative-EV candidates;
         # never silently pad a requested slip with negative-EV selections.
-        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.0)
+        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=-1.0)
 
         if not rows:
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(
                 update,
-                "NO BET: no model-supported SportyBet selection passed the non-negative expected-value check. "
-                "The research engine will not invent evidence or add negative-value legs. "
+                "NO BET: no usable, correctly matched SportyBet market candidates were produced after fixture, market and price validation. "
+                "This is a fixture/data/matching failure, not proof that every selection has negative expected value. "
                 + " ".join(diagnostics[:4])
             )
             return
