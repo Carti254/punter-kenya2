@@ -2171,6 +2171,11 @@ async def autobuild_sportybet_command(update, context):
             shown = 0
             for item in items:
                 label = f"{item.get('market')}: {item.get('selection')} @ {float(item.get('odds') or 0):.2f}"
+                if item.get("bsd_consensus_odds"):
+                    label += (
+                        f" | BSD consensus {float(item['bsd_consensus_odds']):.2f}"
+                        f" | SportyBet vs consensus {float(item.get('price_vs_bsd_consensus') or 0):+.1%}"
+                    )
                 if label in seen_markets:
                     continue
                 seen_markets.add(label)
