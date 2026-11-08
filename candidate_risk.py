@@ -102,6 +102,23 @@ def assess_candidate_risk(row: dict) -> dict:
         flags.append(f"{len(absences)} reported absence(s) require impact review")
         score += 1
 
+    xg = row.get("xg_evidence")
+    if isinstance(xg, dict):
+        try:
+            xg_home = (float(xg["home_xg_for"]) + float(xg["away_xg_against"])) / 2.0
+            xg_away = (float(xg["away_xg_for"]) + float(xg["home_xg_against"])) / 2.0
+            model_home = float(row.get("lambda_home"))
+            model_away = float(row.get("lambda_away"))
+            xg_gap = max(abs(xg_home - model_home), abs(xg_away - model_away))
+            if xg_gap >= 0.65:
+                flags.append(f"material xG-versus-goal-model disagreement ({xg_gap:.2f} goals)")
+                score += 2
+            elif xg_gap >= 0.40:
+                flags.append(f"some xG-versus-goal-model disagreement ({xg_gap:.2f} goals)")
+                score += 1
+        except (KeyError, TypeError, ValueError, OverflowError):
+            gaps.append("xG evidence could not be compared with goal-model expectations")
+
     level = "HIGH" if reject or score >= 3 else "MEDIUM" if score >= 1 else "LOW"
     return {
         "risk_score": score,
