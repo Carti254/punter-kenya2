@@ -131,6 +131,51 @@ def main() -> None:
     except Exception as exc:
         output["page_2_check"] = {"error": f"{type(exc).__name__}: {str(exc)[:220]}"}
 
+    # The index carries only the requested market catalogue. Test the
+    # per-event endpoint that returns the complete market set for one event.
+    try:
+        params = dict(BASE_PARAMS, pageNum=1, option="2")
+        params["marketId"] = VARIANTS["full_list_option_2"]["market_ids"]
+        response = requests.get(BASE, params=params, headers=HEADERS, timeout=(8, 20))
+        response.raise_for_status()
+        index_payload = response.json()
+        index_data = index_payload.get("data") or {}
+        index_events = [
+            event
+            for tournament in (index_data.get("tournaments") or [])
+            if isinstance(tournament, dict)
+            for event in (tournament.get("events") or [])
+            if isinstance(event, dict)
+        ]
+        if not index_events:
+            raise RuntimeError("No event available on the index page for detail lookup.")
+        event_id = index_events[0].get("eventId")
+        detail_response = requests.get(
+            "https://www.sportybet.com/api/ke/factsCenter/event",
+            params={"eventId": event_id, "productId": "3", "_t": int(time.time() * 1000)},
+            headers=HEADERS,
+            timeout=(8, 20),
+        )
+        detail_response.raise_for_status()
+        detail_payload = detail_response.json()
+        detail_data = detail_payload.get("data") or {}
+        detail_markets = detail_data.get("markets") or [] if isinstance(detail_data, dict) else []
+        output["event_detail_all_markets"] = {
+            "http_status": detail_response.status_code,
+            "biz_code": detail_payload.get("bizCode"),
+            "event_id": event_id,
+            "fixture": f"{index_events[0].get('homeTeamName')} vs {index_events[0].get('awayTeamName')}",
+            "data_type": type(detail_data).__name__,
+            "market_count": len(detail_markets),
+            "sample_markets": [
+                {"id": market.get("id"), "description": market.get("desc")}
+                for market in detail_markets[:20]
+                if isinstance(market, dict)
+            ],
+        }
+    except Exception as exc:
+        output["event_detail_all_markets"] = {"error": f"{type(exc).__name__}: {str(exc)[:250]}"}
+
     print(json.dumps(output, indent=2, ensure_ascii=False))
 
 
