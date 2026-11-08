@@ -4593,7 +4593,7 @@ def refresh_pending_bet_records(user_id=None):
     """Settle logged bets only when one exact team/date result exists in source CSV."""
     pending = list_pending_bets(user_id)
     if not pending:
-        return {"checked": 0, "settled": 0, "ambiguous": 0, "pending": 0}
+        return {"checked": 0, "settled": 0, "ambiguous": 0, "requires_market_data": 0, "pending": 0}
     leagues = fetch_all_leagues()
     result_cache = {}
     settled = ambiguous = checked = requires_market_data = 0
