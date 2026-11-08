@@ -13,6 +13,21 @@ Telegram-based football fixtures, match research, bookmaker-odds inspection and 
 
 **Important limitations:** SportyBet endpoints are undocumented and can change, rate-limit or block requests. The bot does not log in to bookmaker accounts, deposit funds or place bets. A booking/share code is not a placed bet. Model probabilities are experimental and uncalibrated; they are not guarantees or financial advice. Unsupported or unavailable data must be shown as unavailable, not invented.
 
+
+## AI assistant (optional)
+
+PUNTER can use the official OpenAI Python SDK for natural-language navigation and football slip screenshot reading. The AI routes requests into the bot's existing fixture, match-research, odds and slip-preview workflows; it does not invent bookmaker odds or calculate model probabilities. Screenshot selections are only candidates until they are checked against current SportyBet Kenya fixtures, markets and prices.
+
+Set these variables in Railway **Variables** (or your local environment):
+
+- `OPENAI_API_KEY` — your OpenAI API key (keep it secret; never commit it).
+- `OPENAI_MODEL` — optional text model; defaults to `gpt-4.1-mini`.
+- `OPENAI_VISION_MODEL` — optional image-capable model; defaults to `gpt-4.1-mini`.
+
+After adding the key, redeploy the service. In Telegram you can ask questions such as “Analyse Brighton vs Brentford”, “Show me today's fixtures”, “Compare the odds for Arsenal vs Chelsea”, or “Build a slip preview to combined odds 5”. You can also send a betting-slip screenshot, inspect the extracted legs, and reply `VALIDATE` to check them against live SportyBet Kenya prices.
+
+AI usage is billed separately by OpenAI and requires an API account with billing enabled. No OpenAI key is included in this repository. Without the key, existing commands and manual slip workflows continue to work.
+
 ## Run locally (no hosting provider)
 
 Requirements: Python 3.11+ and a Telegram bot token from BotFather.
