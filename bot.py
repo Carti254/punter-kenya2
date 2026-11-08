@@ -3498,32 +3498,75 @@ def _selection_probability_key(market_key, selection, handicap=None):
 
 
 def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all", bookmaker_only=None):
-    """Scan every retrieved SportyBet football market; score only markets supported by model data."""
+    """Fetch the fixture catalogue and SportyBet feed once, then score requested EAT dates."""
     candidates, diagnostics = [], []
-    for day_filter in day_filters:
-        raw_fixtures = fetch_openmatchday_fixture_rows(14, None, day_filter)
-        fixtures = upcoming_fixtures(raw_fixtures)
-        if not fixtures:
-            diagnostics.append(f"{day_filter}: no fixtures from open-matchday")
+    today = datetime.now(EAT).date()
+    target_dates = {
+        today + (timedelta(days=1) if day == "tomorrow" else timedelta())
+        for day in day_filters
+    }
+    if not target_dates:
+        return [], ["No scan dates were requested."]
+
+    # The previous implementation downloaded every competition CSV and paged
+    # through SportyBet separately for each date. That doubled the slowest
+    # network work for the normal today+tomorrow autobuild.
+    try:
+        raw_fixtures = fetch_openmatchday_fixture_rows(14, None, None)
+        all_fixtures = upcoming_fixtures(raw_fixtures)
+    except Exception as exc:
+        raise RuntimeError(f"Fixture catalogue failed: {type(exc).__name__}: {str(exc)[:180]}") from exc
+
+    fixtures_by_day = {day: [] for day in target_dates}
+    for raw, fixture in all_fixtures:
+        kickoff = fixture.get("kickoffUtc")
+        try:
+            parsed = datetime.fromisoformat(str(kickoff).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            local_day = parsed.astimezone(EAT).date()
+        except (TypeError, ValueError):
             continue
-        target_day = datetime.now(EAT).date() + (timedelta(days=1) if day_filter == "tomorrow" else timedelta())
+        if local_day in fixtures_by_day:
+            fixtures_by_day[local_day].append((raw, fixture))
+
+    for day in sorted(target_dates):
+        diagnostics.append(f"{day.isoformat()}: {len(fixtures_by_day[day])} upcoming fixture records")
+
+    try:
         if str(bookmaker_only or "").casefold() == "sportybet":
-            # Autobuild only needs SportyBet; skip Betika's slower detail requests.
-            sporty_games = fetch_sportybet_odds(target_day)
-            odds_result = {"bookmakers": {"SportyBet": {"games": sporty_games}}, "errors": {}}
+            priced_games = fetch_sportybet_odds(sorted(target_dates))
+            feed_errors = {}
         else:
-            odds_result = fetch_bookmaker_odds(target_day)
-        priced_games = []
-        for provider in odds_result.get("bookmakers", {}).values():
-            priced_games.extend(provider.get("games", []))
-        diagnostics.append(f"{day_filter}: {len(fixtures)} fixtures checked; {len(priced_games)} bookmaker events retrieved")
+            # Existing combined provider path remains available to other commands.
+            all_games = []
+            feed_errors = {}
+            for day in sorted(target_dates):
+                result = fetch_bookmaker_odds(day)
+                for provider in result.get("bookmakers", {}).values():
+                    all_games.extend(provider.get("games", []))
+                feed_errors.update(result.get("errors", {}))
+            priced_games = all_games
+    except Exception as exc:
+        raise RuntimeError(f"Bookmaker feed failed: {type(exc).__name__}: {str(exc)[:180]}") from exc
+
+    for day in sorted(target_dates):
+        day_fixtures = fixtures_by_day[day]
+        day_games = []
+        for game in priced_games:
+            kickoff = game.get("kickoff_eat")
+            if str(kickoff or "")[:10] == day.isoformat():
+                day_games.append(game)
+        diagnostics.append(
+            f"{day.isoformat()}: {len(day_fixtures)} fixtures; {len(day_games)} SportyBet events retrieved"
+        )
         matched_events = 0
         unsupported = set()
-        for raw, fixture in fixtures:
+        for raw, fixture in day_fixtures:
             prediction = build_openmatchday_prediction(raw, fixture)
             if not prediction.get("available"):
                 continue
-            matches = find_bookmaker_event(priced_games, fixture["home_team"], fixture["away_team"])
+            matches = find_bookmaker_event(day_games, fixture["home_team"], fixture["away_team"])
             for game in matches:
                 matched_events += 1
                 for row in game.get("markets", []):
@@ -3559,11 +3602,10 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                     if probability <= 0 or probability >= 1 or not odds or odds <= 1:
                         continue
                     ev = probability * odds - 1
-                    # Keep every model-supported priced candidate; EV labels value but does not hide predictions.
                     candidates.append({
                         "home": fixture["home_team"], "away": fixture["away_team"],
                         "league": fixture.get("competition") or fixture.get("leagueName") or "Competition",
-                        "day": day_filter, "bookmaker": game.get("bookmaker"),
+                        "day": day.isoformat(), "bookmaker": game.get("bookmaker"),
                         "market": market_name, "selection": selection_name,
                         "market_key": _normal_market_text(market_name) + "|" + _normal_market_text(selection_name),
                         "odds": odds, "probability": probability, "ev": ev,
@@ -3576,11 +3618,12 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         "specifier": row.get("specifier") or row.get("handicap"),
                     })
         if not matched_events:
-            diagnostics.append(f"{day_filter}: no confidently matched SportyBet events")
+            diagnostics.append(f"{day.isoformat()}: no confidently matched SportyBet events")
         if unsupported:
             diagnostics.append("Markets retrieved but not model-supported yet: " + ", ".join(sorted(unsupported)[:12]))
-        for name, error in odds_result.get("errors", {}).items():
-            diagnostics.append(f"{day_filter} {name}: {error[:100]}")
+
+    for name, error in feed_errors.items():
+        diagnostics.append(f"{name}: {str(error)[:100]}")
     candidates.sort(key=lambda x: (x["ev"], x["probability"]), reverse=True)
     best = {}
     for item in candidates:
