@@ -1957,7 +1957,7 @@ async def autobuild_sportybet_command(update, context):
     # another handler/wrapper from silently dropping the user's requested odds.
     message_text = str(getattr(update.effective_message, "text", "") or "").strip()
     message_parts = message_text.split(maxsplit=1)
-    raw_tail = message_parts[1].strip() if len(message_parts) > 1 else ""
+    raw_tail = message_parts[1].strip() if message_text.startswith("/") and len(message_parts) > 1 else ""
     args = raw_tail.split() if raw_tail else list(context.args or [])
     guided = context.user_data.pop("autobuild_config", None)
     if guided:
@@ -2038,6 +2038,7 @@ async def autobuild_sportybet_command(update, context):
             x for x in rows
             if str(x.get("bookmaker", "")).casefold() == "sportybet"
             and float(x.get("odds") or 0) > 1.0
+            and float(x.get("ev") or 0) > 0
             and "btts" not in str(x.get("market", "")).casefold()
             and "both teams" not in str(x.get("market", "")).casefold()
             and not (
@@ -2047,6 +2048,11 @@ async def autobuild_sportybet_command(update, context):
                 )
             )
         ]
+
+        if not rows:
+            context.user_data.pop("pending_sportybet_booking", None)
+            await reply(update, "NO BET: the current SportyBet feed has no eligible, model-supported selections with positive estimated value after your market exclusions. I will not pad the slip with weak or negative-value legs.")
+            return
 
         if rank_mode in ("parlay", "odds"):
             rows.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
@@ -2100,10 +2106,12 @@ async def autobuild_sportybet_command(update, context):
                 f"{i}. {leg['fixture']} — {leg['market']}: "
                 f"{leg['selection']} @ {leg['odds']:.2f}"
             )
+            assessment = "Positive estimated value" if float(leg.get("ev") or 0) > 0 else "Value edge not established"
+            lines.append(f"   Internal price assessment: {assessment}")
 
         lines.extend([
             "",
-            "Internal assessment completed using the available statistical model and live bookmaker prices.",
+            "The builder screened markets returned by SportyBet that the current statistical model can price; unsupported markets were not guessed.",
             "Only supported markets with usable model evidence are considered. No guaranteed profit.",
         ])
         if not target_reached:
