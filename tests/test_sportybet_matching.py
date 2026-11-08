@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch
-from sportybet_client import SportyBetError, _resolve_market, _find_fixture, _revalidate_selections, create_booking
+from sportybet_client import SportyBetError, _resolve_market, _find_fixture, _revalidate_selections, prepare_slip_from_candidates, create_booking
 
 
 class FakeResponse:
@@ -82,6 +82,17 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
             with self.assertRaises(SportyBetError):
                 _revalidate_selections(resolved)
 
+
+    def test_booking_requires_explicit_success_code(self):
+        leg = {"eventId": "event-1", "marketId": "market-1", "specifier": "total=6.5",
+               "outcomeId": "out-over", "fixture": "Home FC vs Away FC", "odds": 1.2}
+        payload = {"data": {"shareCode": "ABC123", "outcomes": [leg], "unavailableOutcomes": []}}
+        with patch("sportybet_client._revalidate_selections", return_value=[leg]), \
+             patch("sportybet_client.SESSION.post", return_value=FakeResponse(payload)):
+            with self.assertRaisesRegex(SportyBetError, "did not confirm"):
+                create_booking([leg])
+
+
     def test_booking_refuses_partial_acceptance(self):
         leg = {"eventId": "event-1", "marketId": "market-1", "specifier": "total=6.5",
                "outcomeId": "out-over", "fixture": "Home FC vs Away FC"}
@@ -90,6 +101,92 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
              patch("sportybet_client.SESSION.post", return_value=FakeResponse(payload)):
             with self.assertRaises(SportyBetError):
                 create_booking([leg])
+
+
+    def test_ai_candidate_preserves_exact_native_ids(self):
+        candidate = {
+            "event_id": "event-1", "market_id": "market-1",
+            "outcome_id": "out-under", "specifier": "total=6.5",
+            "odds": 4.5, "market": "Over/Under", "selection": "Under 6.5",
+        }
+        with patch("sportybet_client._get_fixtures", return_value=[self.event]):
+            resolved = prepare_slip_from_candidates([candidate])
+        self.assertEqual(resolved[0]["eventId"], "event-1")
+        self.assertEqual(resolved[0]["marketId"], "market-1")
+        self.assertEqual(resolved[0]["outcomeId"], "out-under")
+
+    def test_ai_candidate_rejects_changed_price(self):
+        candidate = {
+            "event_id": "event-1", "market_id": "market-1",
+            "outcome_id": "out-under", "specifier": "total=6.5",
+            "odds": 4.0, "market": "Over/Under", "selection": "Under 6.5",
+        }
+        with patch("sportybet_client._get_fixtures", return_value=[self.event]):
+            with self.assertRaisesRegex(SportyBetError, "odds changed"):
+                prepare_slip_from_candidates([candidate])
+
+    def test_ai_candidate_rejects_missing_native_ids(self):
+        with patch("sportybet_client._get_fixtures", return_value=[self.event]):
+            with self.assertRaisesRegex(SportyBetError, "native IDs"):
+                prepare_slip_from_candidates([{"odds": 4.5}])
+
+
+
+    def test_betika_list_malformed_envelope_is_not_empty_day(self):
+        from bookmaker_odds import _betika_items
+        with self.assertRaisesRegex(ValueError, "recognised matches array"):
+            _betika_items({"data": {"unexpected": []}})
+
+    def test_betika_detail_normalizes_prices_and_native_ids(self):
+        from bookmaker_odds import _parse_betika_game
+        from bookmaker_odds import EAT
+        from datetime import datetime
+        kickoff = datetime.now(EAT).replace(microsecond=0).isoformat()
+        base = {"parent_match_id": 123, "home_team": "Home FC",
+                "away_team": "Away FC", "start_time": kickoff}
+        detail = (
+            {"home_team": "Home FC", "away_team": "Away FC",
+             "start_time": kickoff, "competition_name": "Test League"},
+            [{"sub_type_id": 1, "name": "1X2", "odds": [
+                {"id": 11, "display": "Home", "odd_value": "1.85"},
+            ]}],
+        )
+        game = _parse_betika_game(base, detail)
+        self.assertEqual(game["bookmaker"], "Betika")
+        self.assertEqual(game["event_id"], "123")
+        self.assertEqual(game["markets"][0]["market_id"], "1")
+        self.assertEqual(game["markets"][0]["outcome_id"], "11")
+        self.assertEqual(game["markets"][0]["odds"], 1.85)
+
+    def test_betika_skips_virtual_competitions(self):
+        from bookmaker_odds import fetch_betika, EAT
+        from datetime import datetime
+        kickoff = datetime.now(EAT).replace(microsecond=0).isoformat()
+        listing = {"data": [{"parent_match_id": 555, "home_team": "Virtual A",
+                             "away_team": "Virtual B", "start_time": kickoff,
+                             "competition_name": "Premier-Zoom"}]}
+        with patch("bookmaker_odds._get", return_value=listing) as mocked:
+            games = fetch_betika(datetime.now(EAT).date())
+        self.assertEqual(games, [])
+        mocked.assert_called_once()
+
+    def test_betika_fetches_list_then_match_detail(self):
+        from bookmaker_odds import fetch_betika, EAT
+        from datetime import datetime
+        kickoff = datetime.now(EAT).replace(microsecond=0).isoformat()
+        listing = {"data": [{"parent_match_id": 123, "home_team": "Home FC",
+                             "away_team": "Away FC", "start_time": kickoff}]}
+        detail = {"data": {
+            "meta": {"home_team": "Home FC", "away_team": "Away FC",
+                     "start_time": kickoff, "competition_name": "Test League"},
+            "data": [{"sub_type_id": 1, "name": "1X2", "odds": [
+                {"id": 11, "display": "Home", "odd_value": "1.85"}]}],
+        }}
+        with patch("bookmaker_odds._get", side_effect=[listing, detail]):
+            games = fetch_betika(datetime.now(EAT).date())
+        self.assertEqual(len(games), 1)
+        self.assertEqual(games[0]["home"], "Home FC")
+
 
 
 if __name__ == "__main__":
