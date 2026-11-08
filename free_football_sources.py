@@ -7,8 +7,8 @@ Providers:
 These adapters enrich an already-matched SportyBet fixture. They never replace
 SportyBet's executable price and never treat predicted lineups as confirmed.
 External model probabilities are cross-checks; they do not overwrite PUNTER's
-own probabilities except for exact supported corner totals where PUNTER has no
-specialist estimate. All network calls are bounded and fail open.
+own probabilities; exact BSD-supported result, goal-total and corner estimates may fill
+a missing PUNTER probability without replacing an existing model estimate. All network calls are bounded and fail open.
 """
 from __future__ import annotations
 
@@ -127,12 +127,19 @@ def _match_event(rows, home, away, target_day, provider):
 @lru_cache(maxsize=32)
 def _bsd_events_for_window(start_day: str, end_day: str, token: str):
     headers = {"Authorization": f"Token {token}", "Accept": "application/json"}
-    payload = _request(
-        f"{BSD_BASE}/events/",
-        headers,
-        {"date_from": start_day, "date_to": end_day, "status": "upcoming", "limit": 200, "offset": 0},
-    )
-    return tuple(_rows(payload))
+    collected = []
+    for offset in range(0, 1000, 200):
+        payload = _request(
+            f"{BSD_BASE}/events/",
+            headers,
+            {"date_from": start_day, "date_to": end_day, "status": "upcoming",
+             "limit": 200, "offset": offset},
+        )
+        page_rows = _rows(payload)
+        collected.extend(page_rows)
+        if len(page_rows) < 200:
+            break
+    return tuple(collected)
 
 
 @lru_cache(maxsize=48)
