@@ -57,10 +57,11 @@ def save_rollover(user_id, days, target):
     try:
         with connection.cursor() as cursor:
             cursor.execute("""
-                INSERT INTO punter_user_settings (user_id, rollover_days, rollover_target)
-                VALUES (%s,%s,%s)
+                INSERT INTO punter_user_settings (user_id, rollover_days, rollover_target, rollover_started_on)
+                VALUES (%s,%s,%s,CURRENT_DATE)
                 ON DUPLICATE KEY UPDATE rollover_days=VALUES(rollover_days),
-                    rollover_target=VALUES(rollover_target), updated_at=CURRENT_TIMESTAMP
+                    rollover_target=VALUES(rollover_target), rollover_started_on=CURRENT_DATE,
+                    updated_at=CURRENT_TIMESTAMP
             """, (int(user_id), projection["days"], projection["daily_target_odds"]))
         return projection
     finally:
