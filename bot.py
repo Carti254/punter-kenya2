@@ -5151,6 +5151,17 @@ async def council_command(update, context):
     try:
         from specialist_models import specialist_council
         report = await asyncio.to_thread(specialist_council, home, away, match_date)
+        price_report = None
+        try:
+            odds_result = await asyncio.to_thread(fetch_bookmaker_odds, match_date)
+            priced_games = []
+            for provider in (odds_result.get("bookmakers") or {}).values():
+                priced_games.extend(provider.get("games") or [])
+            matched_games = find_bookmaker_event(priced_games, home, away)
+            from specialist_models import specialist_price_assessments
+            price_report = specialist_price_assessments(report, matched_games)
+        except Exception as price_exc:
+            price_report = {"error": f"{type(price_exc).__name__}: {str(price_exc)[:140]}", "assessments": []}
         x_report = None
         if os.getenv("X_BEARER_TOKEN"):
             try:
@@ -5176,6 +5187,18 @@ async def council_command(update, context):
                     panel["under_probability"], None, "specialist-poisson-v1",
                 )
                 lines.append(f"{panel['role']}: expected total {panel['expected_total']:.2f}; Over {panel['default_line']} {panel['over_probability']:.1%}; Under {panel['default_line']} {panel['under_probability']:.1%}; samples {panel['home_sample']}+{panel['away_sample']} | forecast #{forecast_id}")
+        lines.extend(["", "💹 LIVE BOOKMAKER PRICE CHECK"])
+        if price_report and price_report.get("error"):
+            lines.append("Price check unavailable: " + price_report["error"])
+        elif price_report:
+            for priced in price_report[:6]:
+                lines.append(
+                    f"{priced['bookmaker']}: {priced['market_name']} — {priced['selection']} "
+                    f"@ {priced['odds']:.2f} | model {priced['probability']:.1%} | "
+                    f"edge {priced['edge']:+.1%} | estimated ROI {priced['expected_roi']:+.1%}"
+                )
+            if not price_report:
+                lines.append("No exact matching specialist market prices were returned.")
         lines.extend(["", "Player props: use /playerprop HOME vs AWAY | PLAYER | METRIC | LINE"])
         if x_report is not None:
             lines.append("")
@@ -5186,7 +5209,7 @@ async def council_command(update, context):
         elif not os.getenv("X_BEARER_TOKEN"):
             lines.append("PUBLIC X RESEARCH: not configured; set X_BEARER_TOKEN privately to include recent posts.")
         lines.extend(["", report["warning"],
-                      "No consensus bet is issued without comparing a real bookmaker price and market-specific calibration."])
+                      "These specialist prices are experimental estimates, not calibrated picks; verify market rules and current prices before use."])
         await reply(update, "\n".join(lines)[:3900])
     except Exception as exc:
         await reply(update, f"Specialist research unavailable: {type(exc).__name__}: {str(exc)[:220]}")
