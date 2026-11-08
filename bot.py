@@ -2188,9 +2188,18 @@ async def autobuild_sportybet_command(update, context):
             max_candidates=None,
         )
         chosen = build["selections"]
-        if not chosen:
+        if not chosen or not build.get("target_reached"):
             context.user_data.pop("pending_sportybet_booking", None)
-            await reply(update, "No qualifying SportyBet selections were found.")
+            best_available = float(build.get("combined_odds") or 1.0)
+            if chosen:
+                await reply(
+                    update,
+                    f"NO BET: the researched candidates could not reach your {target:.2f} target within the permitted target range. "
+                    f"Best available partial combination was {best_available:.2f} from {len(chosen)} selections. "
+                    "No slip or booking code has been prepared."
+                )
+            else:
+                await reply(update, "NO BET: no qualifying SportyBet selections were found after research and value screening.")
             return
 
         # Keep the exact fixture, market and outcome IDs returned by the odds scan.
