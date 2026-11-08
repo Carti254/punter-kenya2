@@ -11,7 +11,7 @@ import math
 from collections import Counter
 
 
-def assess_candidate(row: dict, marginal_ev_floor: float = -0.03) -> dict | None:
+def assess_candidate(row: dict, marginal_ev_floor: float = 0.0) -> dict | None:
     """Validate a priced model candidate and assign an auditable value tier.
 
     Tier A: positive raw expected value.
@@ -106,7 +106,7 @@ def assess_candidate(row: dict, marginal_ev_floor: float = -0.03) -> dict | None
     return item
 
 
-def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = -0.03) -> tuple[list[dict], dict]:
+def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.0) -> tuple[list[dict], dict]:
     """Create a tiered candidate pool; A selections rank ahead of B fallbacks."""
     assessed = []
     rejected = 0
