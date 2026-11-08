@@ -15,4 +15,4 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile Python modules
-        run: python -m py_compile bot.py bookmaker_odds.py convat_client.py database.py slip_manager.py
+        run: python -m py_compile bot.py bookmaker_odds.py convat_client.py sportybet_client.py database.py slip_manager.py
