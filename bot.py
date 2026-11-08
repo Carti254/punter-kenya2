@@ -4963,6 +4963,17 @@ async def marketdata_command(update, context):
         await reply(update, f"⚠️ Match-statistics provider unavailable: {type(exc).__name__}: {str(exc)[:250]}")
 
 
+async def automatic_specialist_forecast_job(context):
+    """Settle stored specialist forecasts from completed API-Football match data."""
+    try:
+        from forecast_tracker import refresh_specialist_forecasts
+        result = await asyncio.to_thread(refresh_specialist_forecasts)
+        logger.info("Specialist forecast settlement: %s checked, %s newly settled, %s pending.",
+                    result.get("checked", 0), result.get("settled", 0), result.get("pending", 0))
+    except Exception:
+        logger.exception("Scheduled specialist forecast settlement failed")
+
+
 async def automatic_prediction_results_job(context):
     """Refresh stored model forecasts against newly completed competition results."""
     try:
@@ -5253,6 +5264,29 @@ async def xresearch_command(update, context):
         await reply(update, f"X research unavailable: {type(exc).__name__}: {str(exc)[:220]}")
 
 
+async def forecastperformance_command(update, context):
+    try:
+        from forecast_tracker import forecast_performance
+        result = await asyncio.to_thread(forecast_performance)
+        if not result["count"]:
+            await reply(update, "No settled specialist forecasts yet. Run /council on upcoming fixtures; completed results will be matched automatically.")
+            return
+        lines = [
+            "📈 SPECIALIST FORECAST PERFORMANCE",
+            f"Settled forecasts: {result['count']}",
+            f"Brier score: {result['brier']:.4f} (lower is better)",
+            f"Log loss: {result['log_loss']:.4f} (lower is better)",
+            "",
+            "By market:",
+        ]
+        for market, stats in sorted(result["by_market"].items()):
+            lines.append(f"{market}: n={stats['count']} | Brier {stats['brier']:.4f}")
+        lines.append("Experimental historic record; not proof of profitability.")
+        await reply(update, "\n".join(lines))
+    except Exception as exc:
+        await reply(update, f"Forecast performance unavailable: {type(exc).__name__}: {str(exc)[:180]}")
+
+
 async def clv_command(update, context):
     try:
         report = await asyncio.to_thread(closing_line_value, update.effective_user.id)
@@ -5415,6 +5449,10 @@ def main():
             automatic_prediction_results_job, interval=6 * 60 * 60, first=180,
             name="automatic-model-forecast-results",
         )
+        app.job_queue.run_repeating(
+            automatic_specialist_forecast_job, interval=6 * 60 * 60, first=240,
+            name="automatic-specialist-forecast-results",
+        )
     elif database_enabled:
         logger.warning("Telegram JobQueue unavailable; automatic results and price snapshots are disabled.")
 
@@ -5452,7 +5490,7 @@ def main():
         ("rollover", rollover_command),
         ("rolloverstatus", rolloverstatus_command),
         ("rolloverday", rolloverday_command),
-        ("clv", clv_command),
+        ("clv", clv_command),\n        ("forecastperformance", forecastperformance_command),
         ("council", council_command),
         ("forecastsettle", forecastsettle_command),
         ("forecaststats", forecaststats_command),
