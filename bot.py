@@ -37,7 +37,7 @@ from premium_intelligence import market_probabilities, assess_price, rollover_pr
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
-from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models
+from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models as enrich_specialist_candidates
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
@@ -1954,160 +1954,101 @@ async def aipicks_status_command(update, context):
 
 
 def enrich_with_specialist_models(rows):
-    """Enrich every candidate fixture with available specialist, social and bookmaker research.
-
-    External sources are optional. Missing credentials, provider failures and unavailable
-    markets are reported as gaps; they never become invented positive evidence.
-    """
+    """Run specialist models plus X and cross-bookmaker checks for every candidate fixture."""
+    rows, specialist = enrich_specialist_candidates(rows)
     rows = list(rows or [])
     stats = {
-        "fixtures_checked": 0, "matched_prices": 0, "cross_bookmaker_matches": 0,
-        "x_posts": 0, "odds_snapshots_saved": 0, "specialist_panels": 0,
-        "reason": "",
+        "fixtures_checked": int(specialist.get("fixtures_checked") or 0),
+        "matched_prices": int(specialist.get("matched_prices") or 0),
+        "specialist_panels": 0, "cross_bookmaker_matches": 0,
+        "x_posts": 0, "odds_snapshots_saved": 0,
+        "reason": specialist.get("reason") or "",
     }
     if not rows:
-        stats["reason"] = "No candidate fixtures were available for enrichment."
         return rows, stats
 
-    # Fetch cross-bookmaker prices once per date, then reuse exact fixture matches.
-    provider_games_by_day = {}
+    games_by_day = {}
     for day_text in sorted({str(row.get("day") or "")[:10] for row in rows if row.get("day")}):
         try:
             day_value = datetime.strptime(day_text, "%Y-%m-%d").date()
-            snapshot = fetch_bookmaker_odds(day_value)
+            result = fetch_bookmaker_odds(day_value)
             games = []
-            for provider in (snapshot.get("bookmakers") or {}).values():
+            for provider in (result.get("bookmakers") or {}).values():
                 games.extend(provider.get("games") or [])
-            provider_games_by_day[day_text] = games
+            games_by_day[day_text] = games
             try:
                 stats["odds_snapshots_saved"] += save_price_observations(games)
-            except Exception as save_exc:
-                logger.warning("Autobuild odds snapshot storage unavailable: %s", save_exc)
-        except Exception as odds_exc:
-            logger.warning("Autobuild cross-bookmaker prices unavailable for %s: %s", day_text, odds_exc)
-            provider_games_by_day[day_text] = []
+            except Exception as exc:
+                logger.warning("Autobuild odds snapshots could not be stored: %s", exc)
+        except Exception as exc:
+            logger.warning("Autobuild bookmaker comparison unavailable for %s: %s", day_text, exc)
+            games_by_day[day_text] = []
 
     fixture_groups = {}
     for row in rows:
-        key = (
-            str(row.get("day") or "")[:10],
-            str(row.get("home") or "").strip(),
-            str(row.get("away") or "").strip(),
-        )
+        key = (str(row.get("day") or "")[:10], str(row.get("home") or ""), str(row.get("away") or ""))
         fixture_groups.setdefault(key, []).append(row)
 
-    api_key = os.getenv("API_FOOTBALL_KEY")
     x_token = os.getenv("X_BEARER_TOKEN")
-    try:
-        from bookmaker_odds import find_event as match_provider_event
-    except Exception:
-        match_provider_event = find_bookmaker_event
-
-    for (day_text, home, away), fixture_rows in fixture_groups.items():
-        if not home or not away:
-            continue
-        day_games = provider_games_by_day.get(day_text, [])
-        matched_games = []
-        for provider_game in day_games:
-            provider_name = str(provider_game.get("bookmaker") or "").casefold()
-            if provider_name != "sportybet":
-                continue
-            matched_games.extend(match_provider_event([provider_game], home, away))
-
-        # Compare each candidate's exact market/selection with other bookmakers.
-        for candidate in fixture_rows:
+    for (day_text, home, away), candidates in fixture_groups.items():
+        games = games_by_day.get(day_text, [])
+        for candidate in candidates:
             wanted_market = _normal_market_text(candidate.get("market"))
             wanted_selection = _normal_market_text(candidate.get("selection"))
             alternatives = []
-            for provider_game in day_games:
-                if str(provider_game.get("bookmaker") or "").casefold() == "sportybet":
+            for game in games:
+                if str(game.get("bookmaker") or "").casefold() == "sportybet":
                     continue
-                if not match_provider_event([provider_game], home, away):
+                if not find_bookmaker_event([game], home, away):
                     continue
-                for market_row in provider_game.get("markets") or []:
-                    if (_normal_market_text(market_row.get("market")) == wanted_market
-                            and _normal_market_text(market_row.get("selection")) == wanted_selection):
+                for market in game.get("markets") or []:
+                    if (_normal_market_text(market.get("market")) == wanted_market
+                            and _normal_market_text(market.get("selection")) == wanted_selection):
                         try:
-                            price = float(market_row.get("odds"))
+                            price = float(market.get("odds"))
                         except (TypeError, ValueError):
                             continue
                         if math.isfinite(price) and price > 1:
-                            alternatives.append({
-                                "bookmaker": provider_game.get("bookmaker") or "Unknown",
-                                "odds": price,
-                            })
+                            alternatives.append({"bookmaker": game.get("bookmaker") or "Unknown", "odds": price})
             if alternatives:
                 best = max(alternatives, key=lambda item: item["odds"])
                 candidate["other_bookmaker_prices"] = alternatives
                 candidate["best_other_bookmaker"] = best
                 candidate["cross_bookmaker_edge"] = best["odds"] / float(candidate["odds"]) - 1.0
+                candidate["other_bookmaker_evidence"] = True
                 stats["cross_bookmaker_matches"] += 1
 
-        specialist_report = None
-        if api_key:
-            try:
-                from specialist_models import specialist_council, specialist_price_assessments
-                specialist_report = specialist_council(home, away, day_text, api_key=api_key)
-                priced = specialist_price_assessments(specialist_report, matched_games)
-                stats["matched_prices"] += len(priced)
-                stats["specialist_panels"] += sum(1 for panel in specialist_report.get("panels", []) if panel.get("available"))
-            except Exception as specialist_exc:
-                logger.info("Specialist research unavailable for %s vs %s: %s", home, away, specialist_exc)
-
-        x_report = None
         if x_token:
             try:
                 from x_research import search_match_posts
-                x_report = search_match_posts(home, away, limit=12, token=x_token)
-                stats["x_posts"] += int(x_report.get("result_count") or 0)
-            except Exception as x_exc:
-                logger.info("X research unavailable for %s vs %s: %s", home, away, x_exc)
-
-        panel_summary = []
-        if specialist_report:
-            for panel in specialist_report.get("panels") or []:
-                panel_summary.append({
-                    "market": panel.get("market"),
-                    "available": bool(panel.get("available")),
-                    "expected_total": panel.get("expected_total"),
-                    "home_sample": panel.get("home_sample"),
-                    "away_sample": panel.get("away_sample"),
-                    "reason": panel.get("reason"),
-                })
-        x_summary = []
-        if x_report:
-            for post in (x_report.get("posts") or [])[:8]:
-                x_summary.append({
+                report = search_match_posts(home, away, limit=12, token=x_token)
+                posts = [{
                     "username": post.get("username"),
                     "created_at": post.get("created_at"),
                     "verified_account": bool(post.get("verified")),
                     "text": str(post.get("text") or "")[:350],
                     "url": post.get("url"),
                     "warning": "Unverified public-post lead; not confirmed team news.",
-                })
+                } for post in (report.get("posts") or [])[:8]]
+                stats["x_posts"] += int(report.get("result_count") or 0)
+                for candidate in candidates:
+                    candidate["x_research_evidence"] = posts
+                    candidate["x_research_warning"] = report.get("warning")
+                    candidate["team_news_evidence"] = None
+            except Exception as exc:
+                logger.info("X research unavailable for %s vs %s: %s", home, away, exc)
 
-        for candidate in fixture_rows:
-            if specialist_report:
-                candidate["specialist_evidence"] = bool(any(p.get("available") for p in specialist_report.get("panels", [])))
-                candidate["specialist_panels"] = panel_summary
-                candidate["specialist_warning"] = specialist_report.get("warning")
-            if x_report:
-                candidate["x_research_evidence"] = x_summary
-                # Public social posts are leads only; never mark injury/lineup evidence verified.
-                candidate["team_news_evidence"] = None
-                candidate["x_research_warning"] = x_report.get("warning")
-            if candidate.get("other_bookmaker_prices"):
-                candidate["other_bookmaker_evidence"] = True
-        stats["fixtures_checked"] += 1
-
-    missing = []
-    if not api_key:
-        missing.append("API_FOOTBALL_KEY not configured; specialist corners/cards/shots/first-half research skipped")
+    gaps = []
+    if not specialist.get("enabled"):
+        gaps.append("API-Football specialist research not configured")
     if not x_token:
-        missing.append("X_BEARER_TOKEN not configured; public-post research skipped")
-    if not any(row.get("other_bookmaker_prices") for row in rows):
-        missing.append("No exact cross-bookmaker market/selection comparisons were returned")
-    stats["reason"] = "; ".join(missing) if missing else "Available specialist, public-post and cross-bookmaker sources were checked; public posts remain unverified leads."
+        gaps.append("X public-post research not configured")
+    if not stats["cross_bookmaker_matches"]:
+        gaps.append("no exact cross-bookmaker market/selection match")
+    if gaps:
+        stats["reason"] = (stats["reason"] + " " if stats["reason"] else "") + "; ".join(gaps)
+    else:
+        stats["reason"] = "Specialist, X and cross-bookmaker sources checked; social posts remain unverified leads."
     return rows, stats
 
 
@@ -3976,7 +3917,10 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                     market_name = str(row.get("market") or "Unknown")
                     selection_name = str(row.get("selection") or "Unknown")
                     probability, reason = _market_probability_for_row(prediction, row)
-                    if probability is None:
+                    specialist_market = any(term in _normal_market_text(market_name + " " + selection_name)
+                        for term in ("corner", "card", "booking", "total shots", "shots on target",
+                                     "shots on goal", "first half", "half time", "1st half"))
+                    if probability is None and not specialist_market:
                         if reason:
                             unsupported.add(market_name)
                         continue
@@ -4002,9 +3946,11 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         ):
                             continue
                     odds = row.get("odds")
-                    if probability <= 0 or probability >= 1 or not odds or odds <= 1:
+                    if not odds or odds <= 1:
                         continue
-                    ev = probability * odds - 1
+                    if probability is not None and (probability <= 0 or probability >= 1):
+                        continue
+                    ev = probability * odds - 1 if probability is not None else None
                     candidates.append({
                         "home": fixture["home_team"], "away": fixture["away_team"],
                         "league": fixture.get("competition") or fixture.get("leagueName") or "Competition",
@@ -4012,7 +3958,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         "market": market_name, "selection": selection_name,
                         "market_key": _normal_market_text(market_name) + "|" + _normal_market_text(selection_name),
                         "odds": odds, "probability": probability, "ev": ev,
-                        "fair_odds": 1 / probability,
+                        "fair_odds": (1 / probability) if probability is not None else None,
                         "model_confidence": prediction.get("confidence"),
                         "home_form": prediction.get("home_form"),
                         "away_form": prediction.get("away_form"),
@@ -4052,7 +3998,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         key = (item["home"], item["away"], item["market_key"])
         if key not in best or item["odds"] > best[key]["odds"]:
             best[key] = item
-    return sorted(best.values(), key=lambda x: (x["ev"], x["probability"]), reverse=True), diagnostics
+    return sorted(best.values(), key=lambda x: (x["ev"] if x["ev"] is not None else -1.0, x["probability"] if x["probability"] is not None else 0.0), reverse=True), diagnostics
 
 
 async def topvalue_command(update, context):
