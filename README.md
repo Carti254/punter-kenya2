@@ -144,3 +144,18 @@ PUNTER KENYA is intentionally limited to **Betika** and **SportyBet Kenya**.
 - The API key must remain a server-side secret. Never put it in Telegram messages, source code or a public repository.
 
 Reverse conversion (SportyBet Kenya → Betika), and bookmaker-code editing, merging, splitting or building from scratch are not advertised as supported by the current integration. The bot must not represent internal slip records as bookmaker-issued codes.
+
+
+## Genuine SportyBet Kenya slip generation
+
+The Telegram **🤖 Build a slip** menu now resolves selections against SportyBet Kenya's live upcoming fixtures and markets, shows the matched selections and current odds, and asks for confirmation before creating a genuine SportyBet booking code.
+
+Input one selection per line:
+
+```text
+Fixture | Market | Selection
+Arsenal vs Chelsea | 1X2 | Arsenal
+Liverpool vs Brighton | 1X2 | Draw
+```
+
+The initial builder supports exact fixture matching (with conservative name matching), 1X2 outcomes and listed markets including goal totals when the requested line is present. It validates that matches have not started and that markets/outcomes remain active. The only bookmaker write request is SportyBet's share-booking endpoint; it creates a shareable code and does not place or stake a wager. SportyBet's web endpoints are undocumented and can change. Kenya-region endpoint access and live code generation must be verified in the deployed bot before treating the feature as operational. No BetPawa integration is used.
