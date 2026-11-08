@@ -30,6 +30,7 @@ from schema_migrations import run_migrations
 from results_tracker import record_bet, settle_bet, bet_statistics, list_pending_bets, utc_match_date
 from prediction_validation import brier_score, log_loss, fit_temperature, apply_temperature
 from football_stats_provider import fetch_match_market_data, FootballStatsError
+from market_settlement import settle_bet_with_market_evidence
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -4680,6 +4681,7 @@ def refresh_pending_bet_records(user_id=None):
         return {"checked": 0, "settled": 0, "ambiguous": 0, "requires_market_data": 0, "pending": 0}
     leagues = fetch_all_leagues()
     result_cache = {}
+    market_evidence_cache = {}
     settled = ambiguous = checked = requires_market_data = 0
     for bet in pending:
         match_date = bet.get("match_date")
@@ -4718,10 +4720,25 @@ def refresh_pending_bet_records(user_id=None):
             settle_bet(int(bet["user_id"]), int(bet["id"]), matches[0][0], matches[0][1])
             settled += 1
         except ValueError as exc:
-            # Unsupported market/selection: a full-time score is insufficient.
-            # Keep the record pending; never guess a result.
-            if "Pending bet record not found" not in str(exc):
-                requires_market_data += 1
+            # First try exact, market-specific provider evidence for unsupported score markets.
+            # Missing API credentials, coverage or bookmaker rules leave the bet pending.
+            if "Pending bet record not found" in str(exc):
+                continue
+            if os.getenv("API_FOOTBALL_KEY"):
+                cache_key = (date_text, str(bet.get("home_team")), str(bet.get("away_team")))
+                try:
+                    if cache_key not in market_evidence_cache:
+                        market_evidence_cache[cache_key] = fetch_match_market_data(
+                            bet.get("home_team"), bet.get("away_team"), date_text
+                        )
+                    settle_bet_with_market_evidence(
+                        int(bet["user_id"]), int(bet["id"]), market_evidence_cache[cache_key]
+                    )
+                    settled += 1
+                    continue
+                except Exception as provider_error:
+                    logger.info("Market evidence did not settle bet #%s: %s", bet.get("id"), provider_error)
+            requires_market_data += 1
             continue
         except Exception:
             logger.exception("Automatic settlement failed for bet #%s", bet.get("id"))
