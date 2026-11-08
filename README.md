@@ -1,151 +1,83 @@
 # PUNTER KENYA
 
-PUNTER KENYA is a Telegram football-fixture bot. Its current fixture catalogue is powered by the public **open-matchday** dataset; no football-data API key is required for fixture and league discovery.
+Telegram-based football fixtures, match research, bookmaker-odds inspection and slip-building assistant. The project is designed to run locally; a paid hosting service is not required.
 
-## Current data source
+## What it does
 
-- Provider: [open-matchday](https://github.com/oladeeayo/open-matchday)
-- Competition catalogue: fetched from the provider's league index.
-- Fixtures: fetched from the provider's season CSV files.
-- Time zone shown to users: East Africa Time (Africa/Nairobi).
-- Fixture browsing is limited to **today and tomorrow** when using league-specific searches.
-- Provider data is refreshed by its maintainers; it is not a real-time live-score feed.
+- Browses football fixtures and competitions from the open-matchday dataset.
+- Displays fixture times in East Africa Time (Africa/Nairobi).
+- Provides form, goals, home/away, head-to-head, matchup, risk and match-intelligence reports where source data is available.
+- Reads the public, undocumented SportyBet Kenya football feed when that feed is accessible.
+- Lets a user resolve selections against current SportyBet fixture/market IDs, review the selections and confirm creation of a genuine SportyBet share/booking code.
+- Includes manual slip management, calculator and experimental model-based analysis.
 
-PUNTER KENYA is an independent project and is not affiliated with open-matchday. The provider's dataset is subject to its own licence and attribution requirements. Review the provider repository before redistributing or using the data commercially.
+**Important limitations:** SportyBet endpoints are undocumented and can change, rate-limit or block requests. The bot does not log in to bookmaker accounts, deposit funds or place bets. A booking/share code is not a placed bet. Model probabilities are experimental and uncalibrated; they are not guarantees or financial advice. Unsupported or unavailable data must be shown as unavailable, not invented.
 
-## Telegram commands
+## Run locally (no hosting provider)
 
-- `/start` — start the bot.
-- `/help` — show command help.
-- `/about` — show provider attribution.
-- `/leagues` — search the synced competition catalogue.
-- `/syncleagues` — refresh the competition catalogue.
-- `/fixtures` — browse today's and tomorrow's fixtures.
-- `/fixtures today` or `/fixtures tomorrow` — filter the global fixture list by day.
-- `/leaguefixtures COMPETITION` — show fixtures for a competition today and tomorrow.
-- `/leaguefixtures COMPETITION today` — show today's fixtures.
-- `/leaguefixtures COMPETITION tomorrow` — show tomorrow's fixtures.
-- `/matchintel HOME TEAM vs AWAY TEAM` — retrieve available fixture information.
-- `/fullintel` — display the Full Intelligence Centre v4 command directory.
-- `/syncfixtures` — sync available fixture records to the database.
-- `/live` — explains current live-data limitations.
-- `/calculator ODDS STAKE` — calculate potential returns and implied probability.
-- `/dbtest` — test the database connection.
-- `/calculator` — use the betting calculator.\n- `/bookies` — check SportyBet Kenya public odds-feed availability for today.\n- `/odds HOME vs AWAY [today|tomorrow]` — retrieve and compare prices returned for a named fixture.
+Requirements: Python 3.11+ and a Telegram bot token from BotFather.
 
-The pre-match forecast uses a basic Poisson model based on up to 10 recent completed results per team in the same competition. It requires at least five usable results for each team. It reports estimated 1X2 and goal probabilities, recent form and a most-likely score; these are not guarantees and do not account for injuries, suspensions, xG or lineups. If the provider has insufficient history, the bot clearly withholds the forecast.\n\nLive scores, confirmed starting lineups, live events and verified live bookmaker APIs are **not implemented**. The bot uses read-only SportyBet Kenya public odds-feed adapter; access and market completeness are not guaranteed. Do not treat scheduled fixtures as live matches or model output as a betting guarantee.
+1. Download or clone this repository.
+2. Install dependencies:
 
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   # Windows PowerShell: .venv\\Scripts\\Activate.ps1
+   python -m pip install -r requirements.txt
+   ```
 
-## Full Intelligence Centre (v4)
+3. Set your Telegram token as an environment variable:
 
-- `/fullintel` — open the master command directory, grouped by fixtures, team performance, matchup/history, predictions/betting analysis, tracking and utilities. It includes usage examples and current data limitations.
+   Linux/macOS:
+   ```bash
+   export BOT_TOKEN="your-telegram-bot-token"
+   ```
 
-## Match intelligence commands
+   Windows PowerShell:
+   ```powershell
+   $env:BOT_TOKEN="your-telegram-bot-token"
+   ```
 
-The bot now exposes separate reports so users can inspect one feature at a time:
+4. Start the bot:
 
-- `/form TEAM A vs TEAM B` — recent results, form sequence and points per match.
-- `/goals TEAM A vs TEAM B` — goals scored/conceded, scoring frequency, clean sheets and failed-to-score rates.
-- `/homeaway TEAM A vs TEAM B` — home team's home record and away team's away record.
-- `/halves TEAM A vs TEAM B` — explains half-time data availability; half-time results are not in the current provider feed.
-- `/h2h TEAM A vs TEAM B` — recent head-to-head results found in the competition dataset.
-- `/strength TEAM A vs TEAM B` — attack, defence, points rate and a simple consistency indicator.
-- `/matchup TEAM A vs TEAM B` — statistical attack-versus-defence comparison.
-- `/markets TEAM A vs TEAM B` — model estimates for 1X2 and goal totals.
-- `/risk TEAM A vs TEAM B` — data limitations and statistical warning flags.
-- `/scenarios TEAM A vs TEAM B` — conditional match scenarios.
-- `/deepdive TEAM A vs TEAM B` — combined analysis and plain-English summary.
-- `/value TEAM A vs TEAM B HOME_ODDS DRAW_ODDS AWAY_ODDS` — compares user-supplied 1X2 odds with model probabilities.
-- `/topvalue` — explains value-scanner availability.
-- `/record` — settles stored forecasts against completed results and reports accuracy.
+   ```bash
+   python bot.py
+   ```
 
-Analysis commands currently search scheduled fixtures in the next 14 days and require at least five completed results per team in the selected competition. The historical performance tracker saves forecasts generated by `/deepdive` to the configured database. On first use it attempts to create a separate `punter_prediction_records` table; the database account therefore needs table-creation and write permissions.
+Keep the terminal/process running while you use the bot. Local polling stops when the computer is shut down or the process exits. Never paste your token into source code, GitHub, screenshots or public chats.
 
-The tracker reports forecast accuracy and the 1X2 Brier score. It does **not** report betting ROI or profit/loss because bookmaker prices and stakes are not yet collected. The model is not yet calibrated against a large historical sample. No selection is guaranteed.
+## Database (optional)
 
-The current source does not provide verified bookmaker odds, xG, injuries, suspensions, confirmed lineups, half-time scores or live events. `/value` accepts odds entered by the user and labels them as unverified. The bot does not invent unavailable statistics.
+The bot can start without a database. In database-free local mode, commands that need persistent storage (for example saved slips, forecast records, odds history and database diagnostics) will not be available.
 
-## Deployment configuration
-
-Use Python 3.13 or a compatible recent Python version.
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-Required Telegram environment variable:
-
-- `BOT_TOKEN` (or `TELEGRAM_BOT_TOKEN`)
-
-The database connection in `database.py` uses these environment variables:
+To enable those features, configure a MySQL-compatible database using:
 
 - `DB_HOST`
 - `DB_PORT`
 - `DB_USER`
 - `DB_PASSWORD`
 - `DB_NAME`
+- `DB_SSL=true` (TLS is required)
 
-TLS is required for the database connection. `DB_SSL` must remain `true` (the default).
+The database account needs permission to create and write the tables used by the bot. Do not commit database credentials.
 
-Start the bot:
+## Telegram commands
 
-```bash
-python bot.py
-```
+- `/start`, `/help`, `/about` — start and help.
+- `/leagues`, `/syncleagues` — competition catalogue.
+- `/fixtures`, `/fixtures today`, `/fixtures tomorrow` — fixture browsing.
+- `/leaguefixtures COMPETITION [today|tomorrow]` — competition fixtures.
+- `/matchintel HOME vs AWAY` — match information.
+- `/form`, `/goals`, `/homeaway`, `/h2h`, `/strength`, `/matchup`, `/markets`, `/risk`, `/scenarios`, `/deepdive` — match research commands.
+- `/bookies` — check the SportyBet public feed.
+- `/odds HOME vs AWAY [today|tomorrow]` — inspect matched prices.
+- `/topvalue`, `/aipicks`, `/accumulator` — experimental scanner tools; may correctly return NO BET.
+- `/calculator ODDS STAKE` — calculate implied probability and potential return.
+- `/record`, `/oddshistory`, `/myslips` — persistent tools; require the optional database.
+- `/fullintel` — full command directory.
 
-Never commit Telegram tokens, database passwords, or other credentials to this repository. Set them in the hosting provider's secret/environment-variable settings.
-
-## Project files
-
-- `bot.py` — Telegram handlers, provider retrieval, fixture formatting and command registration.
-- `database.py` — secure MySQL-compatible database connection helpers.
-- `requirements.txt` — Python dependencies.
-- `.github/workflows/python-syntax.yml` — syntax validation on pushes and pull requests targeting `main`.
-
-## Development checks
-
-The GitHub Actions workflow compiles `bot.py` and `database.py` with Python 3.13 to catch syntax errors. This check does not replace a live Telegram deployment test.
-
-
-## Bookmaker odds integration (feature branch)
-
-The isolated `bookmaker_odds.py` module provides a read-only SportyBet Kenya odds adapter. It normalises returned prices into bookmaker, market, selection, handicap, odds, fixture and timestamp fields.
-
-Telegram commands:
-- `/bookies` — make a live retrieval attempt for today's events and report per-bookmaker counts or errors.
-- `/odds HOME vs AWAY today` — compare returned prices for a fixture.
-- `/odds HOME vs AWAY tomorrow` — query the next EAT calendar day.
-
-These are undocumented bookmaker endpoints, not guaranteed APIs. They may change, rate-limit or block automated access. The bot makes read-only requests only; it does not log in, place bets or access user accounts. A successful request is not a guarantee of future availability. Fixture matching is conservative and may fail when team names differ. Prices can be stored as timestamped observations in the configured MySQL database after `/odds` retrieves a matched fixture. `/oddshistory` displays those saved observations; this is not continuous market monitoring or a complete historical odds feed. SportyBet Kenya is the only bookmaker adapter currently supported.
-
-The bookmaker engine is deliberately isolated on the `feature/bookmaker-odds-engine` branch pending syntax checks and live endpoint tests. It has not been merged into `main` or deployed. The workflow has passed a Python syntax check for the odds integration commit, but live endpoint tests remain outstanding.
-
-
-## Experimental scanner commands
-
-- `/topvalue [home|draw|away|over15|over25|safest] [today|tomorrow]`
-- `/aipicks [market] [today|tomorrow]`
-- `/accumulator [target_odds]`
-
-The scanner combines the open-matchday recent-results Poisson estimate with read-only SportyBet Kenya prices returned at query time. It excludes BTTS and Under 2.5. Minimum estimated probability is 42% for 1X2 and 60% for goal overs; estimated expected value must be at least +3%. This model is experimental and uncalibrated, does not adjust for confirmed lineups, injuries, xG or opponent strength, and does not guarantee profit. The accumulator's probability product assumes independent legs and is explicitly not a calibrated combined probability. A NO BET result is valid.
-
-## Bookmaker coverage and booking-code conversion
-
-PUNTER KENYA currently supports **SportyBet Kenya only**.
-
-- Odds comparison reads the available public SportyBet Kenya feed.
-- Safe retries reuse the same idempotency key to avoid creating duplicate coupons.
-- The API key must remain a server-side secret. Never put it in Telegram messages, source code or a public repository.
-
-
-
-## Genuine SportyBet Kenya slip generation
-
-The Telegram **🤖 Build a slip** menu now resolves selections against SportyBet Kenya's live upcoming fixtures and markets, shows the matched selections and current odds, and asks for confirmation before creating a genuine SportyBet booking code.
-
-Input one selection per line:
+The Telegram menu also includes the SportyBet slip builder. It accepts one selection per line in this format:
 
 ```text
 Fixture | Market | Selection
@@ -153,3 +85,21 @@ Arsenal vs Chelsea | 1X2 | Arsenal
 Liverpool vs Brighton | 1X2 | Draw
 ```
 
+The bot must show the resolved current selections and obtain confirmation before requesting a booking/share code from SportyBet. It must never claim that a bet has been placed.
+
+## Data sources and bookmaker coverage
+
+- Fixtures and competition catalogue: [open-matchday](https://github.com/oladeeayo/open-matchday). This is a community-maintained dataset, not a real-time live-score service.
+- Bookmaker adapter: SportyBet Kenya only. Betika and BetPawa are not configured.
+- SportyBet's public endpoints are not a supported public API contract. Feed completeness and availability are not guaranteed.
+
+## Development and tests
+
+Install dependencies, then run:
+
+```bash
+python -m py_compile bot.py database.py bookmaker_odds.py sportybet_client.py slip_manager.py
+python -m unittest discover -s tests -v
+```
+
+GitHub Actions runs Python validation and unit tests on pushes and pull requests to `main`.
