@@ -1129,7 +1129,7 @@ def main_menu_keyboard():
             [KeyboardButton("📅 Today's Matches"), KeyboardButton("🏆 Top Leagues")],
             [KeyboardButton("🔎 Analyze Match"), KeyboardButton("ℹ️ iHelp")],
             [KeyboardButton("🤖 Build a slip")],
-            [KeyboardButton("✏️ Edit slip"), KeyboardButton("🔗 Merge slips"), KeyboardButton("✂️ Split slip")],
+            [KeyboardButton("✏️ Edit slip"), KeyboardButton("🔗 Merge slips")],\n            [KeyboardButton("✂️ Split slip"), KeyboardButton("🎯 Trim to target odds")],
             [KeyboardButton("🔄 Convert bet code")],
             [KeyboardButton("📋 Bookies & regions"), KeyboardButton("🎟️ My slips")],
             [KeyboardButton("⚽ Match intelligence"), KeyboardButton("❓ Contact support")],
@@ -1601,6 +1601,41 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer()
     action = (query.data or "").split(":", 1)[-1]
+    if action == "manage_cancel":
+        context.user_data.pop("pending_sportybet_groups", None)
+        await query.edit_message_text("Operation cancelled. Original SportyBet booking codes remain unchanged.")
+        return
+    if action == "manage_confirm":
+        groups = context.user_data.get("pending_sportybet_groups") or []
+        if not groups:
+            await query.edit_message_text("This preview has expired. Start the operation again.")
+            return
+        await query.edit_message_text("⏳ Creating new SportyBet Kenya booking code(s)…")
+        results = []
+        try:
+            for index, group in enumerate(groups, 1):
+                result = await asyncio.to_thread(create_sportybet_booking, group)
+                code = result.get("bookingCode")
+                if not code:
+                    raise SportyBetError("SportyBet did not return a booking code.")
+                results.append((index, code, result.get("shareURL"), len(group)))
+            lines = ["✅ SPORTYBET KENYA — NEW BOOKING CODE(S)", "━━━━━━━━━━━━━━━━━━━━"]
+            for index, code, url, count in results:
+                lines.append(f"{index}. CODE: {code} | {count} selections")
+                if url:
+                    lines.append(f"   {url}")
+            lines.extend(["", "These are new shareable slips. Original booking codes remain unchanged. No wager has been placed."])
+            await query.edit_message_text("\\n".join(lines))
+            context.user_data.pop("pending_sportybet_groups", None)
+        except SportyBetError as exc:
+            lines = ["⚠️ SPORTYBET DID NOT CONFIRM ALL REQUESTED CODES", str(exc)[:300]]
+            if results:
+                lines.append("Codes already confirmed by SportyBet:")
+                lines.extend(f"{code} ({count} selections)" for _, code, _, count in results)
+            lines.append("The booking request is not automatically repeated.")
+            await query.edit_message_text("\\n".join(lines))
+            context.user_data.pop("pending_sportybet_groups", None)
+        return
     pending = context.user_data.get("pending_sportybet_booking")
     if action == "cancel":
         context.user_data.pop("pending_sportybet_booking", None)
@@ -1651,6 +1686,36 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
         context.user_data.pop("pending_sportybet_booking", None)
 
 
+async def build_sportybet_command(update, context):
+    context.user_data["slip_flow"] = "sportybet_build"
+    await reply(update, "🎟️ BUILD SPORTYBET KENYA SLIP\\nSend one selection per line: Fixture | Market | Selection\\nExample: Arsenal vs Chelsea | 1X2 | Arsenal\\n/cancel to stop.")
+
+
+async def edit_sportybet_command(update, context):
+    context.user_data["slip_flow"] = "sportybet_edit_code"
+    await reply(update, "Send the SportyBet Kenya booking code you want to edit. /cancel to stop.")
+
+
+async def merge_sportybet_command(update, context):
+    context.user_data["slip_flow"] = "sportybet_merge_codes"
+    await reply(update, "Send 2–10 SportyBet Kenya booking codes separated by spaces or new lines. /cancel to stop.")
+
+
+async def split_sportybet_command(update, context):
+    context.user_data["slip_flow"] = "sportybet_split_code"
+    await reply(update, "Send the SportyBet Kenya booking code you want to split. /cancel to stop.")
+
+
+async def trim_sportybet_command(update, context):
+    context.user_data["slip_flow"] = "sportybet_trim_code"
+    await reply(update, "Send the SportyBet Kenya booking code to trim. /cancel to stop.")
+
+
+async def convert_sportybet_command(update, context):
+    context.user_data["slip_flow"] = "convat_code"
+    await reply(update, "Send your Betika booking code to convert into SportyBet Kenya. /cancel to stop.")
+
+
 async def cancel_slip_command(update, context):
     context.user_data.pop("slip_flow", None)
     await reply(update, "Cancelled. Your existing slips have not been changed.")
@@ -1678,7 +1743,7 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     choice = (update.effective_message.text or "").strip()
     menu_choices = {
         "📅 Today's Matches", "🏆 Top Leagues", "🔎 Analyze Match", "ℹ️ iHelp",
-        "🤖 Build a slip", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip",
+        "🤖 Build a slip", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip", "🎯 Trim to target odds",
         "🔄 Convert bet code", "📋 Bookies & regions", "🎟️ My slips",
         "⚽ Match intelligence", "📅 Fixtures & leagues", "❓ Contact support",
     }
@@ -1716,10 +1781,18 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Use exact upcoming fixture names. Markets and selections are checked against SportyBet Kenya live data.\n\n"
             "I'll show the resolved selections and current odds before asking you to generate the code. No bet is placed.\n"
             "Send /cancel to stop.")
-    elif choice in ("✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip"):
-        await reply(update,
-            "These advanced bookmaker-code operations are not yet connected. "
-            "You can already generate a genuine SportyBet Kenya booking code using 🤖 Build a slip.")
+    elif choice == "✏️ Edit slip":
+        context.user_data["slip_flow"] = "sportybet_edit_code"
+        await reply(update, "✏️ SPORTYBET SLIP EDITOR\\nSend an existing SportyBet Kenya booking code. I will read its selections and let you remove legs before creating a new code. The original code stays unchanged.\\n/cancel to stop.")
+    elif choice == "🔗 Merge slips":
+        context.user_data["slip_flow"] = "sportybet_merge_codes"
+        await reply(update, "🔗 MERGE SPORTYBET SLIPS\\nSend 2–10 SportyBet Kenya booking codes, separated by spaces or new lines. I will combine their unique selections and preview the result before generating a new code.\\n/cancel to stop.")
+    elif choice == "✂️ Split slip":
+        context.user_data["slip_flow"] = "sportybet_split_code"
+        await reply(update, "✂️ SPLIT SPORTYBET SLIP\\nSend an existing SportyBet Kenya booking code. Then choose how many selections should go into each new slip.\\n/cancel to stop.")
+    elif choice == "🎯 Trim to target odds":
+        context.user_data["slip_flow"] = "sportybet_trim_code"
+        await reply(update, "🎯 TRIM SPORTYBET SLIP\\nSend an existing SportyBet Kenya booking code. Then enter your target maximum combined odds. The system removes the highest-odds legs first and previews the result.\\n/cancel to stop.")
     elif choice == "🔄 Convert bet code":
         context.user_data["slip_flow"] = "convat_code"
         await reply(update,
@@ -4373,6 +4446,12 @@ def main():
         ("aipicks", aipicks_status_command),
         ("accumulator", accumulator_status_command),
         ("myslips", my_slips_command),
+        ("build", build_sportybet_command),
+        ("edit", edit_sportybet_command),
+        ("merge", merge_sportybet_command),
+        ("split", split_sportybet_command),
+        ("trim", trim_sportybet_command),
+        ("convert", convert_sportybet_command),
         ("cancel", cancel_slip_command),
     ]
 
