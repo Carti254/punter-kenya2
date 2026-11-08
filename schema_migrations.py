@@ -112,3 +112,37 @@ def run_migrations():
         return {"applied": applied_now, "latest_version": LATEST_VERSION}
     finally:
         connection.close()
+
+
+if __name__ == "__main__":
+    # Run explicitly from the live service's deployment console when needed.
+    # Credentials are read only from DB_* environment variables and never printed.
+    from database import test_connection
+
+    info = test_connection()
+    print("Connected to configured MySQL database.")
+    print("MySQL version:", info.get("database_version"))
+    result = run_migrations()
+    print("Migration result:", result)
+
+    connection = get_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT version FROM punter_schema_migrations ORDER BY version")
+            versions = [int(row["version"]) for row in cursor.fetchall()]
+            cursor.execute(
+                "SELECT COUNT(*) AS n FROM information_schema.columns "
+                "WHERE table_schema=DATABASE() AND table_name='matches' "
+                "AND column_name='last_synced_at'"
+            )
+            last_synced_present = int(cursor.fetchone()["n"]) > 0
+        if versions and max(versions) >= LATEST_VERSION:
+            print("Schema migration versions:", versions)
+        else:
+            raise SystemExit("Migration verification failed: latest version is not recorded.")
+        if last_synced_present:
+            print("matches.last_synced_at: present")
+        else:
+            print("matches.last_synced_at: table absent or optional column not applicable")
+    finally:
+        connection.close()
