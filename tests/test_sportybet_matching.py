@@ -59,6 +59,20 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
         with self.assertRaises(SportyBetError):
             _resolve_market(event, "Over/Under", "Over 6.5")
 
+    def test_booking_revalidation_rejects_changed_price(self):
+        event = {
+            "eventId": "event-1", "estimateStartTime": 1999999999000,
+            "markets": [{"id": "market-1", "specifier": "total=6.5",
+                         "outcomes": [{"id": "out-over", "isActive": 1, "odds": 1.5}]}],
+        }
+        resolved = [{
+            "eventId": "event-1", "marketId": "market-1", "specifier": "total=6.5",
+            "outcomeId": "out-over", "fixture": "Home FC vs Away FC", "odds": 1.2,
+        }]
+        with patch("sportybet_client._get_fixtures", return_value=[event]):
+            with self.assertRaisesRegex(SportyBetError, "odds changed"):
+                _revalidate_selections(resolved)
+
     def test_booking_revalidation_rejects_missing_selection(self):
         resolved = [{
             "eventId": "event-1", "marketId": "market-1", "specifier": "total=6.5",
