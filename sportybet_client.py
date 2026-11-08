@@ -242,6 +242,17 @@ def _revalidate_selections(resolved):
             price = 0.0
         if not (1.0 < price < 10000):
             raise SportyBetError(f"Leg {index}: bookmaker returned an invalid price.")
+        try:
+            preview_price = float(item.get("odds"))
+        except (TypeError, ValueError, OverflowError):
+            preview_price = 0.0
+        if not (preview_price > 1.0 and preview_price < 10000):
+            raise SportyBetError(f"Leg {index}: preview price is missing or invalid; rebuild the slip.")
+        if abs(price - preview_price) > 0.001:
+            raise SportyBetError(
+                f"Leg {index}: odds changed from {preview_price:.3f} to {price:.3f}. "
+                "No booking code was requested; rebuild and review the updated slip."
+            )
         refreshed.append({**item, "odds": price, "startTime": start_ms})
     return refreshed
 
@@ -268,7 +279,7 @@ def create_booking(resolved):
         raise SportyBetError(f"SportyBet booking request failed: {type(exc).__name__}.") from None
     except ValueError:
         raise SportyBetError("SportyBet returned an unreadable booking response.") from None
-    if not isinstance(payload, dict) or payload.get("bizCode") not in (10000,):
+    if not isinstance(payload, dict) or payload.get("bizCode") not in (None, 10000):
         message = payload.get("message") if isinstance(payload, dict) else None
         raise SportyBetError(str(message or "SportyBet did not accept these selections.")[:250])
     data = payload.get("data") or {}
