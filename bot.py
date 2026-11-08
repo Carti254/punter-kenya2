@@ -4184,6 +4184,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         if unsupported:
             diagnostics.append("Markets retrieved but not model-supported yet: " + ", ".join(sorted(unsupported)[:12]))
 
+    try:
     # Silently enrich exact SportyBet fixture matches with free BSD and PitchAPI
     # evidence. External probabilities are cross-checks; exact BSD-supported
     # result, goal-total and corner markets may supply missing probabilities.
