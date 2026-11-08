@@ -2131,8 +2131,12 @@ async def autobuild_sportybet_command(update, context):
     leg_plan = f"exactly {min_legs} legs"
     await reply(update, f"🔎 Scanning today and tomorrow fixtures, extended bookmaker event window, and every model-supported SportyBet market for target {target:.2f}, {leg_plan}…")
     try:
+        loop = asyncio.get_running_loop()
+        def report_scan_progress(message):
+            # The scanner runs in a worker thread; send progress safely on the Telegram event loop.
+            loop.call_soon_threadsafe(lambda: asyncio.create_task(reply(update, "⏳ " + message)))
         rows, diagnostics = await asyncio.to_thread(
-            scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
+            scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet", report_scan_progress
         )
         rows = [
             x for x in rows
@@ -3862,8 +3866,15 @@ def _selection_probability_key(market_key, selection, handicap=None):
     return _normal_market_text(selection) or None
 
 
-def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all", bookmaker_only=None):
+def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all", bookmaker_only=None, progress_callback=None):
     """Fetch the fixture catalogue and SportyBet feed once, then score requested EAT dates."""
+    def progress(message):
+        if callable(progress_callback):
+            try:
+                progress_callback(str(message))
+            except Exception:
+                logger.debug("Autobuild progress callback failed.", exc_info=True)
+    progress("Step 1/4: downloading the fixture catalogue…")
     candidates, diagnostics = [], []
     today = datetime.now(EAT).date()
     target_dates = {
@@ -3879,6 +3890,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     try:
         raw_fixtures = fetch_openmatchday_fixture_rows(14, None, None)
         all_fixtures = upcoming_fixtures(raw_fixtures)
+        progress(f"Step 2/4: fixture catalogue ready ({len(all_fixtures)} upcoming fixtures). Fetching SportyBet prices…")
     except Exception as exc:
         raise RuntimeError(f"Fixture catalogue failed: {type(exc).__name__}: {str(exc)[:180]}") from exc
 
@@ -3904,6 +3916,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         if str(bookmaker_only or "").casefold() == "sportybet":
             priced_games = fetch_sportybet_odds(sorted(target_dates))
             feed_errors = {}
+            progress(f"Step 3/4: SportyBet returned {len(priced_games)} priced events. Matching fixtures and checking markets…")
         else:
             # Existing combined provider path remains available to other commands.
             all_games = []
@@ -3929,6 +3942,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         )
         matched_events = 0
         unsupported = set()
+        progress(f"Step 4/4: checking {len(day_fixtures)} fixtures against {len(day_games)} SportyBet events for {day.isoformat()}…")
         for raw, fixture in day_fixtures:
             prediction = build_openmatchday_prediction(raw, fixture)
             if not prediction.get("available"):
