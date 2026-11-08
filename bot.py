@@ -5108,7 +5108,62 @@ async def stake_command(update, context):
         await reply(update, f"Stake calculation unavailable: {type(exc).__name__}: {str(exc)[:180]}")
 
 
-async async def clv_command(update, context):
+async async def council_command(update, context):
+    args = list(context.args or [])
+    if not args:
+        await reply(update, "Usage: /council HOME TEAM vs AWAY TEAM [YYYY-MM-DD]\nRequires API_FOOTBALL_KEY. Example: /council Brighton vs Brentford 2026-11-08")
+        return
+    match_date = datetime.now(EAT).date()
+    if re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", args[-1]):
+        match_date = datetime.strptime(args.pop(), "%Y-%m-%d").date()
+    raw = " ".join(args)
+    split = re.split(r"\\s+vs\\.?\\s+|\\s+v\\.?\\s+", raw, maxsplit=1, flags=re.I)
+    if len(split) != 2:
+        await reply(update, "Enter the fixture as HOME vs AWAY.")
+        return
+    home, away = split[0].strip(), split[1].strip()
+    await reply(update, f"🧠 SPECIALIST COUNCIL\nResearching recent corners, cards, shots and first-half evidence for {home} vs {away}...")
+    try:
+        from specialist_models import specialist_council
+        report = await asyncio.to_thread(specialist_council, home, away, match_date)
+        lines = [f"🧠 SPECIALIST COUNCIL — {report['fixture']}", f"Date: {report['date']}", ""]
+        for panel in report["panels"]:
+            if not panel["available"]:
+                lines.append(f"{panel['role']}: unavailable — {panel['reason']}")
+            else:
+                lines.append(f"{panel['role']}: expected total {panel['expected_total']:.2f}; Over {panel['default_line']} {panel['over_probability']:.1%}; Under {panel['default_line']} {panel['under_probability']:.1%}; samples {panel['home_sample']}+{panel['away_sample']}")
+        lines.extend(["", "Player props: " + report["player_props"]["reason"], report["warning"],
+                      "No consensus bet is issued without comparing a real bookmaker price and market-specific calibration."])
+        await reply(update, "\\n".join(lines))
+    except Exception as exc:
+        await reply(update, f"Specialist research unavailable: {type(exc).__name__}: {str(exc)[:220]}")
+
+
+async def xresearch_command(update, context):
+    raw = " ".join(context.args or [])
+    split = re.split(r"\\s+vs\\.?\\s+|\\s+v\\.?\\s+", raw, maxsplit=1, flags=re.I)
+    if len(split) != 2:
+        await reply(update, "Usage: /xresearch HOME TEAM vs AWAY TEAM")
+        return
+    await reply(update, "🔎 Searching recent public X posts. Posts are leads, not verified team news...")
+    try:
+        from x_research import search_match_posts
+        report = await asyncio.to_thread(search_match_posts, split[0].strip(), split[1].strip())
+        if not report["posts"]:
+            await reply(update, "No matching recent public posts were returned by X.")
+            return
+        lines = ["🗣️ PUBLIC X RESEARCH", f"Results: {report['result_count']}", ""]
+        for post in report["posts"][:10]:
+            stamp = post.get("created_at") or "time unavailable"
+            verified = "✓ " if post.get("verified") else ""
+            lines.append(f"{verified}@{post.get('username') or 'unknown'} | {stamp} | ♥{post['likes']} ↻{post['reposts']}\n{post['text'][:500]}\n{post.get('url') or ''}")
+        lines.extend(["", report["warning"], "Social posts are not independently verified and must not be treated as confirmed injuries or line-ups."])
+        await reply(update, "\\n".join(lines)[:3900])
+    except Exception as exc:
+        await reply(update, f"X research unavailable: {type(exc).__name__}: {str(exc)[:220]}")
+
+
+async def clv_command(update, context):
     try:
         report = await asyncio.to_thread(closing_line_value, update.effective_user.id)
         if not report["matched"]:
@@ -5254,7 +5309,7 @@ def main():
         ("performance", betstats_command),
         ("bankroll", bankroll_command),
         ("stake", stake_command),
-        ("rollover", rollover_command),\n        ("rolloverstatus", rolloverstatus_command),\n        ("rolloverday", rolloverday_command),\n        ("clv", clv_command),
+        ("rollover", rollover_command),\n        ("rolloverstatus", rolloverstatus_command),\n        ("rolloverday", rolloverday_command),\n        ("clv", clv_command),\n        ("council", council_command),\n        ("xresearch", xresearch_command),
         ("marketsim", marketsim_command),
         ("betresults", betresults_command),
         ("marketdata", marketdata_command),
