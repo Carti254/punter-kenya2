@@ -28,6 +28,24 @@ class AccumulatorEngineTests(unittest.TestCase):
         result = build_accumulator([{"home": "X", "away": "Y", "odds": 1.0, "probability": 0.8}], 2.0)
         self.assertEqual(result["selections"], [])
 
+    def test_single_longshot_does_not_satisfy_small_target(self):
+        result = build_accumulator([{"home": "Long", "away": "Shot", "odds": 22.0, "probability": 0.426}], 2.0)
+        self.assertFalse(result["target_reached"])
+        self.assertEqual(result["selections"], [])
+
+    def test_builds_a_near_target_accumulator_instead_of_forcing_a_longshot(self):
+        candidates = [
+            {"home": "One", "away": "Two", "odds": 1.50, "probability": 0.78, "market": "1X2"},
+            {"home": "Three", "away": "Four", "odds": 1.40, "probability": 0.80, "market": "Over 1.5"},
+            {"home": "Five", "away": "Six", "odds": 22.00, "probability": 0.426, "market": "Correct Score"},
+        ]
+        result = build_accumulator(candidates, 2.00, max_legs=4)
+        self.assertTrue(result["target_reached"])
+        self.assertGreaterEqual(result["combined_odds"], 2.00)
+        self.assertLessEqual(result["combined_odds"], 2.40)
+        self.assertEqual(len(result["selections"]), 2)
+        self.assertNotIn(22.00, [x["odds"] for x in result["selections"]])
+
     def test_ranking_is_validated(self):
         with self.assertRaises(ValueError):
             build_accumulator(self.candidates, 2.0, ranking="random")
