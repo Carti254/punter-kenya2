@@ -87,7 +87,7 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
         leg = {"eventId": "event-1", "marketId": "market-1", "specifier": "total=6.5",
                "outcomeId": "out-over", "fixture": "Home FC vs Away FC", "odds": 1.2}
         payload = {"data": {"shareCode": "ABC123", "outcomes": [leg], "unavailableOutcomes": []}}
-        with patch("sportybet_client._revalidate_selections", return_value=[leg]), \\
+        with patch("sportybet_client._revalidate_selections", return_value=[leg]), \
              patch("sportybet_client.SESSION.post", return_value=FakeResponse(payload)):
             with self.assertRaisesRegex(SportyBetError, "did not confirm"):
                 create_booking([leg])
