@@ -4463,22 +4463,77 @@ async def error_handler(
 # APPLICATION STARTUP
 # ============================================================
 
+def collect_walk_forward_forecasts(max_matches=2000):
+    """Reconstruct historical forecasts using only results before each match date."""
+    samples = []
+    leagues = fetch_all_leagues()
+    for league in leagues:
+        folder = str(league.get("leagueShortcut") or "").strip()
+        if not folder:
+            continue
+        try:
+            rows = fetch_openmatchday_csv(folder, "results")
+        except Exception as exc:
+            logger.warning("Backtest skipped %s: %s", folder, str(exc)[:160])
+            continue
+        completed = []
+        for row in rows:
+            try:
+                match_date = datetime.strptime(str(row.get("date") or ""), "%Y-%m-%d").date()
+                hg, ag = int(row.get("ft_home")), int(row.get("ft_away"))
+            except (TypeError, ValueError):
+                continue
+            home, away = str(row.get("home") or "").strip(), str(row.get("away") or "").strip()
+            if home and away and hg >= 0 and ag >= 0:
+                completed.append((match_date, home, away, hg, ag))
+        completed.sort(key=lambda item: item[0])
+        for match_date, home, away, hg, ag in completed:
+            prediction = build_openmatchday_prediction(
+                {"leagueShortcut": folder},
+                {"home_team": home, "away_team": away},
+                historical_rows=rows,
+                as_of_date=match_date,
+            )
+            if not prediction.get("available"):
+                continue
+            samples.append({
+                "match_date": match_date,
+                "p_home": prediction["home_win"],
+                "p_draw": prediction["draw"],
+                "p_away": prediction["away_win"],
+                "actual_home_goals": hg,
+                "actual_away_goals": ag,
+            })
+            if len(samples) >= max_matches:
+                return sorted(samples, key=lambda item: item["match_date"])
+    return sorted(samples, key=lambda item: item["match_date"])
+
+
 def evaluate_historical_calibration():
-    """Chronological train/holdout evaluation of stored 1X2 forecasts."""
-    connection = get_connection()
+    """Chronological walk-forward calibration test; never uses same-day/future results."""
+    rows = []
+    source = "stored pre-match prediction records"
     try:
-        with connection.cursor() as cursor:
-            ensure_prediction_records_table(cursor)
-            cursor.execute("""
-                SELECT match_date, p_home, p_draw, p_away, actual_home_goals, actual_away_goals
-                FROM punter_prediction_records
-                WHERE status='SETTLED' AND actual_home_goals IS NOT NULL
-                  AND actual_away_goals IS NOT NULL
-                ORDER BY match_date ASC, id ASC
-            """)
-            rows = cursor.fetchall()
-    finally:
-        connection.close()
+        connection = get_connection()
+        try:
+            with connection.cursor() as cursor:
+                ensure_prediction_records_table(cursor)
+                cursor.execute("""
+                    SELECT match_date, p_home, p_draw, p_away, actual_home_goals, actual_away_goals
+                    FROM punter_prediction_records
+                    WHERE status='SETTLED' AND actual_home_goals IS NOT NULL
+                      AND actual_away_goals IS NOT NULL
+                    ORDER BY match_date ASC, id ASC
+                """)
+                rows = cursor.fetchall()
+        finally:
+            connection.close()
+    except Exception as exc:
+        logger.warning("Stored prediction history unavailable; using walk-forward reconstruction: %s", str(exc)[:180])
+
+    if len(rows) < 80:
+        rows = collect_walk_forward_forecasts()
+        source = "walk-forward reconstruction from historical competition results"
 
     probabilities, outcomes = [], []
     for row in rows:
@@ -4487,26 +4542,26 @@ def evaluate_historical_calibration():
         outcomes.append(0 if hg > ag else 1 if hg == ag else 2)
 
     count = len(rows)
-    # Split on whole match dates, never between fixtures played on the same day.
     dates = sorted({row["match_date"] for row in rows})
     date_split = int(len(dates) * 0.70)
     if date_split < 1 or date_split >= len(dates):
-        return {"ready": False, "count": count, "train": 0, "holdout": 0}
+        return {"ready": False, "count": count, "train": 0, "holdout": 0, "source": source}
     cutoff = dates[date_split]
     train_indices = [i for i, row in enumerate(rows) if row["match_date"] < cutoff]
     test_indices = [i for i, row in enumerate(rows) if row["match_date"] >= cutoff]
     if len(train_indices) < 50 or len(test_indices) < 30:
-        return {"ready": False, "count": count, "train": len(train_indices), "holdout": len(test_indices)}
+        return {"ready": False, "count": count, "train": len(train_indices),
+                "holdout": len(test_indices), "source": source}
 
     train_p = [probabilities[i] for i in train_indices]
     train_y = [outcomes[i] for i in train_indices]
     test_p = [probabilities[i] for i in test_indices]
     test_y = [outcomes[i] for i in test_indices]
-    split = len(train_indices)
     fitted = fit_temperature(train_p, train_y, minimum_samples=50)
     calibrated = [apply_temperature(p, fitted["temperature"]) for p in test_p]
     return {
-        "ready": True, "count": count, "train": split, "holdout": count - split,
+        "ready": True, "count": count, "train": len(train_indices),
+        "holdout": len(test_indices), "source": source,
         "temperature": fitted["temperature"],
         "raw_brier": brier_score(test_p, test_y),
         "calibrated_brier": brier_score(calibrated, test_y),
