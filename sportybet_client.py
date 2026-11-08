@@ -61,25 +61,36 @@ def _get_fixtures():
 
 
 def _find_fixture(fixtures, fixture_text):
-    sides = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", fixture_text.strip(), maxsplit=1, flags=re.I)
-    if len(sides) != 2:
+    sides = re.split(r"\\s+vs\\.?\\s+|\\s+v\\.?\\s+", fixture_text.strip(), maxsplit=1, flags=re.I)
+    if len(sides) != 2 or not all(sides):
         raise SportyBetError(f'Fixture "{fixture_text}" must use HOME vs AWAY.')
     home_q, away_q = map(_norm, sides)
     ranked = []
     for event in fixtures:
         home, away = _norm(event.get("homeTeamName")), _norm(event.get("awayTeamName"))
-        score = (SequenceMatcher(None, home_q, home).ratio() + SequenceMatcher(None, away_q, away).ratio()) / 2
-        if (home_q in home or home in home_q) and (away_q in away or away in away_q):
-            score = max(score, 0.98)
-        ranked.append((score, event))
-    ranked.sort(key=lambda item: item[0], reverse=True)
-    if not ranked or ranked[0][0] < 0.78:
-        raise SportyBetError(f'Could not match "{fixture_text}" to an upcoming SportyBet Kenya fixture.')
-    if len(ranked) > 1 and ranked[0][0] - ranked[1][0] < 0.025:
+        if not home or not away:
+            continue
+        home_score = SequenceMatcher(None, home_q, home).ratio()
+        away_score = SequenceMatcher(None, away_q, away).ratio()
+        # Only tolerate abbreviated suffix variants when both sides independently match.
+        if min(len(home_q), len(home)) >= 6 and (home_q in home or home in home_q):
+            home_score = max(home_score, 0.90)
+        if min(len(away_q), len(away)) >= 6 and (away_q in away or away in away_q):
+            away_score = max(away_score, 0.90)
+        if home_score >= 0.82 and away_score >= 0.82:
+            ranked.append((min(home_score, away_score), (home_score + away_score) / 2, event))
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    if not ranked:
+        raise SportyBetError(f'Could not confidently match both teams in "{fixture_text}" to a SportyBet Kenya fixture.')
+    if len(ranked) > 1 and ranked[0][0] - ranked[1][0] < 0.025 and ranked[0][1] - ranked[1][1] < 0.025:
         raise SportyBetError(f'"{fixture_text}" matched more than one fixture. Include the full team names.')
-    event = ranked[0][1]
-    if int(event.get("estimateStartTime") or 0) <= int(time.time() * 1000):
-        raise SportyBetError(f'{event.get("homeTeamName")} vs {event.get("awayTeamName")} has already started.')
+    event = ranked[0][2]
+    try:
+        start_ms = int(event.get("estimateStartTime") or 0)
+    except (TypeError, ValueError):
+        start_ms = 0
+    if start_ms <= int(time.time() * 1000):
+        raise SportyBetError(f'{event.get("homeTeamName")} vs {event.get("awayTeamName")} has already started or has no valid kick-off time.')
     return event
 
 
@@ -100,6 +111,14 @@ def _resolve_market(event, market_text, selection_text):
     if not candidates:
         available = ", ".join(dict.fromkeys(str(x.get("desc") or x.get("id")) for x in markets[:18]))
         raise SportyBetError(f'Market "{market_text}" is not available for {event.get("homeTeamName")} vs {event.get("awayTeamName")}. Available markets: {available or "none"}.')
+    if len(candidates) > 1:
+        # Prefer exact specifier equality, never the first market returned by the feed.
+        wanted_spec = line
+        exact = [x for x in candidates if wanted_spec and re.search(r"(?:^|[=,:])" + re.escape(wanted_spec) + r"(?:$|[,:])", str(x.get("specifier") or ""))]
+        if len(exact) == 1:
+            candidates = exact
+        else:
+            raise SportyBetError(f'Market "{market_text}" is ambiguous for {event.get("homeTeamName")} vs {event.get("awayTeamName")}; specify its exact line.')
     market = candidates[0]
     outcomes = market.get("outcomes") or []
     pick = selection_text.strip()
@@ -146,9 +165,15 @@ def _resolve_market(event, market_text, selection_text):
         outcome = next((o for o in outcomes if outcome_matches_total(o)), None)
     else:
         outcome = next((o for o in outcomes if _norm(o.get("desc")) == pnorm), None)
-    if not outcome or int(outcome.get("isActive", 1)) != 1:
+    if not outcome or int(outcome.get("isActive", 0) or 0) != 1:
         available = ", ".join(str(o.get("desc")) for o in outcomes)
-        raise SportyBetError(f'Selection "{selection_text}" is not available for {market.get("desc")}. Available: {available or "none"}.')
+        raise SportyBetError(f'Selection "{selection_text}" is suspended or unavailable for {market.get("desc")}. Available: {available or "none"}.')
+    try:
+        current_odds = float(outcome.get("odds"))
+    except (TypeError, ValueError, OverflowError):
+        current_odds = 0.0
+    if not (current_odds > 1.0 and current_odds < 10000):
+        raise SportyBetError(f'Selection "{selection_text}" has no valid current decimal price.')
     return {
         "eventId": str(event.get("eventId")),
         "marketId": str(market.get("id")),
@@ -158,7 +183,7 @@ def _resolve_market(event, market_text, selection_text):
         "league": "",
         "market": str(market.get("desc") or market_text),
         "selection": str(outcome.get("desc")),
-        "odds": float(outcome.get("odds") or 0),
+        "odds": current_odds,
         "startTime": event.get("estimateStartTime"),
     }
 
@@ -181,13 +206,55 @@ def prepare_slip(lines):
     return resolved
 
 
+def _revalidate_selections(resolved):
+    """Re-read the live Kenyan feed and verify every native ID before sharing."""
+    if not resolved:
+        raise SportyBetError("Cannot create an empty booking code.")
+    fixtures = _get_fixtures()
+    by_id = {str(event.get("eventId")): event for event in fixtures if event.get("eventId") is not None}
+    refreshed = []
+    for index, item in enumerate(resolved, 1):
+        event = by_id.get(str(item.get("eventId")))
+        if not event:
+            raise SportyBetError(f"Leg {index}: fixture is no longer available on SportyBet.")
+        try:
+            start_ms = int(event.get("estimateStartTime") or 0)
+        except (TypeError, ValueError):
+            start_ms = 0
+        if start_ms <= int(time.time() * 1000):
+            raise SportyBetError(f"Leg {index}: fixture has started or its kick-off time is invalid.")
+        markets = [
+            m for m in (event.get("markets") or [])
+            if str(m.get("id")) == str(item.get("marketId"))
+            and (m.get("specifier") or None) == (item.get("specifier") or None)
+        ]
+        if len(markets) != 1:
+            raise SportyBetError(f"Leg {index}: original market is missing or ambiguous; rebuild the slip.")
+        outcomes = [
+            o for o in (markets[0].get("outcomes") or [])
+            if str(o.get("id")) == str(item.get("outcomeId"))
+        ]
+        if len(outcomes) != 1 or int(outcomes[0].get("isActive", 0) or 0) != 1:
+            raise SportyBetError(f"Leg {index}: selection is suspended or no longer available; rebuild the slip.")
+        try:
+            price = float(outcomes[0].get("odds"))
+        except (TypeError, ValueError, OverflowError):
+            price = 0.0
+        if not (1.0 < price < 10000):
+            raise SportyBetError(f"Leg {index}: bookmaker returned an invalid price.")
+        refreshed.append({**item, "odds": price, "startTime": start_ms})
+    return refreshed
+
+
 def create_booking(resolved):
+    """Revalidate every native selection, then request a share code only."""
+    current = _revalidate_selections(resolved)
     selections = [{
         "eventId": x["eventId"],
         "marketId": x["marketId"],
         "specifier": x.get("specifier"),
         "outcomeId": x["outcomeId"],
-    } for x in resolved]
+    } for x in current]
     try:
         response = SESSION.post(
             f"{BASE}/orders/share",
@@ -201,20 +268,24 @@ def create_booking(resolved):
         raise SportyBetError(f"SportyBet booking request failed: {type(exc).__name__}.") from None
     except ValueError:
         raise SportyBetError("SportyBet returned an unreadable booking response.") from None
-    if payload.get("bizCode") not in (None, 10000):
-        raise SportyBetError(str(payload.get("message") or "SportyBet did not accept these selections.")[:250])
+    if not isinstance(payload, dict) or payload.get("bizCode") not in (10000,):
+        message = payload.get("message") if isinstance(payload, dict) else None
+        raise SportyBetError(str(message or "SportyBet did not accept these selections.")[:250])
     data = payload.get("data") or {}
     code = data.get("shareCode")
-    if not code:
-        unavailable = data.get("unavailableOutcomes") or []
-        detail = f" {len(unavailable)} selection(s) were unavailable." if unavailable else ""
-        raise SportyBetError("SportyBet did not return a booking code." + detail)
+    unavailable = data.get("unavailableOutcomes") or []
+    accepted = data.get("outcomes") or []
+    if unavailable:
+        raise SportyBetError(f"SportyBet rejected {len(unavailable)} selection(s) during booking validation. Nothing has been accepted as a complete slip; rebuild and review.")
+    if not code or len(accepted) != len(current):
+        raise SportyBetError("SportyBet did not confirm every requested selection; no complete booking code will be shown.")
     return {
         "bookingCode": str(code),
         "shareURL": str(data.get("shareURL") or ""),
-        "legs": data.get("outcomes") or [],
-        "unavailable": data.get("unavailableOutcomes") or [],
+        "legs": accepted,
+        "unavailable": unavailable,
         "deadline": data.get("deadline"),
+        "revalidatedSelections": current,
     }
 
 
