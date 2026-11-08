@@ -124,7 +124,7 @@ def _resolve_market(event, market_text, selection_text):
         # Match the full side + line first; matching only "over"/"under"
         # incorrectly rejects valid outcomes carrying the handicap in desc.
         wanted_side = "over" if pnorm.startswith(("over", "o")) else "under"
-        wanted_line = re.search(r"\\d+(?:\\.\\d+)?", pick)
+        wanted_line = re.search(r"\d+(?:\.\d+)?", pick)
         wanted_line = wanted_line.group(0) if wanted_line else line
 
         def outcome_matches_total(outcome):
@@ -132,7 +132,7 @@ def _resolve_market(event, market_text, selection_text):
             normalized = _norm(desc)
             if normalized == pnorm:
                 return True
-            desc_match = re.match(r"^\\s*(over|under|o|u)\\s*(\\d+(?:\\.\\d+)?)?\\s*$", desc, re.I)
+            desc_match = re.match(r"^\s*(over|under|o|u)\s*(\d+(?:\.\d+)?)?\s*$", desc, re.I)
             if not desc_match:
                 return False
             side = desc_match.group(1).lower()
