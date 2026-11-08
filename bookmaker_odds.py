@@ -227,6 +227,9 @@ def fetch_sportybet(day: date | None = None, max_pages=60):
             LOG.warning("SportyBet full market detail failed for %s: %s", event_id, detail_error)
 
         if not markets:
+            market_source = "index_fallback"
+            if detail_error is None:
+                detail_error = "Event detail returned no active, priced outcomes."
             markets = _sportybet_parse_markets(record.get("index_markets"))
 
         if not markets:
