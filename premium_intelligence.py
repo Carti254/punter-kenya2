@@ -41,24 +41,28 @@ def score_matrix(home_rate: float, away_rate: float, max_goals: int = 12):
 
 def market_probabilities(home_rate: float, away_rate: float, max_goals: int = 12):
     matrix, tail = score_matrix(home_rate, away_rate, max_goals)
-    home = draw = away = over15 = over25 = over35 = btts = 0.0
+    home = draw = away = over15 = under15 = over25 = under25 = over35 = under35 = btts = btts_no = 0.0
     for h, row in enumerate(matrix):
         for a, p in enumerate(row):
             if h > a: home += p
             elif h == a: draw += p
             else: away += p
             if h + a >= 2: over15 += p
+            else: under15 += p
             if h + a >= 3: over25 += p
+            else: under25 += p
             if h + a >= 4: over35 += p
+            else: under35 += p
             if h > 0 and a > 0: btts += p
+            else: btts_no += p
     # Tail mass is not silently assigned. These probabilities are truncated estimates.
     return {
         "1": home, "X": draw, "2": away,
         "1X": home + draw, "X2": draw + away, "12": home + away,
-        "Over 1.5": over15, "Under 1.5": 1 - over15,
-        "Over 2.5": over25, "Under 2.5": 1 - over25,
-        "Over 3.5": over35, "Under 3.5": 1 - over35,
-        "BTTS Yes": btts, "BTTS No": 1 - btts,
+        "Over 1.5": over15, "Under 1.5": under15,
+        "Over 2.5": over25, "Under 2.5": under25,
+        "Over 3.5": over35, "Under 3.5": under35,
+        "BTTS Yes": btts, "BTTS No": btts_no,
         "_tail_mass": tail,
         "_model": "independent_poisson_truncated",
     }
@@ -76,6 +80,8 @@ def remove_margin(decimal_odds):
 
 def assess_price(probability, decimal_odds, minimum_edge=0.0):
     p = _number(probability, "Probability", 0)
+    if p > 1:
+        raise ValueError("Probability cannot exceed 1.")
     odds = _number(decimal_odds, "Decimal odds", 1.0000001)
     edge = p - 1 / odds
     ev = p * (odds - 1) - (1 - p)
