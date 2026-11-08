@@ -2175,7 +2175,7 @@ async def autobuild_sportybet_command(update, context):
             if fixture_count == 0:
                 failure = "FIXTURE RETRIEVAL FAILURE: no upcoming fixtures were available from the connected catalogues or SportyBet fallback."
             elif sportybet_count == 0:
-                failure = f"SPORTYBET FEED FAILURE: {fixture_count} fixtures were found, but SportyBet returned no priced events for the requested dates."
+                failure = f"NO SPORTYBET PRICED EVENTS FOR REQUESTED DATES: {fixture_count} fixtures were found from the connected catalogues, but the reachable SportyBet feed returned no priced events for those dates. This may mean SportyBet has no listed fixtures on the requested dates; it is not automatically an API outage."
             elif not matched_names:
                 failure = f"FIXTURE MATCHING FAILURE: {fixture_count} fixtures and {sportybet_count} SportyBet events were retrieved, but no teams could be confidently matched."
             else:
