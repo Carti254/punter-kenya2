@@ -8,7 +8,7 @@ class SpecialistModelMathTests(unittest.TestCase):
         over = _poisson_over(2.0, 1.5)
         under = _poisson_under(2.0, 1.5)
         self.assertAlmostEqual(over + under, 1.0, places=10)
-        self.assertAlmostEqual(over, 1 - (5 * __import__("math").exp(-2)), places=10)
+        self.assertAlmostEqual(over, 1 - (3 * __import__("math").exp(-2)), places=10)
 
     def test_integer_line_uses_strict_over_under(self):
         self.assertAlmostEqual(_poisson_over(1.0, 1), 1 - 2 * __import__("math").exp(-1), places=10)
