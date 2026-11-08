@@ -1940,8 +1940,8 @@ async def autobuild_sportybet_command(update, context):
     if rank_mode not in ("value", "odds", "probability"):
         await reply(update, "Ranking must be value, odds or probability.")
         return
-    market_filter = ",".join(market_parts) if market_parts else "all"
-    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\nTarget combined odds: {target:.2f}\nMarket filter: {market_filter}\nRanking: {rank_mode}\nScanning available model-supported SportyBet markets…\n\nControls: /autobuild 5 BTTS rank=odds | /autobuild 20 Correct Score rank=odds | /autobuild 10 market=1X2,Under 2.5 rank=value")
+    market_filter = " ".join(market_parts) if market_parts else "all"
+    await reply(update, f"🔎 SPORTYBET SCAN STARTED\nTarget: {target:.2f} | Filter: {market_filter} | Ranking: {rank_mode}\nScanning today and tomorrow using the SportyBet feed only. Betika requests are skipped for this command…")
     try:
         rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet")
         rows = [x for x in rows if str(x.get("bookmaker", "")).casefold() == "sportybet"]
