@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import unicodedata
 import re
 import math
+from difflib import SequenceMatcher
 import threading
 import json
 import time
@@ -1413,11 +1414,12 @@ async def process_slip_flow(update, context):
             return True
 
         if state == "analyze":
-            if " vs " not in message.casefold():
-                await reply(update, "Please use: HOME TEAM vs AWAY TEAM. Example: Arsenal vs Chelsea.")
+            if not re.search(r"\s+(?:vs?\.?|v)\s+", message, flags=re.IGNORECASE):
+                await reply(update, "Please include both teams, for example: Brighton vs Brentford.")
                 return True
             context.user_data.pop("slip_flow", None)
-            context.args = re.split(r"\s+vs\s+", message, maxsplit=1, flags=re.IGNORECASE)
+            # Preserve the separator: get_analysis() joins args into one query.
+            context.args = [message]
             await deepdive_command(update, context)
             return True
 
@@ -1819,22 +1821,40 @@ async def autobuild_sportybet_command(update, context):
     if args:
         try:
             target = float(args[0])
-            if not math.isfinite(target) or target < 1.5 or target > 50:
+            if not math.isfinite(target) or target <= 1.0:
                 raise ValueError
+            args = args[1:]
         except ValueError:
-            await reply(update, "Usage: /autobuild [target odds 1.50–50]. Example: /autobuild 10")
-            return
-    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\nTarget combined odds: {target:.2f}\nScanning qualifying candidates and checking SportyBet Kenya markets…")
+            pass
+    rank_mode = "value"
+    market_parts = []
+    for token in args:
+        lowered = token.casefold()
+        if lowered.startswith("rank="):
+            rank_mode = lowered.split("=", 1)[1]
+        elif lowered in ("value", "odds", "probability"):
+            rank_mode = lowered
+        else:
+            market_parts.append(token)
+    if rank_mode not in ("value", "odds", "probability"):
+        await reply(update, "Ranking must be value, odds or probability.")
+        return
+    market_filter = " ".join(market_parts) if market_parts else "all"
+    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\nTarget combined odds: {target:.2f}\nMarket filter: {market_filter}\nRanking: {rank_mode}\nScanning available model-supported SportyBet markets…")
     try:
-        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "all")
-        # The model scan can see both feeds; only use candidates priced by SportyBet.
+        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), market_filter)
         rows = [x for x in rows if str(x.get("bookmaker", "")).casefold() == "sportybet"]
-        chosen, product, used = [], 1.0, set()
-        for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
-            key = (item["home"], item["away"])
-            if key in used:
-                continue
-            chosen.append(item); used.add(key); product *= float(item["odds"])
+        if rank_mode == "odds":
+            rows.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
+        elif rank_mode == "probability":
+            rows.sort(key=lambda x: (x["probability"], x["ev"]), reverse=True)
+        else:
+            rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
+        chosen, product = [], 1.0
+        for item in rows:
+            # Keep the builder open to multiple markets from the same fixture.
+            chosen.append(item)
+            product *= float(item["odds"])
             if product >= target or len(chosen) >= 20:
                 break
         if not chosen:
@@ -2601,14 +2621,22 @@ def team_name_matches_query(query_name, actual_name):
             "deportivo coruna": "deportivo la coruna",
         }
         phrase = aliases.get(phrase, phrase)
-        return set(phrase.split())
+        return phrase
 
-    wanted = normalised(query_name)
-    actual = normalised(actual_name)
-    if not wanted or not actual:
+    wanted_phrase = normalised(query_name)
+    actual_phrase = normalised(actual_name)
+    if not wanted_phrase or not actual_phrase:
         return False
+    wanted = set(wanted_phrase.split())
+    actual = set(actual_phrase.split())
     if wanted.issubset(actual) or actual.issubset(wanted):
         return True
+
+    # Tolerate small spelling errors such as Brenford/Brentford while still
+    # requiring both sides of the fixture to match independently.
+    if min(len(wanted_phrase), len(actual_phrase)) >= 6:
+        if SequenceMatcher(None, wanted_phrase, actual_phrase).ratio() >= 0.88:
+            return True
 
     # Allow common provider short forms when all remaining words agree.
     abbreviations = {
@@ -3407,11 +3435,6 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                 for row in game.get("markets", []):
                     market_name = str(row.get("market") or "Unknown")
                     selection_name = str(row.get("selection") or "Unknown")
-                    # Respect the configured user exclusions consistently across every builder.
-                    if "btts" in _normal_market_text(market_name) or "both teams to score" in _normal_market_text(market_name):
-                        continue
-                    if re.search(r"\bunder\s*2\.5\b", selection_name, re.I):
-                        continue
                     probability, reason = _market_probability_for_row(prediction, row)
                     if probability is None:
                         if reason:
@@ -3487,7 +3510,7 @@ async def topvalue_command(update, context):
         lines.append(f"   Kick-off: {item['kickoff'] or 'Not supplied'}")
         if item.get("url"): lines.append(f"   {item['url']}")
         lines.append("")
-    lines.append("Important: forecasts remain experimental and are not historically calibrated. Historical results are not xG or lineup-adjusted. Estimated EV is not proof of an edge. Verify prices and rules. No BTTS or Under 2.5 picks are included.")
+    lines.append("Important: forecasts remain experimental and are not historically calibrated. Historical results are not xG or lineup-adjusted. Estimated EV is not proof of an edge. Verify prices and rules. Market availability depends on the bookmaker feed and model evidence.")
     message = "\n".join(lines)
     for offset in range(0, len(message), 3600):
         await reply(update, message[offset:offset+3600])
