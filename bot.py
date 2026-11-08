@@ -1182,6 +1182,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/bookies — bookmaker feed status\n"
         "/odds HOME vs AWAY — compare retrieved prices\n"
         "/fixtures — upcoming fixtures\n\n"
+        "🧠 AI ASSISTANT\n"
+        "Ask match questions in ordinary language, or send a betting-slip screenshot for reading and live selection validation.\n\n"
         "⚠️ Estimates are not guarantees. Prices must be checked with the bookmaker. "
         "PUNTER KENYA does not place bets."
     )
@@ -1700,7 +1702,7 @@ async def ai_natural_language_handler(update: Update, context: ContextTypes.DEFA
             await fixtures(update, context)
         elif action == "topvalue":
             market = str(intent.get("market") or "all").casefold()
-            context.args = ([market] if market in ("home", "draw", "away", "over15", "over25", "safest") else [])
+            context.args = ([market] if market.casefold() != "all" else [])
             if date in ("today", "tomorrow"):
                 context.args.append(date)
             await topvalue_command(update, context)
@@ -3592,7 +3594,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
 
 async def topvalue_command(update, context):
     args = [x.casefold() for x in (context.args or [])]
-    market = args[0] if args and args[0] in ("home", "draw", "away", "over15", "over25", "safest") else "all"
+    market = args[0] if args and args[0] not in ("today", "tomorrow") else "all"
     day_arg = next((x for x in args if x in ("today", "tomorrow")), "both")
     day = day_arg
     days = (day,) if day != "both" else ("today", "tomorrow")
