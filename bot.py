@@ -4596,7 +4596,7 @@ def refresh_pending_bet_records(user_id=None):
         return {"checked": 0, "settled": 0, "ambiguous": 0, "pending": 0}
     leagues = fetch_all_leagues()
     result_cache = {}
-    settled = ambiguous = checked = 0
+    settled = ambiguous = checked = requires_market_data = 0
     for bet in pending:
         match_date = bet.get("match_date")
         if not match_date:
@@ -4633,12 +4633,16 @@ def refresh_pending_bet_records(user_id=None):
         try:
             settle_bet(int(bet["user_id"]), int(bet["id"]), matches[0][0], matches[0][1])
             settled += 1
-        except ValueError:
-            # Another worker/manual action may already have settled it.
+        except ValueError as exc:
+            # Unsupported market/selection: a full-time score is insufficient.
+            # Keep the record pending; never guess a result.
+            if "Pending bet record not found" not in str(exc):
+                requires_market_data += 1
             continue
         except Exception:
             logger.exception("Automatic settlement failed for bet #%s", bet.get("id"))
     return {"checked": checked, "settled": settled, "ambiguous": ambiguous,
+            "requires_market_data": requires_market_data,
             "pending": max(0, len(pending) - settled)}
 
 
@@ -4660,8 +4664,9 @@ async def betresults_command(update, context):
             f"Pending bets checked: {result['checked']}\n"
             f"Newly settled: {result['settled']}\n"
             f"Ambiguous results left untouched: {result['ambiguous']}\n"
+            f"Require market-specific data/manual review: {result['requires_market_data']}\n"
             f"Still pending: {result['pending']}\n\n"
-            "Results are matched by exact home team, away team and match date. Unmatched or ambiguous records are never guessed; use /betsettle for those.")
+            "Full-time scores settle only score-based markets. Half-time, corners, cards, player props and unsupported Asian lines stay pending until the required market data is available; they are never guessed. Results are matched by exact home team, away team and UTC match date.")
     except Exception as exc:
         await reply(update, f"⚠️ Result refresh failed: {type(exc).__name__}: {str(exc)[:250]}")
 
