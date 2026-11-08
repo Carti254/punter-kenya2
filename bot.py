@@ -27,7 +27,7 @@ from database import get_connection, test_connection
 from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find_bookmaker_event
 from slip_manager import create_slip, get_slip, list_slips, update_slip
 from schema_migrations import run_migrations
-from results_tracker import record_bet, settle_bet, bet_statistics
+from results_tracker import record_bet, settle_bet, bet_statistics, list_pending_bets
 from prediction_validation import brier_score, log_loss, fit_temperature, apply_temperature
 
 # ============================================================
@@ -4524,6 +4524,84 @@ async def calibrate_command(update, context):
         await reply(update, f"⚠️ Calibration evaluation failed: {type(exc).__name__}: {str(exc)[:250]}")
 
 
+
+def refresh_pending_bet_records():
+    """Settle logged bets only when one exact team/date result exists in source CSV."""
+    pending = list_pending_bets()
+    if not pending:
+        return {"checked": 0, "settled": 0, "ambiguous": 0, "pending": 0}
+    leagues = fetch_all_leagues()
+    result_cache = {}
+    settled = ambiguous = checked = 0
+    for bet in pending:
+        match_date = bet.get("match_date")
+        if not match_date:
+            continue
+        date_text = match_date.isoformat() if hasattr(match_date, "isoformat") else str(match_date)[:10]
+        matches = []
+        for league in leagues:
+            folder = str(league.get("leagueShortcut") or "").strip()
+            if not folder:
+                continue
+            if folder not in result_cache:
+                try:
+                    result_cache[folder] = fetch_openmatchday_csv(folder, "results")
+                except Exception as exc:
+                    logger.warning("Could not load results CSV for %s: %s", folder, exc)
+                    result_cache[folder] = []
+            for row in result_cache[folder]:
+                if str(row.get("date") or "").strip() != date_text:
+                    continue
+                if canonical_team_key(row.get("home")) != canonical_team_key(bet.get("home_team")):
+                    continue
+                if canonical_team_key(row.get("away")) != canonical_team_key(bet.get("away_team")):
+                    continue
+                try:
+                    hg, ag = int(row.get("ft_home")), int(row.get("ft_away"))
+                except (TypeError, ValueError):
+                    continue
+                matches.append((hg, ag))
+        checked += 1
+        if len(matches) != 1:
+            if len(matches) > 1:
+                ambiguous += 1
+            continue
+        try:
+            settle_bet(int(bet["user_id"]), int(bet["id"]), matches[0][0], matches[0][1])
+            settled += 1
+        except ValueError:
+            # Another worker/manual action may already have settled it.
+            continue
+        except Exception:
+            logger.exception("Automatic settlement failed for bet #%s", bet.get("id"))
+    return {"checked": checked, "settled": settled, "ambiguous": ambiguous,
+            "pending": max(0, len(pending) - settled)}
+
+
+async def automatic_bet_settlement_job(context):
+    try:
+        result = await asyncio.to_thread(refresh_pending_bet_records)
+        if result["settled"]:
+            logger.info("Automatically settled %s logged bets from completed-results CSV.", result["settled"])
+    except Exception:
+        logger.exception("Scheduled bet-result refresh failed")
+
+
+async def betresults_command(update, context):
+    await reply(update, "🔄 Checking completed results and settling only exact fixture/date matches...")
+    try:
+        result = await asyncio.to_thread(refresh_pending_bet_records)
+        await reply(update,
+            "📊 AUTOMATIC BET SETTLEMENT\n\n"
+            f"Pending bets checked: {result['checked']}\n"
+            f"Newly settled: {result['settled']}\n"
+            f"Ambiguous results left untouched: {result['ambiguous']}\n"
+            f"Still pending: {result['pending']}\n\n"
+            "Results are matched by exact home team, away team and match date. Unmatched or ambiguous records are never guessed; use /betsettle for those.")
+    except Exception as exc:
+        await reply(update, f"⚠️ Result refresh failed: {type(exc).__name__}: {str(exc)[:250]}")
+
+
 async def betlog_command(update, context):
     """Log a real bookmaker selection and its original price/stake."""
     raw = " ".join(context.args or [])
@@ -4608,7 +4686,7 @@ def main():
         .build()
     )
 
-    handlers = [
+    if database_enabled and app.job_queue is not None:\n        app.job_queue.run_repeating(automatic_bet_settlement_job, interval=6 * 60 * 60, first=60, name="automatic-bet-results")\n\n    handlers = [
         ("start", start),
         ("help", help_command),
         ("about", about),
@@ -4634,7 +4712,7 @@ def main():
         ("calibrate", calibrate_command),
         ("betlog", betlog_command),
         ("betsettle", betsettle_command),
-        ("betstats", betstats_command),
+        ("betstats", betstats_command),\n        ("betresults", betresults_command),
         ("fixtures", fixtures),
         ("syncfixtures", syncfixtures),
         ("live", live),
