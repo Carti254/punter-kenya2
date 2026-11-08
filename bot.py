@@ -1246,7 +1246,7 @@ async def process_slip_flow(update, context):
             ]
             for index, item in enumerate(resolved, 1):
                 preview_lines.append(
-                    f"{index}. {item['fixture']}\\n"
+                    f"{index}. {item['fixture']}\n"
                     f"   {item['market']}: {item['selection']} @ {item['odds']:.2f}"
                 )
             preview_lines.extend([
@@ -1258,7 +1258,7 @@ async def process_slip_flow(update, context):
                 InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"),
                 InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel"),
             ]])
-            await update.effective_message.reply_text("\\n".join(preview_lines), reply_markup=keyboard)
+            await update.effective_message.reply_text("\n".join(preview_lines), reply_markup=keyboard)
             return True
 
         if state == "convat_code":
@@ -1504,14 +1504,14 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
             lines.extend(["", f"Slip link: {result['shareURL']}"])
         if result.get("unavailable"):
             lines.extend(["", f"⚠️ SportyBet reported {len(result['unavailable'])} unavailable selection(s). Check the loaded code carefully."])
-        await query.edit_message_text("\\n".join(lines))
+        await query.edit_message_text("\n".join(lines))
         context.user_data.pop("pending_sportybet_booking", None)
     except SportyBetError as exc:
         logger.warning("SportyBet booking creation failed: %s", exc)
         await query.edit_message_text(
-            "⚠️ SPORTYBET DID NOT CONFIRM A BOOKING CODE\\n\\n"
+            "⚠️ SPORTYBET DID NOT CONFIRM A BOOKING CODE\n\n"
             + str(exc)[:450]
-            + "\\n\\nThe request was not automatically repeated. Refresh fixtures and rebuild if no code appears."
+            + "\n\nThe request was not automatically repeated. Refresh fixtures and rebuild if no code appears."
         )
         context.user_data.pop("pending_sportybet_booking", None)
     except Exception as exc:
@@ -3213,7 +3213,7 @@ async def accumulator_status_command(update, context):
         if combined >= target: break
         if len(chosen) >= 6: break
     if not chosen or combined < target:
-        await reply(update, f"🚫 NO ACCUMULATOR RECOMMENDED\\n\\nCould not reach {target:.2f} using selections that passed the minimum probability (62%) and estimated EV (+3%) filters. PUNTER will not add weak legs just to reach a target.")
+        await reply(update, f"🚫 NO ACCUMULATOR RECOMMENDED\n\nCould not reach {target:.2f} using selections that passed the minimum probability (62%) and estimated EV (+3%) filters. PUNTER will not add weak legs just to reach a target.")
         return
     probability_product = math.prod(x["probability"] for x in chosen)
     lines = ["🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR", f"Target: {target:.2f} | Combined decimal odds: {combined:.2f}", ""]
@@ -3224,7 +3224,7 @@ async def accumulator_status_command(update, context):
     lines.extend(["", f"Naive independent-leg probability product: {probability_product:.2%}",
         "This product assumes independence and may be materially wrong. Selections may be correlated; this is not a calibrated accumulator probability.",
         "All legs are experimental estimates, not guarantees. Check every market and price with the bookmaker. No BTTS or Under 2.5 selections."])
-    await reply(update, "\\n".join(lines))
+    await reply(update, "\n".join(lines))
 
 
 def ensure_prediction_records_table(cursor):
