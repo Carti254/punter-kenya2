@@ -14,7 +14,7 @@ import time
 import copy
 import uuid
 from convat_client import ConvatError, preview_betika_code, convert_betika_to_sportybet
-from sportybet_client import SportyBetError, prepare_slip as prepare_sportybet_slip, create_booking as create_sportybet_booking
+from sportybet_client import SportyBetError, prepare_slip as prepare_sportybet_slip, create_booking as create_sportybet_booking, get_booking as get_sportybet_booking
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -1259,6 +1259,134 @@ async def process_slip_flow(update, context):
                 InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel"),
             ]])
             await update.effective_message.reply_text("\n".join(preview_lines), reply_markup=keyboard)
+            return True
+
+        if state == "sportybet_edit_code":
+            code = "".join(message.split()).upper()
+            booking = await asyncio.to_thread(get_sportybet_booking, code)
+            context.user_data["sportybet_manage_source"] = booking
+            context.user_data["slip_flow"] = "sportybet_edit_remove"
+            lines = [f"✏️ SPORTYBET SLIP EDITOR — {booking['bookingCode']}", f"Selections: {len(booking['selections'])}", ""]
+            for i, leg in enumerate(booking["selections"], 1):
+                lines.append(f"{i}. {leg['fixture']} | {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}")
+            lines.extend(["", "Send the leg numbers to REMOVE, separated by commas (e.g. 2,5,7).", "Send KEEP ALL to recreate an unchanged copy, or /cancel."])
+            await reply(update, "\\n".join(lines))
+            return True
+
+        if state == "sportybet_edit_remove":
+            booking = context.user_data.get("sportybet_manage_source") or {}
+            selections = booking.get("selections") or []
+            if message.casefold() == "keep all":
+                kept = list(selections)
+            else:
+                try:
+                    remove = {int(x.strip()) for x in message.split(",") if x.strip()}
+                except ValueError:
+                    await reply(update, "Send leg numbers separated by commas, e.g. 2,5,7, or KEEP ALL.")
+                    return True
+                if not remove or min(remove) < 1 or max(remove) > len(selections):
+                    await reply(update, f"Choose leg numbers from 1 to {len(selections)}.")
+                    return True
+                kept = [x for i, x in enumerate(selections, 1) if i not in remove]
+            if not kept:
+                await reply(update, "You cannot generate an empty slip. Keep at least one selection.")
+                return True
+            context.user_data["pending_sportybet_groups"] = [kept]
+            context.user_data.pop("slip_flow", None)
+            combined = math.prod(float(x["odds"]) for x in kept)
+            removed_count = len(selections) - len(kept)
+            preview = [f"✏️ EDIT PREVIEW — {booking.get('bookingCode')}", f"Kept: {len(kept)} | Removed: {removed_count}", f"New combined odds: {combined:.2f}", ""]
+            preview.extend(f"{i}. {x['fixture']} | {x['market']}: {x['selection']} @ {x['odds']:.2f}" for i, x in enumerate(kept, 1))
+            preview.extend(["", "Confirm to create a NEW SportyBet code. The original code remains unchanged."])
+            await update.effective_message.reply_text("\\n".join(preview), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate edited code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
+            return True
+
+        if state == "sportybet_merge_codes":
+            codes = [x.strip().upper() for x in re.split(r"[\\s,]+", message) if x.strip()]
+            if len(codes) < 2 or len(codes) > 10 or len(set(codes)) != len(codes):
+                await reply(update, "Send 2–10 different SportyBet booking codes, separated by spaces or new lines.")
+                return True
+            bookings = await asyncio.gather(*[asyncio.to_thread(get_sportybet_booking, code) for code in codes])
+            selections = []
+            seen = set()
+            for booking in bookings:
+                for leg in booking["selections"]:
+                    key = (leg["eventId"], leg["marketId"], leg["outcomeId"])
+                    if key not in seen:
+                        seen.add(key)
+                        selections.append(leg)
+            if not selections:
+                raise SportyBetError("No selections could be merged.")
+            if len(selections) > 20:
+                raise SportyBetError(f"Merged slip has {len(selections)} unique selections; SportyBet builder currently supports at most 20.")
+            context.user_data["pending_sportybet_groups"] = [selections]
+            context.user_data.pop("slip_flow", None)
+            odds = math.prod(float(x["odds"]) for x in selections)
+            await update.effective_message.reply_text(f"🔗 SPORTYBET MERGE PREVIEW\\nSource codes: {len(codes)}\\nUnique selections: {len(selections)}\\nCombined odds: {odds:.2f}\\nDuplicate identical selections were removed.\\n\\nConfirm to create one new SportyBet code; source codes remain unchanged.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate merged code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
+            return True
+
+        if state == "sportybet_split_code":
+            code = "".join(message.split()).upper()
+            booking = await asyncio.to_thread(get_sportybet_booking, code)
+            context.user_data["sportybet_manage_source"] = booking
+            context.user_data["slip_flow"] = "sportybet_split_size"
+            await reply(update, f"✂️ SPORTYBET SPLITTER\\nLoaded {len(booking['selections'])} selections from {booking['bookingCode']}.\\nSend selections per new slip (e.g. 5).")
+            return True
+
+        if state == "sportybet_split_size":
+            booking = context.user_data.get("sportybet_manage_source") or {}
+            try:
+                chunk_size = int(message)
+            except ValueError:
+                await reply(update, "Send a whole number, e.g. 5.")
+                return True
+            selections = booking.get("selections") or []
+            if chunk_size < 1 or chunk_size >= len(selections):
+                await reply(update, f"Choose between 1 and {len(selections)-1}.")
+                return True
+            groups = [selections[i:i+chunk_size] for i in range(0, len(selections), chunk_size)]
+            context.user_data["pending_sportybet_groups"] = groups
+            context.user_data.pop("slip_flow", None)
+            lines = [f"✂️ SPORTYBET SPLIT PREVIEW — {len(groups)} new slips"]
+            for i, group in enumerate(groups, 1):
+                lines.append(f"Slip {i}: {len(group)} selections | odds {math.prod(float(x['odds']) for x in group):.2f}")
+            lines.append("Confirm to generate separate SportyBet codes. Original code remains unchanged.")
+            await update.effective_message.reply_text("\\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate split codes", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
+            return True
+
+        if state == "sportybet_trim_code":
+            code = "".join(message.split()).upper()
+            booking = await asyncio.to_thread(get_sportybet_booking, code)
+            context.user_data["sportybet_manage_source"] = booking
+            context.user_data["slip_flow"] = "sportybet_trim_target"
+            odds = math.prod(float(x["odds"]) for x in booking["selections"])
+            await reply(update, f"🎯 TARGET-ODDS TRIM\\nLoaded {len(booking['selections'])} selections. Current combined odds: {odds:.2f}.\\nSend your maximum target odds (e.g. 10).")
+            return True
+
+        if state == "sportybet_trim_target":
+            booking = context.user_data.get("sportybet_manage_source") or {}
+            try:
+                target = float(message)
+            except ValueError:
+                await reply(update, "Enter a valid target odds number, e.g. 10.")
+                return True
+            if not math.isfinite(target) or target <= 1:
+                await reply(update, "Target odds must be greater than 1.00.")
+                return True
+            kept = list(booking.get("selections") or [])
+            removed = []
+            # Remove the highest-odds legs first until the product reaches the requested ceiling.
+            while len(kept) > 1 and math.prod(float(x["odds"]) for x in kept) > target:
+                leg = max(kept, key=lambda x: float(x["odds"]))
+                kept.remove(leg)
+                removed.append(leg)
+            if math.prod(float(x["odds"]) for x in kept) > target:
+                await reply(update, "Even one remaining selection exceeds that target. Choose a higher target.")
+                return True
+            context.user_data["pending_sportybet_groups"] = [kept]
+            context.user_data.pop("slip_flow", None)
+            new_odds = math.prod(float(x["odds"]) for x in kept)
+            await update.effective_message.reply_text(f"🎯 TRIM PREVIEW\\nTarget: {target:.2f}\\nNew odds: {new_odds:.2f}\\nRetained: {len(kept)} | Removed: {len(removed)}\\n\\nRemoved legs:\\n" + ("\\n".join(f"• {x['fixture']} — {x['selection']}" for x in removed) or "None") + "\\n\\nConfirm to create a new SportyBet code.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate trimmed code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
             return True
 
         if state == "convat_code":
