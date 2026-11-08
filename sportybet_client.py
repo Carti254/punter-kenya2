@@ -206,6 +206,70 @@ def prepare_slip(lines):
     return resolved
 
 
+def prepare_slip_from_candidates(candidates):
+    """Resolve scanner candidates by their exact bookmaker-native IDs, never fuzzy names."""
+    if not candidates or len(candidates) > 20:
+        raise SportyBetError("A SportyBet slip must contain between 1 and 20 selections.")
+    fixtures = _get_fixtures()
+    by_id = {str(event.get("eventId")): event for event in fixtures if event.get("eventId") is not None}
+    resolved, seen = [], set()
+    now_ms = int(time.time() * 1000)
+    for number, candidate in enumerate(candidates, 1):
+        event_id = str(candidate.get("event_id") or "")
+        market_id = str(candidate.get("market_id") or "")
+        outcome_id = str(candidate.get("outcome_id") or "")
+        if not event_id or not market_id or not outcome_id:
+            raise SportyBetError(f"Leg {number}: scanner did not preserve all bookmaker-native IDs.")
+        event = by_id.get(event_id)
+        if not event:
+            raise SportyBetError(f"Leg {number}: fixture disappeared from the current SportyBet feed.")
+        try:
+            start_ms = int(event.get("estimateStartTime") or 0)
+        except (TypeError, ValueError):
+            start_ms = 0
+        if start_ms <= now_ms:
+            raise SportyBetError(f"Leg {number}: fixture has started or has no valid kick-off time.")
+        markets = [
+            market for market in (event.get("markets") or [])
+            if str(market.get("id")) == market_id
+            and (market.get("specifier") or None) == (candidate.get("specifier") or None)
+        ]
+        if len(markets) != 1:
+            raise SportyBetError(f"Leg {number}: exact market ID/specifier is missing or ambiguous.")
+        outcomes = [
+            outcome for outcome in (markets[0].get("outcomes") or [])
+            if str(outcome.get("id")) == outcome_id
+        ]
+        if len(outcomes) != 1 or int(outcomes[0].get("isActive", 0) or 0) != 1:
+            raise SportyBetError(f"Leg {number}: exact outcome is suspended or unavailable.")
+        try:
+            live_odds = float(outcomes[0].get("odds"))
+            preview_odds = float(candidate.get("odds"))
+        except (TypeError, ValueError, OverflowError):
+            raise SportyBetError(f"Leg {number}: invalid preview or live odds.") from None
+        if not (1.0 < live_odds < 10000 and 1.0 < preview_odds < 10000):
+            raise SportyBetError(f"Leg {number}: invalid decimal odds.")
+        if abs(live_odds - preview_odds) > 0.001:
+            raise SportyBetError(
+                f"Leg {number}: odds changed from {preview_odds:.3f} to {live_odds:.3f}; "
+                "the slip preview must be rebuilt."
+            )
+        key = (event_id, market_id, outcome_id)
+        if key in seen:
+            raise SportyBetError(f"Leg {number}: duplicate native selection.")
+        seen.add(key)
+        resolved.append({
+            "eventId": event_id, "marketId": market_id,
+            "specifier": markets[0].get("specifier"),
+            "outcomeId": outcome_id,
+            "fixture": f'{event.get("homeTeamName")} vs {event.get("awayTeamName")}',
+            "league": "", "market": str(markets[0].get("desc") or candidate.get("market") or ""),
+            "selection": str(outcomes[0].get("desc") or candidate.get("selection") or ""),
+            "odds": live_odds, "startTime": start_ms,
+        })
+    return resolved
+
+
 def _revalidate_selections(resolved):
     """Re-read the live Kenyan feed and verify every native ID before sharing."""
     if not resolved:
