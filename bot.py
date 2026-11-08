@@ -4510,58 +4510,50 @@ def collect_walk_forward_forecasts(max_matches=2000):
 
 
 def evaluate_historical_calibration():
-    """Chronological walk-forward calibration test; never uses same-day/future results."""
-    rows = []
-    source = "stored pre-match prediction records"
-    try:
-        connection = get_connection()
-        try:
-            with connection.cursor() as cursor:
-                ensure_prediction_records_table(cursor)
-                cursor.execute("""
-                    SELECT match_date, p_home, p_draw, p_away, actual_home_goals, actual_away_goals
-                    FROM punter_prediction_records
-                    WHERE status='SETTLED' AND actual_home_goals IS NOT NULL
-                      AND actual_away_goals IS NOT NULL
-                    ORDER BY match_date ASC, id ASC
-                """)
-                rows = cursor.fetchall()
-        finally:
-            connection.close()
-    except Exception as exc:
-        logger.warning("Stored prediction history unavailable; using walk-forward reconstruction: %s", str(exc)[:180])
+    """Evaluate reconstructed pre-match forecasts; never trust records without kickoff timestamps.
 
-    if len(rows) < 80:
-        rows = collect_walk_forward_forecasts()
-        source = "walk-forward reconstruction from historical competition results"
-
+    Existing saved prediction rows do not persist the exact kickoff timestamp, so they
+    cannot prove that the forecast was created before the match started. For calibration
+    we therefore reconstruct each forecast using only completed results strictly before
+    that fixture's date, then evaluate on later match dates.
+    """
+    rows = collect_walk_forward_forecasts()
+    source = "walk-forward reconstruction from historical competition results"
+    rows = sorted(rows, key=lambda row: row["match_date"])
     probabilities, outcomes = [], []
+    usable = []
     for row in rows:
-        hg, ag = int(row["actual_home_goals"]), int(row["actual_away_goals"])
-        probabilities.append([float(row["p_home"]), float(row["p_draw"]), float(row["p_away"])])
-        outcomes.append(0 if hg > ag else 1 if hg == ag else 2)
+        try:
+            hg, ag = int(row["actual_home_goals"]), int(row["actual_away_goals"])
+            vector = [float(row["p_home"]), float(row["p_draw"]), float(row["p_away"])]
+            match_date = row["match_date"]
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if hg < 0 or ag < 0 or not all(math.isfinite(p) and 0 <= p <= 1 for p in vector) or sum(vector) <= 0:
+            continue
+        usable.append((match_date, vector, 0 if hg > ag else 1 if hg == ag else 2))
 
-    count = len(rows)
-    dates = sorted({row["match_date"] for row in rows})
+    count = len(usable)
+    dates = sorted({row[0] for row in usable})
     date_split = int(len(dates) * 0.70)
     if date_split < 1 or date_split >= len(dates):
         return {"ready": False, "count": count, "train": 0, "holdout": 0, "source": source}
     cutoff = dates[date_split]
-    train_indices = [i for i, row in enumerate(rows) if row["match_date"] < cutoff]
-    test_indices = [i for i, row in enumerate(rows) if row["match_date"] >= cutoff]
-    if len(train_indices) < 50 or len(test_indices) < 30:
-        return {"ready": False, "count": count, "train": len(train_indices),
-                "holdout": len(test_indices), "source": source}
+    train = [row for row in usable if row[0] < cutoff]
+    holdout = [row for row in usable if row[0] >= cutoff]
+    if len(train) < 50 or len(holdout) < 30:
+        return {"ready": False, "count": count, "train": len(train),
+                "holdout": len(holdout), "source": source}
 
-    train_p = [probabilities[i] for i in train_indices]
-    train_y = [outcomes[i] for i in train_indices]
-    test_p = [probabilities[i] for i in test_indices]
-    test_y = [outcomes[i] for i in test_indices]
+    train_p = [row[1] for row in train]
+    train_y = [row[2] for row in train]
+    test_p = [row[1] for row in holdout]
+    test_y = [row[2] for row in holdout]
     fitted = fit_temperature(train_p, train_y, minimum_samples=50)
     calibrated = [apply_temperature(p, fitted["temperature"]) for p in test_p]
     return {
-        "ready": True, "count": count, "train": len(train_indices),
-        "holdout": len(test_indices), "source": source,
+        "ready": True, "count": count, "train": len(train),
+        "holdout": len(holdout), "source": source,
         "temperature": fitted["temperature"],
         "raw_brier": brier_score(test_p, test_y),
         "calibrated_brier": brier_score(calibrated, test_y),
