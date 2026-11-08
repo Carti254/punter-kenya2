@@ -168,11 +168,146 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
         time.sleep(0.25)
     return games
 
+
+BETIKA_BASE = "https://api.betika.com/v1/uo"
+
+
+def _betika_items(payload):
+    """Extract a real list page; malformed/partial envelopes are errors, not empty days."""
+    if not isinstance(payload, dict):
+        raise ValueError("Betika returned a non-object list response.")
+    data = payload.get("data")
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("data", "matches", "items", "results"):
+            if isinstance(data.get(key), list):
+                return data[key]
+    for key in ("matches", "items", "results"):
+        if isinstance(payload.get(key), list):
+            return payload[key]
+    raise ValueError("Betika list response did not contain a recognised matches array.")
+
+
+def _betika_detail(match_id):
+    payload = _get(
+        BETIKA_BASE + "/match",
+        params={"parent_match_id": match_id},
+        timeout=(8, 20),
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("Betika match detail response was not an object.")
+    envelope = payload.get("data")
+    if not isinstance(envelope, dict):
+        raise ValueError("Betika match detail response is missing its data envelope.")
+    meta = envelope.get("meta")
+    odds_groups = envelope.get("data")
+    if not isinstance(meta, dict) or not isinstance(odds_groups, list):
+        raise ValueError("Betika match detail response has no metadata or odds array.")
+    return meta, odds_groups
+
+
+def _parse_betika_game(base, detail):
+    meta, odds_groups = detail
+    home = str(meta.get("home_team") or base.get("home_team") or "").strip()
+    away = str(meta.get("away_team") or base.get("away_team") or "").strip()
+    if not home or not away:
+        raise ValueError("Betika detail omitted a home or away team.")
+    kickoff = _eat_time(meta.get("start_time") or base.get("start_time"))
+    if not kickoff:
+        raise ValueError("Betika detail omitted a valid kick-off time.")
+    markets = []
+    for group in odds_groups:
+        if not isinstance(group, dict):
+            continue
+        market_name = group.get("name") or group.get("sub_type_name") or group.get("sub_type_id") or "Unknown market"
+        market_id = str(group.get("sub_type_id") or group.get("id") or "")
+        outcomes = group.get("odds")
+        if not isinstance(outcomes, list):
+            continue
+        for outcome in outcomes:
+            if not isinstance(outcome, dict):
+                continue
+            item = _market("Betika", market_name, outcome.get("display"), outcome.get("odd_value"),
+                           handicap=(outcome.get("parsed_special_bet_value") or {}).get("total"))
+            if not item:
+                continue
+            item["market_id"] = market_id
+            item["outcome_id"] = str(outcome.get("id") or outcome.get("odd_id") or outcome.get("display") or "")
+            item["specifier"] = (outcome.get("parsed_special_bet_value") or {}).get("total")
+            markets.append(item)
+    return {
+        "bookmaker": "Betika",
+        "event_id": str(base.get("parent_match_id")),
+        "home": home, "away": away,
+        "competition": meta.get("competition_name") or base.get("competition_name") or base.get("category"),
+        "kickoff_eat": kickoff, "markets": markets,
+        "url": "https://www.betika.com/en-ke/sportsbook",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def fetch_betika(day: date | None = None, max_pages=30):
+    """Read Betika Kenya's public upcoming football list and per-match odds."""
+    day = day or datetime.now(EAT).date()
+    offset = (day - datetime.now(EAT).date()).days
+    if offset < 0 or offset > 7:
+        raise ValueError("Betika date lookup supports today through seven days ahead.")
+    period_id = -1 if offset == 0 else offset
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://www.betika.com",
+        "Referer": "https://www.betika.com/en-ke/sportsbook",
+    }
+    matches, seen = [], set()
+    for page in range(1, max_pages + 1):
+        payload = _get(
+            BETIKA_BASE + "/matches",
+            params={
+                "page": page, "limit": 50, "tab": "upcoming",
+                "sub_type_id": 1, "sport_id": "14,139",
+                "sort_id": 2, "period_id": period_id, "esports": "false",
+            },
+            headers=headers, timeout=(8, 20),
+        )
+        page_items = _betika_items(payload)
+        for item in page_items:
+            if not isinstance(item, dict):
+                continue
+            match_id = item.get("parent_match_id")
+            if match_id is None or str(match_id) in seen:
+                continue
+            seen.add(str(match_id))
+            kickoff = _eat_time(item.get("start_time"))
+            if not kickoff or kickoff[:10] != day.isoformat():
+                continue
+            matches.append(item)
+        if len(page_items) < 50:
+            break
+        time.sleep(0.08)
+
+    def load_one(item):
+        detail = _betika_detail(item["parent_match_id"])
+        return _parse_betika_game(item, detail)
+
+    games = []
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = [pool.submit(load_one, item) for item in matches]
+        for future in as_completed(futures):
+            try:
+                game = future.result()
+                if game["markets"]:
+                    games.append(game)
+            except Exception as exc:
+                LOG.warning("Betika detail skipped after provider error: %s", str(exc)[:180])
+    return sorted(games, key=lambda game: game.get("kickoff_eat") or "")
+
 def fetch_all(day: date | None = None):
     """Fetch only providers with an implemented read-only adapter."""
     day = day or datetime.now(EAT).date()
     result = {"date": day.isoformat(), "bookmakers": {}, "errors": {}}
-    for name, fetcher in (("SportyBet", fetch_sportybet),):
+    for name, fetcher in (("Betika", fetch_betika), ("SportyBet", fetch_sportybet)):
         try:
             games = fetcher(day)
             result["bookmakers"][name] = {
@@ -183,7 +318,7 @@ def fetch_all(day: date | None = None):
         except Exception as exc:
             LOG.exception("%s odds fetch failed", name)
             result["errors"][name] = f"{type(exc).__name__}: {str(exc).split('?', 1)[0][:180]}"
-    result["supported_bookmakers"] = ["SportyBet"]
+    result["supported_bookmakers"] = ["Betika", "SportyBet"]
     return result
 
 
