@@ -39,6 +39,10 @@ from results_tracker import record_bet, settle_bet, bet_statistics
 
 BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
+# GOAL API is an optional supplementary results/statistics source.
+# Keep credentials and the provider base URL in environment variables.
+GOAL_API_KEY = os.getenv("GOAL_API_KEY")
+GOAL_API_BASE = (os.getenv("GOAL_API_BASE") or "").rstrip("/")
 OPENMATCHDAY_RAW_BASE = "https://raw.githubusercontent.com/oladeeayo/open-matchday/master"
 OPENMATCHDAY_INDEX_URL = f"{OPENMATCHDAY_RAW_BASE}/LEAGUE_INDEX.md"
 
@@ -4560,8 +4564,12 @@ def main():
 
     database_enabled = acquire_polling_lock()
     if database_enabled:
-        migration_result = run_migrations()
-        logger.info("Database migrations checked: %s", migration_result)
+        try:
+            migration_result = run_migrations()
+            logger.info("Database migrations checked: %s", migration_result)
+        except Exception:
+            release_polling_lock()
+            raise
 
     app = (
         Application.builder()
