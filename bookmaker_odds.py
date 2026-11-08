@@ -247,7 +247,7 @@ def _parse_betika_game(base, detail):
     }
 
 
-def fetch_betika(day: date | None = None, max_pages=30):
+def fetch_betika(day: date | None = None, max_pages=30, max_details=None):
     """Read Betika Kenya's public upcoming football list and per-match odds."""
     day = day or datetime.now(EAT).date()
     offset = (day - datetime.now(EAT).date()).days
@@ -289,6 +289,9 @@ def fetch_betika(day: date | None = None, max_pages=30):
             break
         time.sleep(0.08)
 
+    if max_details is not None:
+        matches = matches[:max(0, int(max_details))]
+
     def load_one(item):
         detail = _betika_detail(item["parent_match_id"])
         return _parse_betika_game(item, detail)
@@ -305,6 +308,30 @@ def fetch_betika(day: date | None = None, max_pages=30):
             except Exception as exc:
                 LOG.warning("Betika detail skipped after provider error: %s", str(exc)[:180])
     return sorted(games, key=lambda game: game.get("kickoff_eat") or "")
+
+def smoke_test_bookmakers():
+    """Small read-only live smoke check: one feed page and at most three Betika details."""
+    day = datetime.now(EAT).date()
+    output = {}
+    for name, fetcher in (
+        ("Betika", lambda: fetch_betika(day, max_pages=1, max_details=3)),
+        ("SportyBet", lambda: fetch_sportybet(day, max_pages=1)),
+    ):
+        try:
+            games = fetcher()
+            output[name] = {
+                "request_ok": True,
+                "events": len(games),
+                "priced_events": sum(bool(game.get("markets")) for game in games),
+                "sample": [f'{g.get("home")} vs {g.get("away")}' for g in games[:3]],
+            }
+        except Exception as exc:
+            output[name] = {
+                "request_ok": False,
+                "error": f"{type(exc).__name__}: {str(exc).split('?', 1)[0][:220]}",
+            }
+    return output
+
 
 def fetch_all(day: date | None = None):
     """Fetch only providers with an implemented read-only adapter."""
