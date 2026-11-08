@@ -55,3 +55,26 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Test migrations against disposable MySQL 8
         run: python -m unittest discover -s tests -p 'test_results_tracker.py' -v
+
+  live-bookmaker-smoke:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install HTTP client
+        run: python -m pip install requests==2.32.3
+      - name: Probe public Betika and SportyBet feeds (read-only)
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+          from bookmaker_odds import smoke_test_bookmakers
+          result = smoke_test_bookmakers()
+          print(json.dumps(result, indent=2))
+          if not all(item.get("request_ok") for item in result.values()):
+              sys.exit(1)
+          PY
