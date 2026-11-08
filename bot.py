@@ -4374,7 +4374,6 @@ def main():
         ("merge", merge_sportybet_command),
         ("split", split_sportybet_command),
         ("trim", trim_sportybet_command),
-        ("convert", convert_sportybet_command),
         ("cancel", cancel_slip_command),
     ]
 
