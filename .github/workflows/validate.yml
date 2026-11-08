@@ -85,7 +85,6 @@ jobs:
   historical-calibration:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -93,7 +92,7 @@ jobs:
           python-version: "3.12"
       - name: Install project dependencies
         run: python -m pip install -r requirements.txt
-      - name: Evaluate calibration on real historical match results
+      - name: Evaluate models on real historical match results
         run: |
           python - <<'PY'
           import json
@@ -105,8 +104,8 @@ jobs:
           if not result.get("ready"):
               print("CALIBRATION NOT READY: insufficient historical training/holdout sample.")
           else:
-              metrics = ("raw_brier", "calibrated_brier", "raw_logloss", "calibrated_logloss")
+              metrics = ("raw_brier", "calibrated_brier", "raw_logloss", "calibrated_logloss", "candidate_brier", "candidate_logloss", "baseline_brier", "baseline_logloss")
               if not all(math.isfinite(float(result[key])) for key in metrics):
                   raise SystemExit("Calibration returned non-finite metrics.")
-              print("CALIBRATION SAMPLE VERIFIED: chronological training and holdout metrics computed.")
+              print("MODEL VALIDATION VERIFIED: current model, venue-weighted candidate and training-only baseline compared on chronological holdout.")
           PY
