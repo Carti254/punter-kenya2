@@ -196,8 +196,9 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
              patch("bookmaker_odds.fetch_sportybet", return_value=[game]) as sporty:
             result = smoke_test_bookmakers()
         self.assertTrue(result["Betika"]["request_ok"])
+        self.assertTrue(result["Betika tomorrow"]["request_ok"])
         self.assertTrue(result["SportyBet"]["request_ok"])
-        betika.assert_called_once()
+        self.assertEqual(betika.call_count, 2)
         sporty.assert_called_once()
 
 
