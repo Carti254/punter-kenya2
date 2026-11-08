@@ -135,7 +135,7 @@ def rollover_status(user_id):
     connection = get_connection()
     try:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT rollover_days,rollover_target,rollover_started_on FROM punter_user_settings WHERE user_id=%s", (int(user_id),))
+            cursor.execute("SELECT rollover_days,rollover_target,rollover_started_on,updated_at FROM punter_user_settings WHERE user_id=%s", (int(user_id),))
             plan = cursor.fetchone()
             if not plan or not plan.get("rollover_days"):
                 return {"configured": False}
@@ -144,7 +144,7 @@ def rollover_status(user_id):
                 FROM punter_rollover_progress
                 WHERE user_id=%s AND plan_started=%s
                 ORDER BY day_number
-            """, (int(user_id), plan["rollover_started_on"]))
+            """, (int(user_id), plan.get("rollover_started_on") or plan["updated_at"].date()))
             entries = cursor.fetchall()
         completed = len(entries)
         wins = sum(r["result"] == "WON" for r in entries)
