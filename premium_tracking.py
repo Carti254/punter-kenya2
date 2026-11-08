@@ -113,7 +113,7 @@ def closing_line_value(user_id):
             rows = []
             for bet in bets:
                 cursor.execute("""
-                    SELECT bookmaker, decimal_odds, fetched_at
+                    SELECT bookmaker, decimal_odds, fetched_at, kickoff_eat
                     FROM punter_odds_snapshots
                     WHERE LOWER(home_team)=LOWER(%s)
                       AND LOWER(away_team)=LOWER(%s)
@@ -122,10 +122,24 @@ def closing_line_value(user_id):
                       AND LOWER(bookmaker)=LOWER(%s)
                       AND fetched_at >= %s
                       AND fetched_at <= DATE_ADD(%s, INTERVAL 1 DAY)
-                    ORDER BY fetched_at DESC LIMIT 1
+                    ORDER BY fetched_at DESC
                 """, (bet["home_team"], bet["away_team"], bet["market"],
                       bet["selection"], bet["bookmaker"], bet["created_at"], bet["match_date"]))
-                close = cursor.fetchone()
+                snapshots = cursor.fetchall()
+                close = None
+                # "Closing" means the last observed price before kick-off, never
+                # a post-match quote. Snapshot timestamps are stored as UTC-naive;
+                # kickoff_eat is stored in Nairobi local time.
+                for snapshot in snapshots:
+                    try:
+                        kickoff_local = datetime.strptime(snapshot["kickoff_eat"], "%Y-%m-%d %H:%M").replace(
+                            tzinfo=ZoneInfo("Africa/Nairobi"))
+                        kickoff_utc = kickoff_local.astimezone(timezone.utc).replace(tzinfo=None)
+                    except (TypeError, ValueError):
+                        continue
+                    if snapshot["fetched_at"] < kickoff_utc:
+                        close = snapshot
+                        break
                 if not close:
                     continue
                 taken = float(bet["decimal_odds"])
