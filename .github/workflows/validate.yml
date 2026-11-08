@@ -90,7 +90,10 @@ jobs:
                   raise SystemExit(f"{provider} public feed could not be reached successfully on either checked date.")
               priced_total = sum(int(item.get("priced_events", 0) or 0) for item in successful)
               if priced_total == 0:
-                  print(f"{provider}: feed reachable; no priced events were listed for the checked dates. This is not treated as an API outage.")
+                  raise SystemExit(
+                      f"{provider} endpoint responded but returned zero priced fixtures across the checked dates; "
+                      "fixture/market retrieval is NOT validated."
+                  )
           PY
 
   historical-calibration:
