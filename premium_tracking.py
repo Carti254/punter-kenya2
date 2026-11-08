@@ -67,16 +67,32 @@ def save_price_observations(games):
 
 
 def capture_current_prices(day=None):
-    """Fetch current read-only feeds and persist every returned price."""
+    """Fetch and persist read-only prices for today and tomorrow in Nairobi time.
+
+    An explicit day limits capture to that date; the scheduled job captures both
+    dates. Provider errors are returned per date and never hide successful feeds.
+    """
     from bookmaker_odds import fetch_all
-    result = fetch_all(day)
-    games = []
-    for provider in (result.get("bookmakers") or {}).values():
-        games.extend(provider.get("games") or [])
+    if day is None:
+        today = datetime.now(ZoneInfo("Africa/Nairobi")).date()
+        days = (today, today + timedelta(days=1))
+    else:
+        days = (day,)
+    games, errors, event_count = [], {}, 0
+    for target_day in days:
+        result = fetch_all(target_day)
+        date_games = []
+        for provider in (result.get("bookmakers") or {}).values():
+            date_games.extend(provider.get("games") or [])
+        games.extend(date_games)
+        event_count += len(date_games)
+        errors[target_day.isoformat()] = result.get("errors") or {}
+    saved = save_price_observations(games)
     return {
-        "saved": save_price_observations(games),
-        "events": len(games),
-        "errors": result.get("errors") or {},
+        "saved": saved,
+        "events": event_count,
+        "dates": [d.isoformat() for d in days],
+        "errors": errors,
     }
 
 
