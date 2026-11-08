@@ -5,6 +5,7 @@ The only write operation is /orders/share; it does not place a wager.
 """
 import re
 import time
+import math
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -182,7 +183,7 @@ def _resolve_market(event, market_text, selection_text):
         current_odds = float(outcome.get("odds"))
     except (TypeError, ValueError, OverflowError):
         current_odds = 0.0
-    if not (current_odds > 1.0 and current_odds < 10000):
+    if not (math.isfinite(current_odds) and current_odds > 1.0):
         raise SportyBetError(f'Selection "{selection_text}" has no valid current decimal price.')
     return {
         "eventId": str(event.get("eventId")),
