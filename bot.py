@@ -13,7 +13,7 @@ import json
 import time
 import copy
 import uuid
-from sportybet_client import SportyBetError, prepare_slip as prepare_sportybet_slip, create_booking as create_sportybet_booking, get_booking as get_sportybet_booking
+from sportybet_client import SportyBetError, prepare_slip as prepare_sportybet_slip, prepare_slip_from_candidates as prepare_sportybet_candidates, create_booking as create_sportybet_booking, get_booking as get_sportybet_booking
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -1563,6 +1563,11 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
         if not code:
             raise SportyBetError("SportyBet did not return a booking code.")
         actual_legs = result.get("legs") or []
+        try:
+            saved_slip_id = await asyncio.to_thread(create_slip, update.effective_user.id, pending, "SportyBet")
+        except Exception as storage_error:
+            saved_slip_id = None
+            logger.warning("Booking code created but internal slip archive failed: %s", storage_error)
         lines = [
             "✅ SPORTYBET KENYA BOOKING CODE CREATED",
             "━━━━━━━━━━━━━━━━━━━━",
@@ -1572,6 +1577,8 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
             "Open SportyBet Kenya, load this code and verify every selection and the current odds.",
             "No wager has been placed.",
         ]
+        if saved_slip_id is not None:
+            lines.append(f"Saved to PUNTER KENYA slip history as #{saved_slip_id}.")
         if result.get("shareURL"):
             lines.extend(["", f"Slip link: {result['shareURL']}"])
         if result.get("unavailable"):
@@ -1831,8 +1838,7 @@ async def autobuild_sportybet_command(update, context):
         if not chosen:
             await reply(update, "⚠️ NO USABLE SPORTYBET PICKS FOUND\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No SportyBet-priced, model-supported candidates were found."))
             return
-        raw_lines = [f"{x['home']} vs {x['away']} | {x['market']} | {x['selection']}" for x in chosen]
-        resolved = await asyncio.to_thread(prepare_sportybet_slip, raw_lines)
+        # Keep the exact event/market/outcome IDs from the odds scan; do not fuzzy-match again.\n        resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
         context.user_data["pending_sportybet_booking"] = resolved
         combined = math.prod(float(x["odds"]) for x in resolved)
         lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"), f"Selections: {len(resolved)}", ""]
