@@ -77,6 +77,7 @@ The database account needs permission to create and write the tables used by the
 - `/topvalue`, `/aipicks`, `/accumulator` — experimental scanner tools; may correctly return NO BET.
 - `/calculator ODDS STAKE` — calculate implied probability and potential return.
 - `/record`, `/oddshistory`, `/myslips` — prediction history, odds history and saved slips; require the optional database.
+- `/calibrate` — evaluate 1X2 forecast calibration on an earlier-training/later-holdout split; it refuses to fit with fewer than 50 training and 30 holdout forecasts and never changes live model settings automatically.
 - `/betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER]` — preserve the original odds and stake for a real bet you choose to log.
 - `/betsettle BET_ID HOME_GOALS AWAY_GOALS` — settle a logged 1X2 or standard total-goals selection against the confirmed full-time score.
 - `/betstats` — report logged wins, losses, voids, profit/loss and ROI. This is separate from prediction accuracy.
