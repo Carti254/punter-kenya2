@@ -158,6 +158,18 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
         self.assertEqual(game["markets"][0]["outcome_id"], "11")
         self.assertEqual(game["markets"][0]["odds"], 1.85)
 
+    def test_betika_skips_virtual_competitions(self):
+        from bookmaker_odds import fetch_betika, EAT
+        from datetime import datetime
+        kickoff = datetime.now(EAT).replace(microsecond=0).isoformat()
+        listing = {"data": [{"parent_match_id": 555, "home_team": "Virtual A",
+                             "away_team": "Virtual B", "start_time": kickoff,
+                             "competition_name": "Premier-Zoom"}]}
+        with patch("bookmaker_odds._get", return_value=listing) as mocked:
+            games = fetch_betika(datetime.now(EAT).date())
+        self.assertEqual(games, [])
+        mocked.assert_called_once()
+
     def test_betika_fetches_list_then_match_detail(self):
         from bookmaker_odds import fetch_betika, EAT
         from datetime import datetime
