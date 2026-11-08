@@ -4110,10 +4110,9 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             diagnostics.append("Markets retrieved but not model-supported yet: " + ", ".join(sorted(unsupported)[:12]))
 
     # Silently enrich exact SportyBet fixture matches with free BSD and PitchAPI
-    # evidence. External probabilities are cross-checks; only exact, supported
-    # exact BSD-supported result, goal-total and corner markets may supply a missing\n    # probability. SportyBet prices
-    # remain the executable prices used by the accumulator.
-    try:
+    # evidence. External probabilities are cross-checks; exact BSD-supported
+    # result, goal-total and corner markets may supply missing probabilities.
+    # SportyBet prices remain the executable prices used by the accumulator.
         candidates, free_source_stats = enrich_free_football_sources(candidates, max_fixtures=20)
         logger.info("Free football source enrichment: %s", free_source_stats)
         if free_source_stats.get("errors"):
