@@ -79,7 +79,7 @@ SPORTYBET_BASE = "https://www.sportybet.com/api/ke"
 
 
 def fetch_sportybet(day: date | None = None, max_pages=30):
-    """Fetch SportyBet Kenya football 1X2 prices from its public web JSON feed."""
+    """Fetch all active SportyBet Kenya football markets and outcomes from its public JSON feed."""
     day = day or datetime.now(EAT).date()
     headers = {
         "Accept": "application/json, text/plain, */*",
@@ -91,7 +91,7 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
     for page in range(1, max_pages + 1):
         payload = _get(
             SPORTYBET_BASE + "/factsCenter/pcUpcomingEvents",
-            params={"sportId": "sr:sport:1", "marketId": "1", "pageSize": 100,
+            params={"sportId": "sr:sport:1", "pageSize": 100,
                     "pageNum": page, "option": 2, "_t": int(time.time() * 1000)},
             headers=headers, timeout=(8, 20),
         )
@@ -119,14 +119,20 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
                     continue
                 markets = []
                 for market in event.get("markets", []) or []:
-                    if not isinstance(market, dict) or str(market.get("id")) != "1":
+                    if not isinstance(market, dict):
                         continue
+                    market_name = market.get("desc") or market.get("name") or market.get("id") or "Unknown market"
+                    market_id = str(market.get("id") or "")
+                    specifier = market.get("specifier")
                     for outcome in market.get("outcomes", []) or []:
                         if not isinstance(outcome, dict) or int(outcome.get("isActive", 0) or 0) != 1:
                             continue
-                        selection = {"1": "Home", "2": "Draw", "3": "Away"}.get(str(outcome.get("id")))
-                        item = _market("SportyBet", "Match Result (1X2)", selection, outcome.get("odds")) if selection else None
+                        selection = outcome.get("desc") or outcome.get("name") or outcome.get("id")
+                        item = _market("SportyBet", market_name, selection, outcome.get("odds"), handicap=specifier)
                         if item:
+                            item["market_id"] = market_id
+                            item["outcome_id"] = str(outcome.get("id") or "")
+                            item["specifier"] = specifier
                             markets.append(item)
                 if markets:
                     games.append({
@@ -142,7 +148,6 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
             break
         time.sleep(0.25)
     return games
-
 
 def fetch_all(day: date | None = None):
     """Fetch only providers with an implemented read-only adapter."""
