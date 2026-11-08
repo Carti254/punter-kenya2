@@ -78,3 +78,32 @@ jobs:
           if not all(item.get("request_ok") for item in result.values()):
               sys.exit(1)
           PY
+
+  historical-calibration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Evaluate calibration on real historical match results
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from bot import evaluate_historical_calibration
+
+          result = evaluate_historical_calibration()
+          print(json.dumps(result, default=str, indent=2))
+          if not result.get("ready"):
+              print("CALIBRATION NOT READY: insufficient historical training/holdout sample.")
+          else:
+              metrics = ("raw_brier", "calibrated_brier", "raw_logloss", "calibrated_logloss")
+              if not all(math.isfinite(float(result[key])) for key in metrics):
+                  raise SystemExit("Calibration returned non-finite metrics.")
+              print("CALIBRATION SAMPLE VERIFIED: chronological training and holdout metrics computed.")
+          PY
