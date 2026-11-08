@@ -211,14 +211,22 @@ def _betika_detail(match_id):
     )
     if not isinstance(payload, dict):
         raise ValueError("Betika match detail response was not an object.")
+    # Betika /match returns {meta: ..., data: [...]} at the JSON root.
+    # The JavaScript client destructures Axios response.data first; that
+    # outer wrapper is not present in this Python response body.
+    if isinstance(payload.get("meta"), dict) and isinstance(payload.get("data"), list):
+        return payload["meta"], payload["data"]
     envelope = payload.get("data")
-    if not isinstance(envelope, dict):
-        raise ValueError("Betika match detail response is missing its data envelope.")
-    meta = envelope.get("meta")
-    odds_groups = envelope.get("data")
-    if not isinstance(meta, dict) or not isinstance(odds_groups, list):
-        raise ValueError("Betika match detail response has no metadata or odds array.")
-    return meta, odds_groups
+    if isinstance(envelope, dict):
+        meta = envelope.get("meta")
+        odds_groups = envelope.get("data")
+        if isinstance(meta, dict) and isinstance(odds_groups, list):
+            return meta, odds_groups
+    raise ValueError(
+        "Betika match detail response has unexpected shape "
+        f"(top-level keys={sorted(str(k) for k in payload.keys())[:12]}, "
+        f"data_type={type(envelope).__name__})."
+    )
 
 
 def _parse_betika_game(base, detail):
