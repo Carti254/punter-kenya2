@@ -173,6 +173,8 @@ def record_rollover_day(user_id, result, actual_odds=None):
         raise ValueError("Set a rollover plan first with /rollover DAYS TARGET_ODDS.")
     if status["status"] != "IN_PROGRESS":
         raise ValueError("This rollover is already broken or completed. Start a new plan.")
+    if result == "WON" and (odds is None or odds < status["target"]):
+        raise ValueError(f"A WON day requires actual combined odds of at least {status['target']:.2f}.")
     day_number = status["completed"] + 1
     if day_number > status["days"]:
         raise ValueError("All rollover days are already recorded.")
