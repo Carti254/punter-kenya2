@@ -37,7 +37,7 @@ from premium_intelligence import market_probabilities, assess_price, rollover_pr
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
-from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models, enrich_with_specialist_models as enrich_specialist_candidates
+from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models as enrich_specialist_candidates
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
