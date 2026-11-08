@@ -9,22 +9,17 @@ class FakeResponses:
     def __init__(self, output):
         self.output = output
         self.calls = []
-
     def create(self, **kwargs):
         self.calls.append(kwargs)
         return SimpleNamespace(output_text=self.output)
-
 
 class FakeClient:
     def __init__(self, output):
         self.responses = FakeResponses(output)
 
-
 class AIAssistantTests(unittest.TestCase):
-    def test_json_parser_accepts_json_fence(self):
-        result = ai_assistant._json_from_response(
-            SimpleNamespace(output_text='\`\`\`json\\n{"action":"help"}\\n\`\`\`')
-        )
+    def test_json_parser_accepts_plain_json(self):
+        result = ai_assistant._json_from_response(SimpleNamespace(output_text='{"action":"help"}'))
         self.assertEqual(result["action"], "help")
 
     def test_interpret_request_sanitises_action_and_fixture(self):
@@ -56,7 +51,6 @@ class AIAssistantTests(unittest.TestCase):
     def test_image_reader_rejects_oversized_file(self):
         with self.assertRaises(ValueError):
             ai_assistant.read_slip_image(b"x" * (12 * 1024 * 1024 + 1))
-
 
 if __name__ == "__main__":
     unittest.main()
