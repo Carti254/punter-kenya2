@@ -4962,6 +4962,18 @@ async def marketdata_command(update, context):
         await reply(update, f"⚠️ Match-statistics provider unavailable: {type(exc).__name__}: {str(exc)[:250]}")
 
 
+async def automatic_prediction_results_job(context):
+    """Refresh stored model forecasts against newly completed competition results."""
+    try:
+        records, settled = await asyncio.to_thread(refresh_and_read_prediction_records)
+        logger.info(
+            "Automatic forecast-result refresh: %s newly settled; %s total records.",
+            settled, len(records),
+        )
+    except Exception:
+        logger.exception("Scheduled model forecast-result refresh failed")
+
+
 async def automatic_price_snapshot_job(context):
     """Capture today's and tomorrow's public bookmaker prices every 30 minutes."""
     try:
@@ -5348,6 +5360,10 @@ def main():
         app.job_queue.run_repeating(
             automatic_price_snapshot_job, interval=30 * 60, first=30,
             name="automatic-bookmaker-price-snapshots",
+        )
+        app.job_queue.run_repeating(
+            automatic_prediction_results_job, interval=6 * 60 * 60, first=180,
+            name="automatic-model-forecast-results",
         )
     elif database_enabled:
         logger.warning("Telegram JobQueue unavailable; automatic results and price snapshots are disabled.")
