@@ -13,7 +13,6 @@ import json
 import time
 import copy
 import uuid
-from convat_client import ConvatError, preview_betika_code, convert_betika_to_sportybet
 from sportybet_client import SportyBetError, prepare_slip as prepare_sportybet_slip, create_booking as create_sportybet_booking, get_booking as get_sportybet_booking
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -1131,7 +1130,6 @@ def main_menu_keyboard():
             [KeyboardButton("🤖 Build a slip"), KeyboardButton("📝 Manual slip")],
             [KeyboardButton("✏️ Edit slip"), KeyboardButton("🔗 Merge slips")],
             [KeyboardButton("✂️ Split slip"), KeyboardButton("🎯 Trim to target odds")],
-            [KeyboardButton("🔄 Convert bet code")],
             [KeyboardButton("📋 Bookies & regions"), KeyboardButton("🎟️ My slips")],
             [KeyboardButton("⚽ Match intelligence"), KeyboardButton("❓ Contact support")],
         ],
@@ -1390,55 +1388,6 @@ async def process_slip_flow(update, context):
             await update.effective_message.reply_text(f"🎯 TRIM PREVIEW\\nTarget: {target:.2f}\\nNew odds: {new_odds:.2f}\\nRetained: {len(kept)} | Removed: {len(removed)}\\n\\nRemoved legs:\\n" + ("\\n".join(f"• {x['fixture']} — {x['selection']}" for x in removed) or "None") + "\\n\\nConfirm to create a new SportyBet code.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate trimmed code", callback_data="sb:manage_confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:manage_cancel")]]))
             return True
 
-        if state == "convat_code":
-            clean_code = "".join(message.split())
-            if not 3 <= len(clean_code) <= 40 or not clean_code.isalnum():
-                await reply(update, "Please send a valid Betika booking code only, or /cancel.")
-                return True
-            preview = await asyncio.to_thread(preview_betika_code, clean_code)
-            context.user_data.pop("slip_flow", None)
-            context.user_data["pending_convat"] = {
-                "code": clean_code,
-                "preview": preview,
-                "idempotency_key": str(uuid.uuid4()),
-            }
-            legs = preview.get("legs") or []
-            convertible = int(preview.get("convertibleLegs") or 0)
-            lines = [
-                "🔄 BETIKA → SPORTYBET KENYA",
-                "━━━━━━━━━━━━━━━━━━━━",
-                f"Booking code: {preview.get('sourceCode') or 'Received'}",
-                f"Selections: {len(legs)}",
-                f"Potentially convertible: {convertible}/{len(legs)}",
-                f"Betika total odds: {preview.get('totalOdds') if preview.get('totalOdds') is not None else 'Not supplied'}",
-                "",
-            ]
-            for index, leg in enumerate(legs[:12], 1):
-                event = leg.get("eventName") or "Unknown event"
-                market = leg.get("sourceMarket") or leg.get("market") or "Unknown market"
-                pick = leg.get("selection") or "Unknown selection"
-                odds = leg.get("odds")
-                status = "✓" if leg.get("convertible") else "⚠️"
-                lines.append(f"{index}. {status} {event}\n   {market}: {pick} @ {odds if odds is not None else 'N/A'}")
-                if not leg.get("convertible") and leg.get("unsupportedReason"):
-                    lines.append(f"   Not convertible: {leg.get('unsupportedReason')}")
-            if len(legs) > 12:
-                lines.append(f"…and {len(legs) - 12} more selections.")
-            if preview.get("blocker"):
-                lines.extend(["", f"⚠️ Conversion warning: {preview['blocker']}"])
-            if convertible < 1:
-                lines.extend(["", "No selections are currently convertible. No target code can be created."])
-                context.user_data.pop("pending_convat", None)
-                await reply(update, "\n".join(lines))
-                return True
-            lines.extend(["", "Review the selections. Nothing has been booked on SportyBet yet."])
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Confirm conversion", callback_data="bc:confirm"),
-                InlineKeyboardButton("✖️ Cancel", callback_data="bc:cancel"),
-            ]])
-            await update.effective_message.reply_text("\n".join(lines), reply_markup=keyboard)
-            return True
-
         if state == "analyze":
             if " vs " not in message.casefold():
                 await reply(update, "Please use: HOME TEAM vs AWAY TEAM. Example: Arsenal vs Chelsea.")
@@ -1533,69 +1482,6 @@ async def process_slip_flow(update, context):
         context.user_data.pop("slip_flow", None)
         return True
     return False
-
-
-async def convat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    action = (query.data or "").split(":", 1)[-1]
-    pending = context.user_data.get("pending_convat")
-    if action == "cancel":
-        context.user_data.pop("pending_convat", None)
-        await query.edit_message_text("Conversion cancelled. No SportyBet booking code was created.")
-        return
-    if action != "confirm" or not pending:
-        await query.edit_message_text("This conversion preview has expired. Start again from 🔄 Convert bet code.")
-        return
-    await query.edit_message_text("⏳ Converting your Betika slip to SportyBet Kenya. Please wait.")
-    try:
-        result = await asyncio.to_thread(
-            convert_betika_to_sportybet,
-            pending["code"],
-            exact_lines=True,
-            idempotency_key=pending["idempotency_key"],
-        )
-        target_code = result.get("targetCode")
-        matched = int(result.get("matched") or 0)
-        total = int(result.get("total") or 0)
-        if not target_code:
-            raise ConvatError("The provider did not return a SportyBet booking code.")
-        lines = [
-            "✅ SPORTYBET KENYA BOOKING CODE CREATED",
-            "━━━━━━━━━━━━━━━━━━━━",
-            f"New code: {target_code}",
-            f"Selections transferred: {matched}/{total}",
-            f"Betika odds: {result.get('sourceOddsTotal') if result.get('sourceOddsTotal') is not None else 'N/A'}",
-            f"SportyBet odds: {result.get('targetOddsTotal') if result.get('targetOddsTotal') is not None else 'N/A'}",
-            "",
-            "Open SportyBet and verify the code and selections before placing any bet.",
-        ]
-        unmatched = result.get("unmatched") or []
-        if unmatched:
-            lines.extend(["", f"⚠️ NOT TRANSFERRED ({len(unmatched)}):"])
-            for item in unmatched[:10]:
-                lines.append(f"• {item.get('eventName') or 'Unknown event'} — {item.get('reasonText') or item.get('reason') or 'Not available'}")
-            if len(unmatched) > 10:
-                lines.append(f"…and {len(unmatched) - 10} more.")
-        if matched < total:
-            lines.extend(["", "This is a PARTIAL conversion. Unmatched selections are not in the new code."])
-        await query.edit_message_text("\n".join(lines))
-        context.user_data.pop("pending_convat", None)
-    except ConvatError as exc:
-        logger.warning("Convat conversion rejected: status=%s code=%s", exc.status, exc.code)
-        retry_keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔁 Retry safely", callback_data="bc:confirm"),
-            InlineKeyboardButton("✖️ Cancel", callback_data="bc:cancel"),
-        ]])
-        await query.edit_message_text(
-            "⚠️ CONVERSION NOT COMPLETED\n\n" + str(exc)[:250]
-            + "\n\nNo new booking code is being claimed. Retry reuses the same idempotency key.",
-            reply_markup=retry_keyboard,
-        )
-    except Exception as exc:
-        logger.exception("Unexpected Convat conversion error")
-        await query.edit_message_text(f"⚠️ Conversion could not be verified ({type(exc).__name__}). No code will be displayed unless the provider returns one.")
-
 
 
 async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1718,11 +1604,6 @@ async def trim_sportybet_command(update, context):
     await reply(update, "Send the SportyBet Kenya booking code to trim. /cancel to stop.")
 
 
-async def convert_sportybet_command(update, context):
-    context.user_data["slip_flow"] = "convat_code"
-    await reply(update, "Send your Betika booking code to convert into SportyBet Kenya. /cancel to stop.")
-
-
 async def cancel_slip_command(update, context):
     context.user_data.pop("slip_flow", None)
     await reply(update, "Cancelled. Your existing slips have not been changed.")
@@ -1732,7 +1613,7 @@ async def my_slips_command(update, context):
     try:
         rows = await asyncio.to_thread(list_slips, update.effective_user.id, 15)
         if not rows:
-            await reply(update, "🎟️ No internal slip records are saved yet. Use 🔄 Convert bet code for the supported Betika → SportyBet workflow.")
+            await reply(update, "🎟️ No internal slip records are saved yet. Build or manage a SportyBet Kenya booking code to get started.")
             return
         lines = ["🎟️ YOUR INTERNAL SLIP RECORDS", ""]
         for row in rows:
@@ -1751,7 +1632,7 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     menu_choices = {
         "📅 Today's Matches", "🏆 Top Leagues", "🔎 Analyze Match", "ℹ️ iHelp",
         "🤖 Build a slip", "🧠 AI build slip", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip", "🎯 Trim to target odds",
-        "🔄 Convert bet code", "📋 Bookies & regions", "🎟️ My slips",
+        "📋 Bookies & regions", "🎟️ My slips",
         "⚽ Match intelligence", "📅 Fixtures & leagues", "❓ Contact support",
     }
     # A menu tap must always navigate, even if the user was halfway through
@@ -1799,13 +1680,6 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif choice == "🎯 Trim to target odds":
         context.user_data["slip_flow"] = "sportybet_trim_code"
         await reply(update, "🎯 TRIM SPORTYBET SLIP\\nSend an existing SportyBet Kenya booking code. Then enter your target maximum combined odds. The system removes the highest-odds legs first and previews the result.\\n/cancel to stop.")
-    elif choice == "🔄 Convert bet code":
-        context.user_data["slip_flow"] = "convat_code"
-        await reply(update,
-            "🔄 BETIKA → SPORTYBET KENYA\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "Send your existing Betika booking code. I'll read the slip first, show its selections and odds, then ask you to confirm before creating a SportyBet Kenya code.\n"
-            "No bet is placed. Send /cancel to stop.")
     elif choice == "📋 Bookies & regions":
         await bookmakers_command(update, context)
     elif choice == "⚽ Match intelligence":
@@ -4150,14 +4024,12 @@ async def bookmakers(
     await reply(
         update,
         "🏦 PUNTER KENYA BOOKMAKER REGISTRY\n\n"
-        "✅ Betika — public odds adapter active\n"
-        "🧪 SportyBet Kenya — public odds adapter added; live feed verification pending\n"
+        "🏆 SportyBet Kenya — sole supported bookmaker; live feed status is checked on demand\n"
         "⏸️ SportPesa — no current dependable free feed verified\n"
         "⏸️ Odibets — no current dependable free feed verified\n"
         "⏸️ Mozzart Bet — no current dependable free feed verified\n"
-        "⏸️ BetPawa — disabled after repeated connection failures\n\n"
-        "Only feeds that return real prices are used for odds comparisons. "
-        "No international bookmakers are included.",
+        "\nOnly SportyBet Kenya is supported for bookmaker odds and booking-code generation. "
+        "No bet is placed by the bot.",
     )
 
 
@@ -4238,17 +4110,17 @@ def save_bookmaker_odds_snapshots(games):
 
 async def bookmakers_command(update, context):
     day = datetime.now(EAT).date()
-    await reply(update, f"🔎 Checking Betika and SportyBet public odds feeds for {day:%d %b %Y}...")
+    await reply(update, f"🔎 Checking the SportyBet Kenya public odds feed for {day:%d %b %Y}...")
     result = await asyncio.to_thread(fetch_bookmaker_odds, day)
     lines = ["🏦 BOOKMAKER FEED CHECK", f"Date: {day:%d %b %Y} (EAT)", ""]
-    for name in ("Betika", "SportyBet"):
+    for name in ("SportyBet",):
         item = result["bookmakers"].get(name)
         if item:
             lines.append(f"✅ {name}: {item['events']} events | {item['priced_events']} with markets")
         else:
             lines.append(f"⚠️ {name}: " + result["errors"].get(name, "No response"))
-    lines.extend(["", "PUNTER KENYA bookmaker coverage: Betika + SportyBet only."])
-    lines.extend(["These are read-only public odds-feed checks. Booking-code conversion uses a separate Convat integration. A successful feed response does not guarantee continuous availability."])
+    lines.extend(["", "PUNTER KENYA bookmaker coverage: SportyBet Kenya only."])
+    lines.extend(["This is a read-only public odds-feed check. A successful response does not guarantee continuous availability."])
     await reply(update, "\n".join(lines))
 
 
@@ -4260,7 +4132,7 @@ async def bookmaker_odds_command(update, context):
             "💹 BOOKMAKER ODDS COMPARISON\n\n"
             "Usage: /odds HOME TEAM vs AWAY TEAM [today|tomorrow]\n"
             "Example: /odds Brighton vs Brentford today\n\n"
-            "Compares retrieved Betika and SportyBet prices. Only markets actually returned by the feeds are shown.")
+            "Checks retrieved SportyBet Kenya prices. Only markets actually returned by the feed are shown.")
         return
     day = datetime.now(EAT).date()
     lowered = raw_query.casefold()
@@ -4516,7 +4388,6 @@ def main():
         )
 
     app.add_handler(CallbackQueryHandler(fullintel_callback, pattern=r"^fi:"))
-    app.add_handler(CallbackQueryHandler(convat_callback, pattern=r"^bc:"))
     app.add_handler(CallbackQueryHandler(sportybet_build_callback, pattern=r"^sb:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_text_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^/myslips$"), my_slips_command))
