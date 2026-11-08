@@ -26,6 +26,11 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from database import get_connection, test_connection
 from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find_bookmaker_event
 from slip_manager import create_slip, get_slip, list_slips, update_slip
+from schema_migrations import run_migrations
+from results_tracker import record_bet, settle_bet, bet_statistics
+from prediction_validation import brier_score, log_loss, fit_temperature, apply_temperature
+from schema_migrations import run_migrations
+from results_tracker import record_bet, settle_bet, bet_statistics
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -35,6 +40,10 @@ from slip_manager import create_slip, get_slip, list_slips, update_slip
 
 BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
+# GOAL API is an optional supplementary results/statistics source.
+# Keep credentials and the provider base URL in environment variables.
+GOAL_API_KEY = os.getenv("GOAL_API_KEY")
+GOAL_API_BASE = (os.getenv("GOAL_API_BASE") or "").rstrip("/")
 OPENMATCHDAY_RAW_BASE = "https://raw.githubusercontent.com/oladeeayo/open-matchday/master"
 OPENMATCHDAY_INDEX_URL = f"{OPENMATCHDAY_RAW_BASE}/LEAGUE_INDEX.md"
 
@@ -364,9 +373,11 @@ def goal_request(endpoint, params=None):
         if cooldown_until and datetime.now(timezone.utc) >= cooldown_until:
             GOAL_API_COOLDOWN_UNTIL = None
 
-    if not GOAL_API_KEY:
+    if not GOAL_API_KEY or not GOAL_API_BASE:
+        missing = [name for name, value in (("GOAL_API_KEY", GOAL_API_KEY), ("GOAL_API_BASE", GOAL_API_BASE)) if not value]
         raise RuntimeError(
-            "GOAL_API_KEY is not configured in Railway variables."
+            "GOAL API is not configured; missing " + ", ".join(missing)
+            + ". Set these only if using the supplementary GOAL API source."
         )
 
     url = f"{GOAL_API_BASE}/{endpoint.lstrip('/')}"
@@ -1814,23 +1825,23 @@ async def autobuild_sportybet_command(update, context):
         chosen, product, used = [], 1.0, set()
         for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
             key = (item["home"], item["away"])
-            if key in used or item["ev"] < 0.03:
+            if key in used:
                 continue
             chosen.append(item); used.add(key); product *= float(item["odds"])
             if product >= target or len(chosen) >= 20:
                 break
-        if not chosen or product < target:
-            await reply(update, f"🚫 NO SPORTYBET SLIP GENERATED\\nCould not reach {target:.2f} using SportyBet-priced selections passing the existing probability (62%) and estimated EV (+3%) filters. No weak legs were added.\\n" + ("Feed notes: " + "; ".join(diagnostics[:4]) if diagnostics else "No qualifying SportyBet prices were found."))
+        if not chosen:
+            await reply(update, "⚠️ NO USABLE SPORTYBET PICKS FOUND\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No SportyBet-priced, model-supported candidates were found."))
             return
         raw_lines = [f"{x['home']} vs {x['away']} | {x['market']} | {x['selection']}" for x in chosen]
         resolved = await asyncio.to_thread(prepare_sportybet_slip, raw_lines)
         context.user_data["pending_sportybet_booking"] = resolved
         combined = math.prod(float(x["odds"]) for x in resolved)
-        lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f}", f"Selections: {len(resolved)}", ""]
+        lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"), f"Selections: {len(resolved)}", ""]
         for i, leg in enumerate(resolved, 1):
             source = chosen[i-1]
             lines.append(f"{i}. {leg['fixture']}\\n   {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}\\n   Model probability: {source['probability']:.1%} | Estimated EV: {source['ev']:+.1%}")
-        lines.extend(["", "Model is experimental and uncalibrated. Only markets supported by available scoreline data are evaluated; corners, cards, player and half-time markets are not guessed. Odds are re-resolved from SportyBet before code creation. Confirm to request a genuine booking code; no bet is placed."])
+        lines.extend(["", "Model remains experimental and not historically calibrated. Negative-EV legs are shown transparently. Only scoreline-supported markets are evaluated. Odds are re-resolved before code creation. Confirming requests a share code only; no bet is placed."])
         await update.effective_message.reply_text("\\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel")]]))
     except Exception as exc:
         logger.exception("SportyBet auto-builder failed")
@@ -1861,7 +1872,7 @@ async def accumulator_status_command(update, context):
     chosen, combined, used = [], 1.0, set()
     for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
         fixture_key = (item["home"], item["away"])
-        if fixture_key in used or item["probability"] < 0.62 or item["ev"] < 0.03:
+        if fixture_key in used:
             continue
         chosen.append(item)
         used.add(fixture_key)
@@ -1869,18 +1880,14 @@ async def accumulator_status_command(update, context):
         if combined >= target or len(chosen) >= 6:
             break
 
-    if not chosen or combined < target:
-        await reply(update,
-            f"🚫 NO ACCUMULATOR RECOMMENDED\n\n"
-            f"Could not reach {target:.2f} using selections that passed the minimum probability (62%) "
-            "and estimated expected-value (+3%) filters. PUNTER will not add weak legs just to reach a target. "
-            + ("Feed notes: " + "; ".join(diagnostics[:3]) if diagnostics else ""))
+    if not chosen:
+        await reply(update, "⚠️ NO USABLE ACCUMULATOR CANDIDATES\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No model-supported bookmaker prices were retrieved."))
         return
 
     probability_product = math.prod(item["probability"] for item in chosen)
     lines = [
         "🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR",
-        f"Target: {target:.2f} | Combined decimal odds: {combined:.2f}",
+        f"Target: {target:.2f} | Combined decimal odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"),
         "",
     ]
     for number, item in enumerate(chosen, 1):
@@ -3352,9 +3359,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                     if probability <= 0 or probability >= 1 or not odds or odds <= 1:
                         continue
                     ev = probability * odds - 1
-                    # Risk-aware screening is applied later by the builder; retain honest prices here.
-                    if ev < 0.03:
-                        continue
+                    # Keep every model-supported priced candidate; EV labels value but does not hide predictions.
                     candidates.append({
                         "home": fixture["home_team"], "away": fixture["away_team"],
                         "league": fixture.get("competition") or fixture.get("leagueName") or "Competition",
@@ -3402,21 +3407,21 @@ async def topvalue_command(update, context):
         rows.sort(key=lambda x: (x["probability"], x["ev"]), reverse=True)
     if not rows:
         await reply(update,
-            "🚫 NO QUALIFYING VALUE PICKS\n\n"
-            "No selection met the minimum probability and positive expected-value filters using the odds actually retrieved. "
-            "This is a NO BET result, not a reason to lower the filters.\n\n"
-            + ("Feed notes: " + "; ".join(diagnostics[:4]) if diagnostics else "No usable bookmaker prices were matched."))
+            "⚠️ NO MODEL-SUPPORTED, MATCHED PRICES FOUND\n\n"
+            "No responsible ranked pick is available because fixture, model or bookmaker data could not be matched.\n\n"
+            + ("Feed notes: " + "; ".join(diagnostics[:6]) if diagnostics else "No usable bookmaker prices were matched."))
         return
-    lines = ["🧠 PUNTER KENYA — VALUE SCANNER", f"Market: {market.upper()} | Dates: {', '.join(days)}",
-             "Filters: model probability ≥ 42% (1X2) / ≥ 60% (goals); estimated EV ≥ +3%", ""]
+    lines = ["🧠 PUNTER KENYA — RANKED PREDICTIONS", f"Market: {market.upper()} | Dates: {', '.join(days)}",
+             "Positive EV is a value indicator, not a condition for showing a prediction.", ""]
     for n, item in enumerate(rows[:12], 1):
         lines.append(f"{n}. {item['home']} vs {item['away']} — {item['league']}")
         lines.append(f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item['bookmaker']})")
-        lines.append(f"   Model: {item['probability']:.1%} | Fair odds: {item['fair_odds']:.2f} | Est. EV: {item['ev']:+.1%}")
+        value_label = "POSITIVE ESTIMATED VALUE" if item["ev"] > 0 else "NEGATIVE ESTIMATED VALUE"
+        lines.append(f"   Model: {item['probability']:.1%} | Fair odds: {item['fair_odds']:.2f} | Est. EV: {item['ev']:+.1%} ({value_label})")
         lines.append(f"   Kick-off: {item['kickoff'] or 'Not supplied'}")
         if item.get("url"): lines.append(f"   {item['url']}")
         lines.append("")
-    lines.append("Important: this is an experimental, uncalibrated Poisson model. Historical results are not xG or lineup-adjusted. Positive estimated EV is not proof of an edge. Verify price and market rules before betting. No BTTS or Under 2.5 picks are included.")
+    lines.append("Important: forecasts remain experimental and are not historically calibrated. Historical results are not xG or lineup-adjusted. Estimated EV is not proof of an edge. Verify prices and rules. No BTTS or Under 2.5 picks are included.")
     message = "\n".join(lines)
     for offset in range(0, len(message), 3600):
         await reply(update, message[offset:offset+3600])
@@ -3448,25 +3453,25 @@ async def accumulator_status_command(update, context):
     used = set()
     for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
         fixture_key = (item["home"], item["away"])
-        if fixture_key in used or item["probability"] < 0.62 or item["ev"] < 0.03:
+        if fixture_key in used:
             continue
         if any(x["home"] == item["home"] and x["away"] == item["away"] for x in chosen):
             continue
         chosen.append(item); used.add(fixture_key); combined *= item["odds"]
         if combined >= target: break
         if len(chosen) >= 6: break
-    if not chosen or combined < target:
-        await reply(update, f"🚫 NO ACCUMULATOR RECOMMENDED\n\nCould not reach {target:.2f} using selections that passed the minimum probability (62%) and estimated EV (+3%) filters. PUNTER will not add weak legs just to reach a target.")
+    if not chosen:
+        await reply(update, "⚠️ NO USABLE ACCUMULATOR CANDIDATES\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No model-supported bookmaker prices were retrieved."))
         return
     probability_product = math.prod(x["probability"] for x in chosen)
-    lines = ["🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR", f"Target: {target:.2f} | Combined decimal odds: {combined:.2f}", ""]
+    lines = ["🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR", f"Target: {target:.2f} | Combined decimal odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"), ""]
     for i, item in enumerate(chosen, 1):
         lines.append(f"{i}. {item['home']} vs {item['away']}")
         lines.append(f"   {item['selection']} @ {item['odds']:.2f} — {item['bookmaker']}")
         lines.append(f"   Model probability: {item['probability']:.1%} | Est. EV: {item['ev']:+.1%}")
     lines.extend(["", f"Naive independent-leg probability product: {probability_product:.2%}",
         "This product assumes independence and may be materially wrong. Selections may be correlated; this is not a calibrated accumulator probability.",
-        "All legs are experimental estimates, not guarantees. Check every market and price with the bookmaker. No BTTS or Under 2.5 selections."])
+        "All legs are experimental estimates, not guarantees. Negative-EV picks are not hidden. Check every market and price. No BTTS or Under 2.5 selections."])
     await reply(update, "\n".join(lines))
 
 
@@ -4433,18 +4438,208 @@ async def error_handler(
 # APPLICATION STARTUP
 # ============================================================
 
+def evaluate_historical_calibration():
+    """Chronological train/holdout evaluation of stored 1X2 forecasts."""
+    connection = get_connection()
+    try:
+        with connection.cursor() as cursor:
+            ensure_prediction_records_table(cursor)
+            cursor.execute("""
+                SELECT p_home, p_draw, p_away, actual_home_goals, actual_away_goals
+                FROM punter_prediction_records
+                WHERE status='SETTLED' AND actual_home_goals IS NOT NULL
+                  AND actual_away_goals IS NOT NULL
+                ORDER BY match_date ASC, id ASC
+            """)
+            rows = cursor.fetchall()
+    finally:
+        connection.close()
+
+    probabilities, outcomes = [], []
+    for row in rows:
+        hg, ag = int(row["actual_home_goals"]), int(row["actual_away_goals"])
+        probabilities.append([float(row["p_home"]), float(row["p_draw"]), float(row["p_away"])])
+        outcomes.append(0 if hg > ag else 1 if hg == ag else 2)
+
+    count = len(rows)
+    split = int(count * 0.70)
+    if split < 50 or count - split < 30:
+        return {"ready": False, "count": count, "train": split, "holdout": count - split}
+
+    train_p, train_y = probabilities[:split], outcomes[:split]
+    test_p, test_y = probabilities[split:], outcomes[split:]
+    fitted = fit_temperature(train_p, train_y, minimum_samples=50)
+    calibrated = [apply_temperature(p, fitted["temperature"]) for p in test_p]
+    return {
+        "ready": True, "count": count, "train": split, "holdout": count - split,
+        "temperature": fitted["temperature"],
+        "raw_brier": brier_score(test_p, test_y),
+        "calibrated_brier": brier_score(calibrated, test_y),
+        "raw_logloss": log_loss(test_p, test_y),
+        "calibrated_logloss": log_loss(calibrated, test_y),
+    }
+
+
+async def calibrate_command(update, context):
+    await reply(update, "🧪 Evaluating historical 1X2 forecasts using an earlier-train / later-holdout split...")
+    try:
+        result = await asyncio.to_thread(evaluate_historical_calibration)
+        if not result["ready"]:
+            await reply(update,
+                "NOT ENOUGH HISTORICAL DATA TO CALIBRATE\\n\\n"
+                f"Settled forecasts: {result['count']}\\n"
+                f"Training sample: {result['train']} (minimum 50)\\n"
+                f"Out-of-sample holdout: {result['holdout']} (minimum 30)\\n\\n"
+                "No calibration parameter has been fitted or applied. Keep the model labelled experimental.")
+            return
+        improved = result["calibrated_brier"] < result["raw_brier"] and result["calibrated_logloss"] < result["raw_logloss"]
+        await reply(update,
+            "📊 HISTORICAL CALIBRATION CHECK\\n\\n"
+            f"Settled forecasts: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\\n"
+            f"Fitted temperature: {result['temperature']:.2f}\\n\\n"
+            f"Holdout Brier: {result['raw_brier']:.4f} → {result['calibrated_brier']:.4f}\\n"
+            f"Holdout log loss: {result['raw_logloss']:.4f} → {result['calibrated_logloss']:.4f}\\n\\n"
+            + ("Calibration improved both holdout metrics. It is a candidate for controlled deployment." if improved else "Calibration did not improve both holdout metrics. Keep the raw model; do not apply this temperature.")
+            + "\\n\\nThis is a diagnostic only: no live forecast settings are changed automatically.")
+    except Exception as exc:
+        await reply(update, f"⚠️ Calibration evaluation failed: {type(exc).__name__}: {str(exc)[:250]}")
+
+
+async def betlog_command(update, context):
+    """Log a real bookmaker selection and its original price/stake."""
+    raw = " ".join(context.args or [])
+    parts = [part.strip() for part in raw.split("|")]
+    if len(parts) not in (5, 6):
+        await reply(update, "Usage: /betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER]\nExample: /betlog Arsenal vs Chelsea | 1X2 | Arsenal | 2.10 | 100 | SportyBet")
+        return
+    fixture = re.split(r"\\s+vs\\.?\\s+|\\s+v\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
+    if len(fixture) != 2:
+        await reply(update, "Enter the fixture as HOME vs AWAY.")
+        return
+    bookmaker = parts[5] if len(parts) == 6 else "SportyBet"
+    try:
+        bet_id = await asyncio.to_thread(
+            record_bet, update.effective_user.id, bookmaker,
+            fixture[0], fixture[1], parts[1], parts[2], parts[3], parts[4]
+        )
+        await reply(update, f"✅ BET RECORD SAVED — #{bet_id}\n{fixture[0]} vs {fixture[1]}\n{parts[1]}: {parts[2]} @ {float(parts[3]):.2f}\nStake: {float(parts[4]):.2f} KSh\nOriginal odds and stake are now preserved.")
+    except Exception as exc:
+        await reply(update, f"⚠️ Could not save bet record: {type(exc).__name__}: {str(exc)[:250]}")
+
+
+async def betsettle_command(update, context):
+    """Settle a logged selection against the confirmed full-time score."""
+    if len(context.args or []) != 3:
+        await reply(update, "Usage: /betsettle BET_ID HOME_GOALS AWAY_GOALS\nExample: /betsettle 12 2 1")
+        return
+    try:
+        bet_id, home_goals, away_goals = map(int, context.args)
+        if min(home_goals, away_goals) < 0:
+            raise ValueError
+        result = await asyncio.to_thread(
+            settle_bet, update.effective_user.id, bet_id, home_goals, away_goals
+        )
+        await reply(update, f"📊 BET #{bet_id} SETTLED: {result['status']}\nFull-time: {home_goals}-{away_goals}\nProfit/loss: {float(result['profit_loss']):+.2f} KSh")
+    except Exception as exc:
+        await reply(update, f"⚠️ Could not settle bet: {type(exc).__name__}: {str(exc)[:250]}")
+
+
+async def betstats_command(update, context):
+    try:
+        stats = await asyncio.to_thread(bet_statistics, update.effective_user.id)
+        total = int(stats.get("total") or 0)
+        pending = int(stats.get("pending") or 0)
+        won, lost, voided = int(stats.get("won") or 0), int(stats.get("lost") or 0), int(stats.get("voided") or 0)
+        pnl = float(stats.get("profit_loss") or 0)
+        turnover = float(stats.get("settled_stakes") or 0)
+        settled = won + lost + voided
+        roi = pnl / turnover if turnover else 0.0
+        await reply(update, "📈 PUNTER BET PERFORMANCE\n\n"
+            f"Logged: {total} | Settled: {settled} | Pending: {pending}\n"
+            f"Wins: {won} | Losses: {lost} | Voids: {voided}\n"
+            f"Settled stakes: {turnover:.2f} KSh\nProfit/loss: {pnl:+.2f} KSh\nROI: {roi:+.2%}\n\n"
+            "This report uses only bets you logged and settled; it is separate from prediction accuracy.")
+    except Exception as exc:
+        await reply(update, f"⚠️ Bet statistics unavailable: {type(exc).__name__}: {str(exc)[:250]}")
+
+
+async def betlog_command(update, context):
+    """Log a real bookmaker selection and its original price/stake."""
+    raw = " ".join(context.args or [])
+    parts = [part.strip() for part in raw.split("|")]
+    if len(parts) not in (5, 6):
+        await reply(update, "Usage: /betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER]\nExample: /betlog Arsenal vs Chelsea | 1X2 | Arsenal | 2.10 | 100 | SportyBet")
+        return
+    fixture = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", parts[0], maxsplit=1, flags=re.I)
+    if len(fixture) != 2:
+        await reply(update, "Enter the fixture as HOME vs AWAY.")
+        return
+    bookmaker = parts[5] if len(parts) == 6 else "SportyBet"
+    try:
+        bet_id = await asyncio.to_thread(
+            record_bet, update.effective_user.id, bookmaker,
+            fixture[0], fixture[1], parts[1], parts[2], parts[3], parts[4]
+        )
+        await reply(update, f"✅ BET RECORD SAVED — #{bet_id}\n{fixture[0]} vs {fixture[1]}\n{parts[1]}: {parts[2]} @ {float(parts[3]):.2f}\nStake: {float(parts[4]):.2f} KSh\nOriginal odds and stake are now preserved.")
+    except Exception as exc:
+        await reply(update, f"⚠️ Could not save bet record: {type(exc).__name__}: {str(exc)[:250]}")
+
+
+async def betsettle_command(update, context):
+    """Settle a logged selection against the confirmed full-time score."""
+    if len(context.args or []) != 3:
+        await reply(update, "Usage: /betsettle BET_ID HOME_GOALS AWAY_GOALS\nExample: /betsettle 12 2 1")
+        return
+    try:
+        bet_id, home_goals, away_goals = map(int, context.args)
+        if min(home_goals, away_goals) < 0:
+            raise ValueError
+        result = await asyncio.to_thread(
+            settle_bet, update.effective_user.id, bet_id, home_goals, away_goals
+        )
+        await reply(update, f"📊 BET #{bet_id} SETTLED: {result['status']}\nFull-time: {home_goals}-{away_goals}\nProfit/loss: {float(result['profit_loss']):+.2f} KSh")
+    except Exception as exc:
+        await reply(update, f"⚠️ Could not settle bet: {type(exc).__name__}: {str(exc)[:250]}")
+
+
+async def betstats_command(update, context):
+    try:
+        stats = await asyncio.to_thread(bet_statistics, update.effective_user.id)
+        total = int(stats.get("total") or 0)
+        pending = int(stats.get("pending") or 0)
+        won, lost, voided = int(stats.get("won") or 0), int(stats.get("lost") or 0), int(stats.get("voided") or 0)
+        pnl = float(stats.get("profit_loss") or 0)
+        turnover = float(stats.get("settled_stakes") or 0)
+        settled = won + lost + voided
+        roi = pnl / turnover if turnover else 0.0
+        await reply(update, "📈 PUNTER BET PERFORMANCE\n\n"
+            f"Logged: {total} | Settled: {settled} | Pending: {pending}\n"
+            f"Wins: {won} | Losses: {lost} | Voids: {voided}\n"
+            f"Settled stakes: {turnover:.2f} KSh\nProfit/loss: {pnl:+.2f} KSh\nROI: {roi:+.2%}\n\n"
+            "This report uses only bets you logged and settled; it is separate from prediction accuracy.")
+    except Exception as exc:
+        await reply(update, f"⚠️ Bet statistics unavailable: {type(exc).__name__}: {str(exc)[:250]}")
+
+
 def main():
 
     if not BOT_TOKEN:
 
         raise RuntimeError(
             "Telegram token missing. Set BOT_TOKEN "
-            "or TELEGRAM_BOT_TOKEN in Railway."
+            "or TELEGRAM_BOT_TOKEN in your environment."
         )
 
     logger.info("open-matchday provider selected; no API key required.")
 
-    acquire_polling_lock()
+    database_enabled = acquire_polling_lock()
+    if database_enabled:
+        try:
+            migration_result = run_migrations()
+            logger.info("Database migrations checked: %s", migration_result)
+        except Exception:
+            release_polling_lock()
+            raise
 
     app = (
         Application.builder()
@@ -4475,6 +4670,13 @@ def main():
         ("value", value_command),
         ("topvalue", topvalue_command),
         ("record", record_command),
+        ("calibrate", calibrate_command),
+        ("betlog", betlog_command),
+        ("betsettle", betsettle_command),
+        ("betstats", betstats_command),
+        ("betlog", betlog_command),
+        ("betsettle", betsettle_command),
+        ("betstats", betstats_command),
         ("fixtures", fixtures),
         ("syncfixtures", syncfixtures),
         ("live", live),
