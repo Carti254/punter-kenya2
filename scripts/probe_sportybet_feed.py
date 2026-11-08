@@ -40,6 +40,10 @@ VARIANTS = {
         "market_ids": "1",
         "option": "2",
     },
+    "index_market_id_1_option_2": {
+        "market_ids": "1",
+        "option": "2",
+    },
     "no_market_id_parameter": {
         "market_ids": None,
         "option": "2",
@@ -106,7 +110,7 @@ def main() -> None:
     # Verify whether pageNum is honoured or whether the endpoint repeats page 1.
     try:
         params = dict(BASE_PARAMS, pageNum=2)
-        params["marketId"] = VARIANTS["full_list_option_2"]["market_ids"]
+        params["marketId"] = VARIANTS["index_market_id_1_option_2"]["market_ids"]
         params["option"] = "2"
         response = requests.get(BASE, params=params, headers=HEADERS, timeout=(8, 20))
         response.raise_for_status()
