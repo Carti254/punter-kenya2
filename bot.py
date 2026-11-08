@@ -38,7 +38,7 @@ from user_portfolio import save_bankroll, get_settings, save_rollover, save_pref
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
 from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models as enrich_specialist_candidates
-from free_football_sources import enrich_candidates as enrich_free_football_sources, provider_key_status
+from free_football_sources import enrich_candidates as enrich_free_football_sources, fetch_provider_fixtures as fetch_free_provider_fixtures, provider_key_status
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
@@ -3952,6 +3952,47 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     try:
         raw_fixtures = fetch_openmatchday_fixture_rows(14, None, None)
         all_fixtures = upcoming_fixtures(raw_fixtures)
+        # Union in fixtures from the optional free BSD/PitchAPI catalogues.
+        # Deduplicate by EAT day and home/away identity, preserving open-matchday
+        # history rows where both sources list the same match.
+        try:
+            free_fixture_rows = fetch_free_provider_fixtures(sorted(target_dates))
+            existing_fixture_keys = set()
+            for _, item in all_fixtures:
+                kickoff = item.get("kickoff_at")
+                if not kickoff:
+                    continue
+                local_day = kickoff.replace(tzinfo=timezone.utc).astimezone(EAT).date()
+                existing_fixture_keys.add((
+                    local_day.isoformat(),
+                    canonical_team_key(item.get("home_team")),
+                    canonical_team_key(item.get("away_team")),
+                ))
+            added_free_fixtures = 0
+            for raw_free in free_fixture_rows:
+                item = normalise_fixture(raw_free)
+                if not item or not item.get("kickoff_at"):
+                    continue
+                local_day = item["kickoff_at"].replace(tzinfo=timezone.utc).astimezone(EAT).date()
+                if local_day not in target_dates:
+                    continue
+                fixture_key = (
+                    local_day.isoformat(),
+                    canonical_team_key(item.get("home_team")),
+                    canonical_team_key(item.get("away_team")),
+                )
+                if fixture_key in existing_fixture_keys:
+                    continue
+                existing_fixture_keys.add(fixture_key)
+                all_fixtures.append((raw_free, item))
+                added_free_fixtures += 1
+            all_fixtures.sort(key=lambda pair: pair[1].get("kickoff_at") or datetime.max)
+            logger.info(
+                "Free fixture catalogues added %s unique upcoming fixtures (BSD/PitchAPI).",
+                added_free_fixtures,
+            )
+        except Exception as free_fixture_error:
+            logger.warning("Optional free fixture discovery failed: %s", free_fixture_error)
         progress(f"Step 2/4: fixture catalogue ready ({len(all_fixtures)} upcoming fixtures). Fetching SportyBet prices…")
     except Exception as exc:
         raise RuntimeError(f"Fixture catalogue failed: {type(exc).__name__}: {str(exc)[:180]}") from exc
