@@ -3176,43 +3176,131 @@ async def value_command(update, context):
     lines.extend(["", "Odds are user-supplied and have not been independently verified. Model probabilities are uncalibrated estimates; positive EV is not proof of a profitable bet."])
     await reply(update, "\n".join(lines))
 
+def _score_probability(prediction, condition):
+    """Probability of a score-grid condition using the existing Poisson goal model."""
+    lh = prediction.get("lambda_home")
+    la = prediction.get("lambda_away")
+    if lh is None or la is None:
+        return None
+    grid = []
+    for hg in range(11):
+        for ag in range(11):
+            p = poisson_probability(hg, lh) * poisson_probability(ag, la)
+            grid.append((hg, ag, p))
+    return sum(p for hg, ag, p in grid if condition(hg, ag))
+
+
+def _normal_market_text(value):
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9.+\-:]", " ", str(value or "").casefold())).strip()
+
+
+def _market_probability_for_row(prediction, row):
+    """Estimate supported markets from the scoreline distribution; never invent unavailable data."""
+    market = _normal_market_text(row.get("market"))
+    selection = _normal_market_text(row.get("selection"))
+    specifier = _normal_market_text(row.get("specifier") or row.get("handicap"))
+    text = f"{market} {selection} {specifier}".strip()
+    lh, la = prediction.get("lambda_home"), prediction.get("lambda_away")
+    if lh is None or la is None:
+        return None, "model goal rates unavailable"
+
+    def line_from_text(default=None):
+        match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)(?!\d)", text)
+        return float(match.group(1)) if match else default
+
+    # Match result and double chance.
+    home_p = prediction.get("home_win")
+    draw_p = prediction.get("draw")
+    away_p = prediction.get("away_win")
+    if any(x in market for x in ("double chance", "1x", "12", "x2")):
+        if selection in ("1x", "home or draw", "home/draw"):
+            return home_p + draw_p, None
+        if selection in ("12", "1 or 2", "home or away", "home/away"):
+            return home_p + away_p, None
+        if selection in ("x2", "draw or away", "draw/away"):
+            return draw_p + away_p, None
+    if any(x in market for x in ("draw no bet", "dnb")):
+        if selection in ("1", "home", "home win"):
+            denom = home_p + away_p
+            return (home_p / denom if denom else None), None
+        if selection in ("2", "away", "away win"):
+            denom = home_p + away_p
+            return (away_p / denom if denom else None), None
+    if any(x in market for x in ("1x2", "match result", "full time result", "fulltime result", "regular time result")):
+        if selection in ("1", "home", "home win"): return home_p, None
+        if selection in ("x", "draw", "tie"): return draw_p, None
+        if selection in ("2", "away", "away win"): return away_p, None
+
+    # Both teams to score.
+    if any(x in market for x in ("both teams", "btts", "team to score")):
+        if selection in ("yes", "y"):
+            return _score_probability(prediction, lambda h, a: h > 0 and a > 0), None
+        if selection in ("no", "n"):
+            return _score_probability(prediction, lambda h, a: h == 0 or a == 0), None
+
+    # Exact score / correct score.
+    if any(x in market for x in ("correct score", "exact score", "scorecast")):
+        match = re.search(r"(\d+)\s*[:\-]\s*(\d+)", selection)
+        if match:
+            hg, ag = int(match.group(1)), int(match.group(2))
+            return _score_probability(prediction, lambda h, a: h == hg and a == ag), None
+
+    # Team total goals.
+    team_total = any(x in market for x in ("home team total", "home goals", "team 1 total")) or "home team" in market
+    away_total = any(x in market for x in ("away team total", "away goals", "team 2 total")) or "away team" in market
+    if team_total or away_total:
+        line = line_from_text()
+        if line is not None and ("over" in selection or "under" in selection):
+            rate_home = team_total
+            over = "over" in selection
+            return _score_probability(prediction, lambda h, a: ((h if rate_home else a) > line if over else (h if rate_home else a) < line)), None
+
+    # Total match goals, including lines other than 1.5 / 2.5.
+    if any(x in market for x in ("total goals", "over under", "goals over", "goals under", "total match", "goal line")):
+        line = line_from_text()
+        if line is not None and ("over" in selection or "under" in selection):
+            over = "over" in selection
+            return _score_probability(prediction, lambda h, a: (h + a > line if over else h + a < line)), None
+
+    # Handicap / Asian handicap / European handicap: evaluate the adjusted score.
+    if any(x in market for x in ("handicap", "asian handicap", "european handicap")):
+        line = line_from_text()
+        if line is not None:
+            if selection in ("1", "home", "home win"):
+                return _score_probability(prediction, lambda h, a: h + line > a), None
+            if selection in ("2", "away", "away win"):
+                return _score_probability(prediction, lambda h, a: a - line > h), None
+            if selection in ("x", "draw"):
+                return _score_probability(prediction, lambda h, a: h + line == a), None
+
+    return None, "market requires data not available in the current model (e.g. corners, cards, player or half-time events)"
+
+
 def _market_probability(prediction, market_key):
-    if market_key == "home": return prediction["home_win"]
-    if market_key == "draw": return prediction["draw"]
-    if market_key == "away": return prediction["away_win"]
-    if market_key == "over15": return prediction["over_15"]
-    if market_key == "over25": return prediction["over_25"]
-    return None
+    aliases = {
+        "home": "home_win", "draw": "draw", "away": "away_win",
+        "over15": "over_15", "over25": "over_25",
+    }
+    key = aliases.get(market_key)
+    return prediction.get(key) if key else None
 
 
 def _odds_market_key(market):
-    name = re.sub(r"[^a-z0-9]+", " ", str(market or "").casefold()).strip()
-    if any(x in name for x in ("both teams", "btts", "correct score", "double chance", "draw no bet", "handicap")):
-        return None
-    if name in ("1x2", "match result", "full time result", "fulltime result", "regular time result"):
-        return "1x2"
-    if "over under" in name or "total goals" in name or name == "goals":
-        return "goals"
-    return None
+    name = _normal_market_text(market)
+    known = ("1x2", "match result", "double chance", "draw no bet", "handicap",
+             "asian handicap", "european handicap", "total goals", "over under",
+             "both teams", "btts", "correct score", "exact score", "home team",
+             "away team", "team total", "corners", "cards", "booking", "player",
+             "half time", "first half", "second half", "total match")
+    return name if any(term in name for term in known) else None
 
 
 def _selection_probability_key(market_key, selection, handicap=None):
-    value = re.sub(r"[^a-z0-9.]+", " ", str(selection or "").casefold()).strip()
-    if market_key == "1x2":
-        if value in ("1", "home", "home win", "1st"): return "home"
-        if value in ("x", "draw", "tie"): return "draw"
-        if value in ("2", "away", "away win", "2nd"): return "away"
-    if market_key == "goals":
-        line = str(handicap or "")
-        if "1.5" in value or "1.5" in line:
-            return "over15" if "over" in value else None
-        if "2.5" in value or "2.5" in line:
-            return "over25" if "over" in value else None
-    return None
+    return _normal_market_text(selection) or None
 
 
 def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"):
-    """Scan the public fixture catalogue against retrieved bookmaker prices."""
+    """Scan every retrieved SportyBet football market; score only markets supported by model data."""
     candidates, diagnostics = [], []
     for day_filter in day_filters:
         raw_fixtures = fetch_openmatchday_fixture_rows(14, None, day_filter)
@@ -3225,41 +3313,59 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         priced_games = []
         for provider in odds_result.get("bookmakers", {}).values():
             priced_games.extend(provider.get("games", []))
+        matched_events = 0
+        unsupported = set()
         for raw, fixture in fixtures:
             prediction = build_openmatchday_prediction(raw, fixture)
             if not prediction.get("available"):
                 continue
             matches = find_bookmaker_event(priced_games, fixture["home_team"], fixture["away_team"])
             for game in matches:
+                matched_events += 1
                 for row in game.get("markets", []):
-                    mk = _odds_market_key(row.get("market"))
-                    if not mk: continue
-                    selection_key = _selection_probability_key(mk, row.get("selection"), row.get("handicap"))
-                    if not selection_key: continue
-                    if market_filter not in ("all", "safest", selection_key): continue
-                    probability = _market_probability(prediction, selection_key)
+                    market_name = str(row.get("market") or "Unknown")
+                    selection_name = str(row.get("selection") or "Unknown")
+                    probability, reason = _market_probability_for_row(prediction, row)
+                    if probability is None:
+                        if reason:
+                            unsupported.add(market_name)
+                        continue
+                    if market_filter not in ("all", "safest"):
+                        wanted = _normal_market_text(market_filter)
+                        if wanted not in _normal_market_text(market_name) and wanted not in _normal_market_text(selection_name):
+                            continue
                     odds = row.get("odds")
-                    if probability is None or not odds or odds <= 1: continue
+                    if probability <= 0 or probability >= 1 or not odds or odds <= 1:
+                        continue
                     ev = probability * odds - 1
-                    min_probability = 0.60 if selection_key in ("over15", "over25") else 0.42
-                    if probability < min_probability or ev < 0.03: continue
+                    # Risk-aware screening is applied later by the builder; retain honest prices here.
+                    if ev < 0.03:
+                        continue
                     candidates.append({
                         "home": fixture["home_team"], "away": fixture["away_team"],
                         "league": fixture.get("competition") or fixture.get("leagueName") or "Competition",
                         "day": day_filter, "bookmaker": game.get("bookmaker"),
-                        "market": row.get("market"), "selection": row.get("selection"),
-                        "market_key": selection_key, "odds": odds, "probability": probability,
-                        "ev": ev, "fair_odds": 1 / probability,
+                        "market": market_name, "selection": selection_name,
+                        "market_key": _normal_market_text(market_name) + "|" + _normal_market_text(selection_name),
+                        "odds": odds, "probability": probability, "ev": ev,
+                        "fair_odds": 1 / probability,
                         "kickoff": game.get("kickoff_eat") or fixture.get("kickoffUtc"),
                         "url": game.get("url"),
+                        "event_id": game.get("event_id"),
+                        "market_id": row.get("market_id"),
+                        "outcome_id": row.get("outcome_id"),
+                        "specifier": row.get("specifier") or row.get("handicap"),
                     })
+        if not matched_events:
+            diagnostics.append(f"{day_filter}: no confidently matched SportyBet events")
+        if unsupported:
+            diagnostics.append("Markets retrieved but not model-supported yet: " + ", ".join(sorted(unsupported)[:12]))
         for name, error in odds_result.get("errors", {}).items():
             diagnostics.append(f"{day_filter} {name}: {error[:100]}")
     candidates.sort(key=lambda x: (x["ev"], x["probability"]), reverse=True)
-    # Deduplicate same fixture/market across provider variants only after preserving best price.
     best = {}
     for item in candidates:
-        key = (item["home"], item["away"], item["market_key"], item["selection"])
+        key = (item["home"], item["away"], item["market_key"])
         if key not in best or item["odds"] > best[key]["odds"]:
             best[key] = item
     return sorted(best.values(), key=lambda x: (x["ev"], x["probability"]), reverse=True), diagnostics
