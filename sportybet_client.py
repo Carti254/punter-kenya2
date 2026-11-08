@@ -61,7 +61,7 @@ def _get_fixtures():
 
 
 def _find_fixture(fixtures, fixture_text):
-    sides = re.split(r"\\s+vs\\.?\\s+|\\s+v\\.?\\s+", fixture_text.strip(), maxsplit=1, flags=re.I)
+    sides = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", fixture_text.strip(), maxsplit=1, flags=re.I)
     if len(sides) != 2:
         raise SportyBetError(f'Fixture "{fixture_text}" must use HOME vs AWAY.')
     home_q, away_q = map(_norm, sides)
@@ -87,7 +87,7 @@ def _resolve_market(event, market_text, selection_text):
     markets = event.get("markets") or []
     m = market_text.strip()
     line = None
-    total_match = re.search(r"(?:over/?under|total|goals?)\\s*(\\d+(?:\\.\\d+)?)", m, re.I)
+    total_match = re.search(r"(?:over/?under|total|goals?)\s*(\d+(?:\.\d+)?)", m, re.I)
     if total_match:
         line = total_match.group(1)
     wanted = _norm(m)
