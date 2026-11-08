@@ -29,6 +29,7 @@ from slip_manager import create_slip, get_slip, list_slips, update_slip
 from schema_migrations import run_migrations
 from results_tracker import record_bet, settle_bet, bet_statistics, list_pending_bets, utc_match_date
 from prediction_validation import brier_score, log_loss, fit_temperature, apply_temperature
+from football_stats_provider import fetch_match_market_data, FootballStatsError
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -4729,6 +4730,52 @@ def refresh_pending_bet_records(user_id=None):
             "pending": max(0, len(pending) - settled)}
 
 
+async def marketdata_command(update, context):
+    """Probe the optional statistics provider for one exact completed fixture."""
+    raw = " ".join(context.args or [])
+    parts = [part.strip() for part in raw.split("|")]
+    if len(parts) != 2 or " vs " not in parts[0].casefold():
+        await reply(update, "Usage: /marketdata HOME vs AWAY | YYYY-MM-DD\\nExample: /marketdata Arsenal vs Chelsea | 2026-11-08")
+        return
+    teams = re.split(r"\\s+vs\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
+    if len(teams) != 2:
+        await reply(update, "Use HOME vs AWAY | YYYY-MM-DD.")
+        return
+    try:
+        data = await asyncio.to_thread(fetch_match_market_data, teams[0], teams[1], parts[1])
+        fixture = data["fixture"]
+        score = fixture.get("score") or {}
+        half = score.get("halftime") or {}
+        full = score.get("fulltime") or {}
+        def stat_summary(rows):
+            totals = {}
+            for team_row in rows:
+                for stat in team_row.get("statistics") or []:
+                    name = str(stat.get("type") or "")
+                    value = stat.get("value")
+                    if isinstance(value, (int, float)):
+                        totals[name] = totals.get(name, 0) + value
+            return totals
+        full_stats = stat_summary(data["statistics_full_time"])
+        half_stats = stat_summary(data["statistics_half_time"])
+        lines = [
+            "📡 API-FOOTBALL MATCH DATA",
+            f"Fixture ID: {data['fixture_id']} | Status: {(fixture.get('fixture') or {}).get('status', {}).get('short', 'unknown')}",
+            f"Full-time score: {full.get('home', '—')}-{full.get('away', '—')}",
+            f"Half-time score: {half.get('home', '—')}-{half.get('away', '—')}",
+            "",
+            "Full-time match statistics:",
+        ]
+        for key in ("Corner Kicks", "Yellow Cards", "Red Cards"):
+            lines.append(f"• {key}: {full_stats.get(key, 'not supplied')}")
+        lines.append("Half-time statistics: " + (", ".join(f"{k}={v}" for k, v in half_stats.items()) if half_stats else "not supplied by this competition/fixture"))
+        lines.append(f"Player-stat response groups: {len(data['players'])} | Match events: {len(data['events'])}")
+        lines.extend(["", "Provider data retrieval verified for this fixture only. Market-specific settlement is not enabled until the market's exact bookmaker rules are mapped and tested."])
+        await reply(update, "\\n".join(lines))
+    except Exception as exc:
+        await reply(update, f"⚠️ Match-statistics provider unavailable: {type(exc).__name__}: {str(exc)[:250]}")
+
+
 async def automatic_bet_settlement_job(context):
     try:
         result = await asyncio.to_thread(refresh_pending_bet_records)
@@ -4891,7 +4938,7 @@ def main():
         ("betlog", betlog_command),
         ("betsettle", betsettle_command),
         ("betstats", betstats_command),
-        ("betresults", betresults_command),
+        ("betresults", betresults_command),\n        ("marketdata", marketdata_command),
         ("fixtures", fixtures),
         ("syncfixtures", syncfixtures),
         ("live", live),
