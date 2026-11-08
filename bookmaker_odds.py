@@ -336,12 +336,7 @@ def fetch_all(day: date | None = None):
         except Exception as exc:
             LOG.exception("%s odds fetch failed", name)
             result["errors"][name] = f"{type(exc).__name__}: {str(exc).split('?', 1)[0][:180]}"
-    result["unavailable"] = {
-        "BetPawa": "Disabled: repeated public-feed connection failures.",
-        "SportPesa": "Not integrated: the available open-source feed is obsolete and EPL-only.",
-        "Odibets": "Not integrated: no dependable free public feed verified.",
-        "Mozzart Bet": "Not integrated: no dependable free public feed verified.",
-    }
+    result["supported_bookmakers"] = ["Betika", "SportyBet"]
     return result
 
 
