@@ -4690,6 +4690,7 @@ def main():
     if database_enabled and app.job_queue is not None:
         app.job_queue.run_repeating(automatic_bet_settlement_job, interval=6 * 60 * 60, first=60, name="automatic-bet-results")
 
+    handlers = [
         ("start", start),
         ("help", help_command),
         ("about", about),
