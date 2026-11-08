@@ -46,6 +46,24 @@ class AccumulatorEngineTests(unittest.TestCase):
         self.assertEqual(len(result["selections"]), 2)
         self.assertNotIn(22.00, [x["odds"] for x in result["selections"]])
 
+    def test_large_target_is_built_from_multiple_moderate_price_legs(self):
+        candidates = [
+            {"home": f"Small {i}", "away": f"Opponent {i}", "odds": 2.20, "probability": 0.45, "market": "1X2"}
+            for i in range(1, 7)
+        ]
+        candidates.extend([
+            {"home": "Villarreal", "away": "Getafe", "odds": 10.0, "probability": 0.034, "market": "Over 5"},
+            {"home": "Freiburg", "away": "Union Berlin", "odds": 5.0, "probability": 0.167, "market": "1X2"},
+        ])
+        result = build_accumulator(candidates, 50.0, max_legs=8, ranking="odds")
+        self.assertTrue(result["target_reached"])
+        self.assertGreaterEqual(result["combined_odds"], 50.0)
+        self.assertLessEqual(result["combined_odds"], 60.0)
+        self.assertGreaterEqual(len(result["selections"]), 5)
+        self.assertTrue(all(x["odds"] <= 4.0 for x in result["selections"]))
+        self.assertNotIn(10.0, [x["odds"] for x in result["selections"]])
+        self.assertNotIn(5.0, [x["odds"] for x in result["selections"]])
+
     def test_ranking_is_validated(self):
         with self.assertRaises(ValueError):
             build_accumulator(self.candidates, 2.0, ranking="random")

@@ -30,6 +30,9 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
         item["odds"], item["probability"] = odds, probability
         item["_fixture_key"] = (home.casefold(), away.casefold())
         item["_expected_factor"] = odds * probability
+        # Aggressive target building may include high-variance, negative-EV legs.
+        # Keep the model probability and expected factor visible to ranking/reporting;
+        # the caller explicitly chooses the risk profile.
         clean.append(item)
     if ranking not in {"value", "probability", "odds"}:
         raise ValueError("ranking must be value, probability or odds.")
@@ -39,11 +42,16 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
         clean.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
     else:
         clean.sort(key=lambda x: (x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
-    clean = [item for item in clean if item["odds"] <= target * 1.20]
+    # Large target odds must be built as a multi-match parlay, not one or two
+    # extreme longshots. For targets >= 10, cap each leg at 4.00 and let the
+    # accumulator add independent fixtures until the requested total is reached.
+    per_leg_cap = 4.00 if target >= 10 else target * 1.20
+    clean = [item for item in clean if item["odds"] <= per_leg_cap]
     clean = clean[:max_candidates]
     if not clean:
         return {"selections": [], "combined_odds": 1.0, "combined_probability": 0.0,
-                "expected_return_factor": 0.0, "target_reached": False, "reason": "No valid candidates."}
+                "expected_return_factor": 0.0, "target_reached": False,
+                "reason": f"No valid candidates within the {per_leg_cap:.2f} per-selection odds cap; no slip generated."}
 
     # A beam keeps this practical for Telegram requests with large fixture slates.
     states = [([], 1.0, 1.0, frozenset(), 0)]

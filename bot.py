@@ -1923,9 +1923,12 @@ async def autobuild_sportybet_command(update, context):
     if args and re.fullmatch(r"\d+(?:\.\d+)?", str(args[0])):
         target = float(args.pop(0))
         if not math.isfinite(target) or target <= 1.0:
-            await reply(update, "Target odds must be a finite decimal number greater than 1.00.")
+            await reply(update, "Target odds must be greater than 1.00.")
             return
-    rank_mode = "value"
+
+    # Scan all fixtures and every retrieved market the scoreline model supports.
+    # Default parlay excludes BTTS and Under 2.5 per the user's standing preferences.
+    rank_mode = "parlay"
     market_parts = []
     for token in args:
         lowered = token.casefold()
@@ -1933,49 +1936,88 @@ async def autobuild_sportybet_command(update, context):
             rank_mode = lowered.split("=", 1)[1]
         elif lowered.startswith("market="):
             market_parts.append(token.split("=", 1)[1])
-        elif lowered in ("value", "odds", "probability"):
+        elif lowered in ("value", "odds", "probability", "parlay"):
             rank_mode = lowered
         else:
             market_parts.append(token)
-    if rank_mode not in ("value", "odds", "probability"):
-        await reply(update, "Ranking must be value, odds or probability.")
+    if rank_mode not in ("value", "odds", "probability", "parlay"):
+        await reply(update, "Ranking must be parlay, value, odds or probability.")
         return
+
     market_filter = ",".join(market_parts) if market_parts else "all"
-    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\nTarget combined odds: {target:.2f}\nMarket filter: {market_filter}\nRanking: {rank_mode}\nScanning available model-supported SportyBet markets…\n\nControls: /autobuild 5 BTTS rank=odds | /autobuild 20 Correct Score rank=odds | /autobuild 10 market=1X2,Under 2.5 rank=value")
+    await reply(update, f"🤖 SPORTYBET SCAN — TARGET {target:.2f}\nScanning all upcoming matches and all available supported markets…")
     try:
-        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet")
-        rows = [x for x in rows if str(x.get("bookmaker", "")).casefold() == "sportybet"]
-        if rank_mode == "odds":
+        rows, diagnostics = await asyncio.to_thread(
+            scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
+        )
+        rows = [
+            x for x in rows
+            if str(x.get("bookmaker", "")).casefold() == "sportybet"
+            and 1.25 <= float(x.get("odds") or 0) <= 4.50
+            and "btts" not in str(x.get("market", "")).casefold()
+            and "both teams" not in str(x.get("market", "")).casefold()
+            and not (
+                "under" in str(x.get("selection", "")).casefold()
+                and "2.5" in (
+                    str(x.get("selection", "")) + " " + str(x.get("specifier", ""))
+                )
+            )
+        ]
+
+        if rank_mode in ("parlay", "odds"):
             rows.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
         elif rank_mode == "probability":
             rows.sort(key=lambda x: (x["probability"], x["ev"]), reverse=True)
         else:
             rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
-        build = build_accumulator(rows, target, max_legs=20, ranking=rank_mode)
-        chosen, product = build["selections"], build["combined_odds"]
+
+        build = build_accumulator(
+            rows, target, max_legs=20,
+            ranking=("odds" if rank_mode == "parlay" else rank_mode),
+            max_candidates=250,
+        )
+        chosen = build["selections"]
         if not chosen:
-            await reply(update, "⚠️ NO USABLE SPORTYBET PICKS FOUND\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No SportyBet-priced, model-supported candidates were found."))
+            context.user_data.pop("pending_sportybet_booking", None)
+            await reply(update, "No qualifying SportyBet selections were found.")
             return
-        # Keep exact event/market/outcome IDs from the odds scan; do not fuzzy-match again.
+
+        # Keep the exact fixture, market and outcome IDs returned by the odds scan.
         resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
         combined = math.prod(float(x["odds"]) for x in resolved)
-        within_target_band = target <= combined <= target * 1.20
-        if within_target_band:
+        target_reached = target <= combined <= target * 1.20
+        if target_reached:
             context.user_data["pending_sportybet_booking"] = resolved
         else:
             context.user_data.pop("pending_sportybet_booking", None)
-        lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f} | " + ("TARGET REACHED" if within_target_band else "TARGET NOT MET — NO CODE"), f"Selections: {len(resolved)}", ""]
+
+        lines = [
+            f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET",
+            f"Combined odds: {combined:.2f} — " + ("TARGET REACHED" if target_reached else "TARGET NOT REACHED"),
+            f"Selections: {len(resolved)}",
+            "",
+        ]
         for i, leg in enumerate(resolved, 1):
-            source = chosen[i-1]
-            lines.append(f"{i}. {leg['fixture']}\n   {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}\n   Model probability: {source['probability']:.1%} | Estimated EV: {source['ev']:+.1%}")
-        lines.extend(["", "Model remains experimental and not historically calibrated. Negative-EV legs are shown transparently. Only scoreline-supported markets are evaluated. Odds are re-resolved before code creation. Confirming requests a share code only; no bet is placed."])
-        if not within_target_band:
-            lines.append(f"Requested target band: {target:.2f}–{target * 1.20:.2f}. No booking code will be offered.")
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel")]]) if within_target_band else None
+            lines.append(
+                f"{i}. {leg['fixture']} — {leg['market']}: "
+                f"{leg['selection']} @ {leg['odds']:.2f}"
+            )
+        if not target_reached:
+            lines.append("")
+            lines.append("No booking code available because the target was not reached.")
+
+        markup = (
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("Generate SportyBet code", callback_data="sb:confirm"),
+                InlineKeyboardButton("Cancel", callback_data="sb:cancel"),
+            ]])
+            if target_reached else None
+        )
         await update.effective_message.reply_text("\n".join(lines), reply_markup=markup)
     except Exception as exc:
         logger.exception("SportyBet auto-builder failed")
-        await reply(update, f"⚠️ SPORTYBET AUTO-BUILD FAILED: {type(exc).__name__}: {str(exc)[:250]}")
+        context.user_data.pop("pending_sportybet_booking", None)
+        await reply(update, f"SportyBet scan failed: {type(exc).__name__}: {str(exc)[:180]}")
 
 
 async def accumulator_status_command(update, context):
