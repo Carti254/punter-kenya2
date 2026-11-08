@@ -14,7 +14,7 @@ import json
 import time
 import copy
 import uuid
-from sportybet_client import SportyBetError, prepare_slip as prepare_sportybet_slip, prepare_slip_from_candidates as prepare_sportybet_candidates, create_booking as create_sportybet_booking, get_booking as get_sportybet_booking
+from sportybet_client import MAX_SELECTIONS as SPORTYBET_MAX_SELECTIONS, SportyBetError, prepare_slip as prepare_sportybet_slip, prepare_slip_from_candidates as prepare_sportybet_candidates, create_booking as create_sportybet_booking, get_booking as get_sportybet_booking
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -2172,7 +2172,7 @@ async def autobuild_sportybet_command(update, context):
             rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
 
         available_fixtures = len({(str(x.get("home") or "").casefold(), str(x.get("away") or "").casefold()) for x in rows})
-        effective_max_legs = available_fixtures
+        effective_max_legs = min(available_fixtures, SPORTYBET_MAX_SELECTIONS)
         if effective_max_legs < 1:
             await reply(update, "Fixtures were retrieved, but none produced a distinct eligible SportyBet selection.")
             return
@@ -2302,6 +2302,7 @@ async def autobuild_sportybet_command(update, context):
              f"{specialist_stats.get('reason', '')}"),
             f"Research checks: {research_stats['research_scope']}.",
             "Correlation review: " + (", ".join(build.get("correlation_warnings") or []) if build.get("correlation_warnings") else "no same-competition/date cluster detected; other dependencies are not quantified."),
+            (f"SportyBet integration selection limit: {SPORTYBET_MAX_SELECTIONS}; {available_fixtures} distinct eligible fixtures were available." if available_fixtures > SPORTYBET_MAX_SELECTIONS else ""),
             "Unsupported markets are not guessed. Verified lineups, injuries, xG, tactics and true closing-line movement remain gaps unless their sources are actually available.",
             "Model probabilities and estimated value are experimental, not calibrated guarantees of profit.",
         ])
