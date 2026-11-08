@@ -1902,6 +1902,48 @@ async def aipicks_status_command(update, context):
     await topvalue_command(update, context)
 
 
+async def autobuild_sportybet_command(update, context):
+    args = list(context.args or [])
+    target = 5.0
+    if args:
+        try:
+            target = float(args[0])
+            if not math.isfinite(target) or target < 1.5 or target > 50:
+                raise ValueError
+        except ValueError:
+            await reply(update, "Usage: /autobuild [target odds 1.50–50]. Example: /autobuild 10")
+            return
+    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\\nTarget combined odds: {target:.2f}\\nScanning qualifying candidates and checking SportyBet Kenya markets…")
+    try:
+        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "safest")
+        # The model scan can see both feeds; only use candidates priced by SportyBet.
+        rows = [x for x in rows if str(x.get("bookmaker", "")).casefold() == "sportybet"]
+        chosen, product, used = [], 1.0, set()
+        for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
+            key = (item["home"], item["away"])
+            if key in used or item["probability"] < 0.62 or item["ev"] < 0.03:
+                continue
+            chosen.append(item); used.add(key); product *= float(item["odds"])
+            if product >= target or len(chosen) >= 8:
+                break
+        if not chosen or product < target:
+            await reply(update, f"🚫 NO SPORTYBET SLIP GENERATED\\nCould not reach {target:.2f} using SportyBet-priced selections passing the existing probability (62%) and estimated EV (+3%) filters. No weak legs were added.\\n" + ("Feed notes: " + "; ".join(diagnostics[:4]) if diagnostics else "No qualifying SportyBet prices were found."))
+            return
+        raw_lines = [f"{x['home']} vs {x['away']} | {x['market']} | {x['selection']}" for x in chosen]
+        resolved = await asyncio.to_thread(prepare_sportybet_slip, raw_lines)
+        context.user_data["pending_sportybet_booking"] = resolved
+        combined = math.prod(float(x["odds"]) for x in resolved)
+        lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f}", f"Selections: {len(resolved)}", ""]
+        for i, leg in enumerate(resolved, 1):
+            source = chosen[i-1]
+            lines.append(f"{i}. {leg['fixture']}\\n   {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}\\n   Model probability: {source['probability']:.1%} | Estimated EV: {source['ev']:+.1%}")
+        lines.extend(["", "Model is experimental and uncalibrated. Odds are re-resolved from SportyBet before code creation. Confirm to request a genuine booking code; no bet is placed."])
+        await update.effective_message.reply_text("\\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel")]]))
+    except Exception as exc:
+        logger.exception("SportyBet auto-builder failed")
+        await reply(update, f"⚠️ SPORTYBET AUTO-BUILD FAILED: {type(exc).__name__}: {str(exc)[:250]}")
+
+
 async def accumulator_status_command(update, context):
     """Build a cautious combination only from scanner-qualified selections."""
     args = [str(x).strip() for x in (context.args or [])]
@@ -4446,7 +4488,7 @@ def main():
         ("aipicks", aipicks_status_command),
         ("accumulator", accumulator_status_command),
         ("myslips", my_slips_command),
-        ("build", build_sportybet_command),
+        ("build", build_sportybet_command),\n        ("slip", build_sportybet_command),\n        ("autobuild", autobuild_sportybet_command),
         ("edit", edit_sportybet_command),
         ("merge", merge_sportybet_command),
         ("split", split_sportybet_command),
