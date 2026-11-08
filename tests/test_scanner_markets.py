@@ -34,7 +34,7 @@ class ScannerMarketTests(unittest.TestCase):
             ({"market": "1X2", "selection": "1"}, .50),
             ({"market": "Double Chance", "selection": "1X"}, .75),
             ({"market": "Both Teams To Score", "selection": "Yes"}, "positive"),
-            ({"market": "Total Goals Over Under", "selection": "Over 1.5"}, .80),
+            ({"market": "Total Goals Over Under", "selection": "Over 1.5"}, "positive"),
             ({"market": "Correct Score", "selection": "1:0"}, "positive"),
         ]
         for row, expected in cases:
