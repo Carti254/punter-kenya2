@@ -2314,7 +2314,7 @@ async def leaguefixtures(
             )
             raw_rows.extend(day_rows)
 
-        selected = upcoming_fixtures(raw_rows, limit=40, include_past=True)
+        selected = upcoming_fixtures(raw_rows, limit=40, include_past=False)
         if not selected:
             day_label = day_filter or "today and tomorrow"
             await reply(
