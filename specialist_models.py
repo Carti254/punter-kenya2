@@ -19,6 +19,7 @@ STAT_ALIASES = {
     "shots_on_target": ("shots on goal", "shots on target"),
     "yellow_cards": ("yellow cards",),
     "red_cards": ("red cards",),
+    "xg": ("expected goals", "expected_goals", "xg"),
 }
 
 
@@ -82,6 +83,11 @@ def _recent_team_observations(team_id, before_date, api_key, session, last=5):
         home = _team_key((teams.get("home") or {}).get("name"))
         away = _team_key((teams.get("away") or {}).get("name"))
         home_stats, away_stats = by_team.get(home, {}), by_team.get(away, {})
+        team_ids = teams
+        is_home_team = str((team_ids.get("home") or {}).get("id") or "") == str(team_id)
+        xg_home, xg_away = _value(home_stats, STAT_ALIASES["xg"]), _value(away_stats, STAT_ALIASES["xg"])
+        xg_for = xg_home if is_home_team else xg_away
+        xg_against = xg_away if is_home_team else xg_home
         home_ht = (fixture_row.get("score") or {}).get("halftime") or {}
         ht_total = None
         try:
@@ -89,7 +95,7 @@ def _recent_team_observations(team_id, before_date, api_key, session, last=5):
                 ht_total = float(home_ht["home"]) + float(home_ht["away"])
         except (TypeError, ValueError):
             pass
-        obs = {"half_time_goals": ht_total}
+        obs = {"half_time_goals": ht_total, "xg_for": xg_for, "xg_against": xg_against}
         for key, aliases in STAT_ALIASES.items():
             h, a = _value(home_stats, aliases), _value(away_stats, aliases)
             obs[key] = (h + a) if h is not None and a is not None else None
@@ -207,12 +213,29 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
             "model": "recent-form Poisson baseline",
         })
     available = [p for p in panels if p["available"]]
+    home_xgf = [r["xg_for"] for r in home_rows if r.get("xg_for") is not None]
+    home_xga = [r["xg_against"] for r in home_rows if r.get("xg_against") is not None]
+    away_xgf = [r["xg_for"] for r in away_rows if r.get("xg_for") is not None]
+    away_xga = [r["xg_against"] for r in away_rows if r.get("xg_against") is not None]
+    xg_evidence = None
+    if min(len(home_xgf), len(home_xga), len(away_xgf), len(away_xga)) >= 3:
+        xg_evidence = {
+            "provider": "API-Football",
+            "home_sample": min(len(home_xgf), len(home_xga)),
+            "away_sample": min(len(away_xgf), len(away_xga)),
+            "home_xg_for": sum(home_xgf) / len(home_xgf),
+            "home_xg_against": sum(home_xga) / len(home_xga),
+            "away_xg_for": sum(away_xgf) / len(away_xgf),
+            "away_xg_against": sum(away_xga) / len(away_xga),
+            "method": "recent completed fixture team expected-goals statistics",
+        }
     return {
         "fixture": f"{home} vs {away}", "date": target.isoformat(),
         "fixture_id": fixture_id,
         "provider": "API-Football", "panels": panels,
         "lineup_evidence": lineup_evidence,
         "team_news_evidence": team_news_evidence,
+        "xg_evidence": xg_evidence,
         "provider_warnings": provider_warnings,
         "council": {
             "available_panels": len(available),
