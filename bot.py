@@ -2216,10 +2216,14 @@ async def autobuild_sportybet_command(update, context):
         else:
             context.user_data.pop("pending_sportybet_booking", None)
 
+        combined_expected_roi = combined * combined_probability - 1.0
         lines = [
             f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET",
             f"Combined odds: {combined:.2f} — " + ("TARGET REACHED" if target_reached else "TARGET NOT REACHED"),
             f"Selections: {len(resolved)}",
+            f"Combined probability (independence estimate): {combined_probability:.2%}",
+            f"Combined expected ROI estimate (independence): {combined_expected_roi:+.2%}",
+            "Combined probability is experimental; cross-fixture dependencies are not fully modelled.",
             "",
         ]
         for i, leg in enumerate(resolved, 1):
