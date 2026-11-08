@@ -27,7 +27,7 @@ from database import get_connection, test_connection
 from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find_bookmaker_event
 from slip_manager import create_slip, get_slip, list_slips, update_slip
 from schema_migrations import run_migrations
-from results_tracker import record_bet, settle_bet, bet_statistics, list_pending_bets
+from results_tracker import record_bet, settle_bet, bet_statistics, list_pending_bets, utc_match_date
 from prediction_validation import brier_score, log_loss, fit_temperature, apply_temperature
 
 # ============================================================
@@ -4675,7 +4675,7 @@ def resolve_bet_match_date(home, away):
         if not fixture or not fixture.get("kickoff_at"):
             continue
         if canonical_team_key(fixture.get("home_team")) == canonical_team_key(home) and canonical_team_key(fixture.get("away_team")) == canonical_team_key(away):
-            matches.append(fixture["kickoff_at"].replace(tzinfo=timezone.utc).astimezone(EAT).date())
+            matches.append(utc_match_date(fixture["kickoff_at"]))
     dates = set(matches)
     return next(iter(dates)) if len(dates) == 1 else None
 
