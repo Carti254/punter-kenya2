@@ -201,7 +201,7 @@ def _resolve_market(event, market_text, selection_text):
 def prepare_slip(lines):
     """Resolve lines formatted Fixture | Market | Selection to current live IDs."""
     if not lines or len(lines) > MAX_SELECTIONS:
-        raise SportyBetError("A SportyBet slip must contain between 1 and {MAX_SELECTIONS} selections.")
+        raise SportyBetError(f"A SportyBet slip must contain between 1 and {MAX_SELECTIONS} selections.")
     fixtures = _get_fixtures()
     resolved = []
     for number, raw in enumerate(lines, 1):
