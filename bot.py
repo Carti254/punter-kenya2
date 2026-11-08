@@ -37,7 +37,7 @@ from premium_intelligence import market_probabilities, assess_price, rollover_pr
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
-from forecast_tracker import record_forecast, settle_forecast, forecast_performance
+from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -5006,6 +5006,12 @@ async def automatic_bet_settlement_job(context):
             logger.info("Automatically settled %s logged bets from completed-results CSV.", result["settled"])
     except Exception:
         logger.exception("Scheduled bet-result refresh failed")
+    try:
+        forecasts = await asyncio.to_thread(refresh_specialist_forecasts)
+        logger.info("Specialist forecast grading: checked=%s settled=%s pending=%s",
+                    forecasts.get("checked"), forecasts.get("settled"), forecasts.get("pending"))
+    except Exception:
+        logger.exception("Scheduled specialist forecast grading failed")
 
 
 async def betresults_command(update, context):
@@ -5173,7 +5179,7 @@ async def council_command(update, context):
                 market_key = panel["market"]
                 selection = f"Over {panel['default_line']}"
                 forecast_id = await asyncio.to_thread(
-                    record_forecast, f"{home}|{away}|{match_date.isoformat()}",
+                    record_forecast, f"api-football:{report['fixture_id']}",
                     market_key, selection, panel["over_probability"], None,
                     "specialist-poisson-v1",
                 )
