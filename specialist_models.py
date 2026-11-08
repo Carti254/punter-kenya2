@@ -163,6 +163,55 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
     }
 
 
+def specialist_price_assessments(report, bookmaker_games):
+    """Match specialist estimates to exact fixture prices and calculate transparent edge."""
+    import re
+    aliases = {
+        "corners": ("corner",),
+        "cards": ("yellow card", "total cards"),
+        "shots": ("total shots", "shots"),
+        "shots_on_target": ("shots on target", "shots on goal"),
+        "half_time_goals": ("1st half", "first half", "half time", "half-time"),
+    }
+    panels = {p["market"]: p for p in report.get("panels", []) if p.get("available")}
+    output = []
+    for game in bookmaker_games or []:
+        if (_team_key(game.get("home")) != _team_key(report["fixture"].split(" vs ", 1)[0])
+                or _team_key(game.get("away")) != _team_key(report["fixture"].split(" vs ", 1)[-1])):
+            continue
+        for row in game.get("markets") or []:
+            name = str(row.get("market") or "").casefold()
+            selection = str(row.get("selection") or "").strip()
+            match = re.search(r"\\b(over|under)\\s+(\\d+(?:\\.\\d+)?)", selection, re.I)
+            if not match:
+                continue
+            direction, line = match.group(1).casefold(), float(match.group(2))
+            for market_key, panel in panels.items():
+                if not any(alias in name for alias in aliases.get(market_key, ())):
+                    continue
+                if market_key == "half_time_goals" and not any(x in name for x in ("1st half", "first half", "half time", "half-time")):
+                    continue
+                probability = (_poisson_over if direction == "over" else _poisson_under)(
+                    float(panel["expected_total"]), line
+                )
+                try:
+                    odds = float(row.get("odds"))
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(odds) or odds <= 1:
+                    continue
+                output.append({
+                    "bookmaker": game.get("bookmaker") or "Unknown",
+                    "market": market_key, "market_name": row.get("market"),
+                    "selection": selection, "line": line, "odds": odds,
+                    "probability": probability, "implied_probability": 1 / odds,
+                    "edge": probability - (1 / odds),
+                    "expected_roi": probability * odds - 1,
+                })
+                break
+    return sorted(output, key=lambda x: (x["expected_roi"], x["edge"]), reverse=True)
+
+
 PLAYER_METRICS = {
     "shots": ("shots", "total"),
     "shots_on_target": ("shots", "on"),
