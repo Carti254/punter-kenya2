@@ -4923,7 +4923,7 @@ async def marketdata_command(update, context):
     if len(parts) != 2 or " vs " not in parts[0].casefold():
         await reply(update, "Usage: /marketdata HOME vs AWAY | YYYY-MM-DD\\nExample: /marketdata Arsenal vs Chelsea | 2026-11-08")
         return
-    teams = re.split(r"\s+vs\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
+    teams = re.split(r"\s+vs\.?\s+", parts[0], maxsplit=1, flags=re.I)
     if len(teams) != 2:
         await reply(update, "Use HOME vs AWAY | YYYY-MM-DD.")
         return
