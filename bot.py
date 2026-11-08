@@ -2199,6 +2199,10 @@ async def autobuild_sportybet_command(update, context):
             live_leg["research_checks"] = model_leg.get("research_checks") or []
             live_leg["research_gaps"] = model_leg.get("research_gaps") or []
             live_leg["probability_source"] = model_leg.get("probability_source") or "PUNTER statistical model"
+            for evidence_key in ("specialist_evidence", "specialist_panels", "x_research_evidence",
+                                 "x_research_warning", "other_bookmaker_prices",
+                                 "best_other_bookmaker", "cross_bookmaker_edge"):
+                live_leg[evidence_key] = model_leg.get(evidence_key)
         combined = math.prod(float(x["odds"]) for x in resolved)
         combined_probability = math.prod(float(x["probability"]) for x in resolved)
         target_reached = target <= combined <= target * 1.20
@@ -2241,12 +2245,30 @@ async def autobuild_sportybet_command(update, context):
                     f"   Model goal rates: {float(evidence['expected_home_goals']):.2f}–"
                     f"{float(evidence['expected_away_goals']):.2f}"
                 )
+            alternative = leg.get("best_other_bookmaker")
+            if alternative:
+                lines.append(
+                    f"   Other-book price: {alternative['bookmaker']} @ {float(alternative['odds']):.2f} "
+                    f"(SportyBet {float(leg['odds']):.2f})"
+                )
+            specialist = leg.get("specialist_evidence")
+            if isinstance(specialist, dict):
+                lines.append(
+                    f"   Specialist model: {specialist.get('market') or 'market'} line "
+                    f"{specialist.get('line')} | expected total {specialist.get('expected_total')}"
+                )
+            social_leads = leg.get("x_research_evidence") or []
+            if social_leads:
+                lines.append(f"   X research: {len(social_leads)} public-post leads; unverified, not confirmed team news")
 
         lines.extend([
             "",
             candidate_research_summary(rows),
             (f"Specialist research: {specialist_stats.get('fixtures_checked', 0)} fixtures checked; "
-             f"{specialist_stats.get('matched_prices', 0)} exact market prices enriched. "
+             f"{specialist_stats.get('matched_prices', 0)} exact specialist prices enriched. "
+             f"Cross-book comparisons: {specialist_stats.get('cross_bookmaker_matches', 0)}; "
+             f"odds snapshots stored: {specialist_stats.get('odds_snapshots_saved', 0)}; "
+             f"X public leads: {specialist_stats.get('x_posts', 0)}. "
              f"{specialist_stats.get('reason', '')}"),
             f"Research checks: {research_stats['research_scope']}.",
             "Unsupported markets are not guessed. Team news, xG, tactics, odds movement and cross-fixture correlation are shown as gaps unless their data sources are actually connected and verified.",
