@@ -1919,7 +1919,7 @@ async def aipicks_status_command(update, context):
 
 async def autobuild_sportybet_command(update, context):
     args = list(context.args or [])
-    target = 5.0
+    target = 2.0
     if args and re.fullmatch(r"\d+(?:\.\d+)?", str(args[0])):
         target = float(args.pop(0))
         if not math.isfinite(target) or target <= 1.0:
@@ -1958,14 +1958,21 @@ async def autobuild_sportybet_command(update, context):
             return
         # Keep exact event/market/outcome IDs from the odds scan; do not fuzzy-match again.
         resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
-        context.user_data["pending_sportybet_booking"] = resolved
         combined = math.prod(float(x["odds"]) for x in resolved)
-        lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"), f"Selections: {len(resolved)}", ""]
+        within_target_band = target <= combined <= target * 1.20
+        if within_target_band:
+            context.user_data["pending_sportybet_booking"] = resolved
+        else:
+            context.user_data.pop("pending_sportybet_booking", None)
+        lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f} | " + ("TARGET REACHED" if within_target_band else "TARGET NOT MET — NO CODE"), f"Selections: {len(resolved)}", ""]
         for i, leg in enumerate(resolved, 1):
             source = chosen[i-1]
             lines.append(f"{i}. {leg['fixture']}\n   {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}\n   Model probability: {source['probability']:.1%} | Estimated EV: {source['ev']:+.1%}")
         lines.extend(["", "Model remains experimental and not historically calibrated. Negative-EV legs are shown transparently. Only scoreline-supported markets are evaluated. Odds are re-resolved before code creation. Confirming requests a share code only; no bet is placed."])
-        await update.effective_message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel")]]))
+        if not within_target_band:
+            lines.append(f"Requested target band: {target:.2f}–{target * 1.20:.2f}. No booking code will be offered.")
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel")]]) if within_target_band else None
+        await update.effective_message.reply_text("\n".join(lines), reply_markup=markup)
     except Exception as exc:
         logger.exception("SportyBet auto-builder failed")
         await reply(update, f"⚠️ SPORTYBET AUTO-BUILD FAILED: {type(exc).__name__}: {str(exc)[:250]}")
@@ -3394,6 +3401,10 @@ def _normal_market_text(value):
 
 def _market_probability_for_row(prediction, row):
     """Estimate supported markets from the scoreline distribution; never invent unavailable data."""
+    raw_market = str(row.get("market") or "").casefold()
+    raw_selection = str(row.get("selection") or "").casefold()
+    if any(token in raw_market for token in ("&", " + ", "combo", "combined")) or " & " in raw_selection or " and " in raw_selection:
+        return None, "combined market requires a joint probability model"
     market = _normal_market_text(row.get("market"))
     selection = _normal_market_text(row.get("selection"))
     specifier = _normal_market_text(row.get("specifier") or row.get("handicap"))
