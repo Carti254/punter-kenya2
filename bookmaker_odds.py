@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import math
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -66,7 +67,7 @@ def _eat_time(value):
 def _number(value):
     try:
         n = float(value)
-        return round(n, 3) if n > 1 and n < 10000 else None
+        return round(n, 3) if math.isfinite(n) and n > 1 else None
     except (TypeError, ValueError, OverflowError):
         return None
 
