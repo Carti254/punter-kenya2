@@ -4923,7 +4923,7 @@ async def marketdata_command(update, context):
     if len(parts) != 2 or " vs " not in parts[0].casefold():
         await reply(update, "Usage: /marketdata HOME vs AWAY | YYYY-MM-DD\\nExample: /marketdata Arsenal vs Chelsea | 2026-11-08")
         return
-    teams = re.split(r"\\s+vs\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
+    teams = re.split(r"\s+vs\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
     if len(teams) != 2:
         await reply(update, "Use HOME vs AWAY | YYYY-MM-DD.")
         return
@@ -5132,7 +5132,7 @@ async def playerprop_command(update, context):
     if len(parts) not in (4, 5):
         await reply(update, "Usage: /playerprop HOME vs AWAY | PLAYER NAME | METRIC | LINE [| YYYY-MM-DD]\nMetrics: shots, shots_on_target, goals, assists, yellow_cards, red_cards")
         return
-    fixture = re.split(r"\\s+vs\\.?\\s+|\\s+v\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
+    fixture = re.split(r"\s+vs\\.?\\s+|\\s+v\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
     if len(fixture) != 2:
         await reply(update, "Enter the fixture as HOME vs AWAY.")
         return
@@ -5156,7 +5156,7 @@ async def playerprop_command(update, context):
 
 async def xresearch_command(update, context):
     raw = " ".join(context.args or [])
-    split = re.split(r"\\s+vs\\.?\\s+|\\s+v\\.?\\s+", raw, maxsplit=1, flags=re.I)
+    split = re.split(r"\s+vs\\.?\\s+|\\s+v\\.?\\s+", raw, maxsplit=1, flags=re.I)
     if len(split) != 2:
         await reply(update, "Usage: /xresearch HOME TEAM vs AWAY TEAM")
         return
