@@ -183,6 +183,50 @@ def _line_probability(prediction, market, selection):
     return None
 
 
+def _external_probability(prediction, market, selection):
+    """Map only explicitly published BSD forecast markets to exact selections."""
+    if not isinstance(prediction, dict):
+        return None
+    markets = prediction.get("markets") or {}
+    market_text = _normal(f"{market} {selection}")
+    selection_text = _normal(selection)
+    result = markets.get("match_result") or {}
+    values = {}
+    for key in ("prob_home", "prob_draw", "prob_away"):
+        try:
+            values[key] = float(result.get(key)) / 100.0
+        except (TypeError, ValueError):
+            values[key] = None
+    home, draw, away = values["prob_home"], values["prob_draw"], values["prob_away"]
+    is_result = any(term in market_text for term in ("1x2", "match result", "full time result", "fulltime result"))
+    if is_result and all(value is not None for value in (home, draw, away)):
+        if selection_text in {"1", "home", "home win"}: return home
+        if selection_text in {"x", "draw", "tie"}: return draw
+        if selection_text in {"2", "away", "away win"}: return away
+    if "double chance" in market_text and all(value is not None for value in (home, draw, away)):
+        if selection_text in {"1x", "home or draw", "home draw"}: return home + draw
+        if selection_text in {"12", "home or away", "home away"}: return home + away
+        if selection_text in {"x2", "draw or away", "draw away"}: return draw + away
+    if ("draw no bet" in market_text or "dnb" in market_text) and home is not None and away is not None:
+        denominator = home + away
+        if denominator > 0:
+            if selection_text in {"1", "home", "home win"}: return home / denominator
+            if selection_text in {"2", "away", "away win"}: return away / denominator
+    if any(term in market_text for term in ("total goals", "over under", "goals over", "goals under")):
+        line_match = re.search(r"(?<!\\d)(1\\.5|2\\.5|3\\.5)(?!\\d)", str(selection))
+        if line_match:
+            suffix = line_match.group(1).replace(".", "")
+            totals = markets.get("over_under") or {}
+            try:
+                over = float(totals.get(f"prob_over_{suffix}")) / 100.0
+                if 0 < over < 1:
+                    if "under" in selection_text: return 1.0 - over
+                    if "over" in selection_text: return over
+            except (TypeError, ValueError):
+                pass
+    return _line_probability(prediction, market, selection)
+
+
 def _extract_prediction_1x2(prediction):
     markets = (prediction or {}).get("markets") or {}
     result = markets.get("match_result") or {}
