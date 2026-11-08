@@ -51,12 +51,12 @@ class ScannerMarketTests(unittest.TestCase):
             "available": True, "lambda_home": 1.7, "lambda_away": 1.1,
             "home_win": 0.50, "draw": 0.25, "away_win": 0.25,
         }
-        with patch("bot.fetch_openmatchday_fixture_rows", return_value=[raw]), \\
-             patch("bot.upcoming_fixtures", return_value=[(raw, fixture)]), \\
-             patch("bot.build_openmatchday_prediction", return_value=prediction), \\
+        with patch("bot.fetch_openmatchday_fixture_rows", return_value=[raw]), \
+             patch("bot.upcoming_fixtures", return_value=[(raw, fixture)]), \
+             patch("bot.build_openmatchday_prediction", return_value=prediction), \
              patch("bot.fetch_bookmaker_odds", return_value={
                  "bookmakers": {"SportyBet": {"games": [game]}}, "errors": {}
-             }), \\
+             }), \
              patch("bot.find_bookmaker_event", return_value=[game]):
             rows, _ = scan_value_candidates(("today",), "BTTS,Under 2.5")
         labels = {(row["market"], row["selection"]) for row in rows}
