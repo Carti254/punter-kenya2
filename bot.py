@@ -1274,29 +1274,11 @@ async def process_slip_flow(update, context):
             if not math.isfinite(target) or target <= 1:
                 await reply(update, "Target odds must be greater than 1.00.")
                 return True
-            context.user_data["autobuild_target"] = target
-            context.user_data["slip_flow"] = "autobuild_legs"
-            await reply(update, f"Target set to {target:.2f}. How many legs do you want? Enter an exact number.")
-            return True
-
-        if state == "autobuild_legs":
-            try:
-                legs = int(message)
-            except ValueError:
-                await reply(update, "Enter an exact whole number of legs, e.g. 2, 5, 8 or 12.")
-                return True
-            target = float(context.user_data.get("autobuild_target") or 0)
-            if legs < 1 or legs > 100:
-                await reply(update, "Choose between 1 and 100 legs.")
-                return True
-            if target <= 1:
-                context.user_data.pop("slip_flow", None)
-                await reply(update, "Your target odds expired. Start the build again.")
-                return True
-            context.user_data["autobuild_config"] = {"target": target, "legs": legs}
             context.user_data.pop("autobuild_target", None)
+            context.user_data.pop("autobuild_config", None)
             context.user_data.pop("slip_flow", None)
-            context.args = []
+            context.args = [f"{target:.12g}"]
+            await reply(update, f"Target accepted: {target:.2f}. Researching the available fixtures and markets.")
             await autobuild_sportybet_command(update, context)
             return True
 
@@ -2075,14 +2057,13 @@ async def autobuild_sportybet_command(update, context):
             await reply(update, "Target odds must be greater than 1.00.")
             return
 
-    # No fixed leg ceiling: use the available distinct fixtures unless the user
-    # explicitly requests a maxlegs/legs value.
-    min_legs = int(guided["legs"]) if guided else 1
-    max_legs = int(guided["legs"]) if guided else None
-    explicit_max_legs = bool(guided)
+    # The user controls only target combined odds. PUNTER determines the
+    # number of legs automatically from qualified, distinct fixtures.
+    min_legs = 1
+    max_legs = None
+    explicit_max_legs = False
 
-    # Scan all fixtures and every retrieved market the scoreline model supports.
-    # Default parlay excludes BTTS and Under 2.5 per the user's standing preferences.
+    # Automatic market discovery; standing exclusions are enforced downstream.
     rank_mode = "value"
     market_parts = []
     for token in args:
@@ -2091,26 +2072,9 @@ async def autobuild_sportybet_command(update, context):
             rank_mode = lowered.split("=", 1)[1]
         elif lowered.startswith("market="):
             market_parts.append(token.split("=", 1)[1])
-        elif lowered.startswith("legs="):
-            try:
-                min_legs = max_legs = int(lowered.split("=", 1)[1])
-            except ValueError:
-                await reply(update, "Use a positive whole number for legs, for example /autobuild 50 legs=8.")
-                return
-            explicit_max_legs = True
-        elif lowered.startswith("minlegs="):
-            try:
-                min_legs = int(lowered.split("=", 1)[1])
-            except ValueError:
-                await reply(update, "Use a positive whole number for minlegs.")
-                return
-        elif lowered.startswith("maxlegs="):
-            try:
-                max_legs = int(lowered.split("=", 1)[1])
-            except ValueError:
-                await reply(update, "Use a positive whole number for maxlegs.")
-                return
-            explicit_max_legs = True
+        elif lowered.startswith(("legs=", "minlegs=", "maxlegs=")):
+            await reply(update, "Leg-count controls have been removed. PUNTER KENYA determines the number of selections automatically.")
+            return
         elif lowered in ("value", "odds", "probability", "parlay"):
             rank_mode = lowered
         else:
@@ -2118,18 +2082,8 @@ async def autobuild_sportybet_command(update, context):
     if rank_mode not in ("value", "odds", "probability", "parlay"):
         await reply(update, "Ranking must be parlay, value, odds or probability.")
         return
-    if min_legs < 1 or (max_legs is not None and (max_legs < 1 or min_legs > max_legs)):
-        await reply(update, "Leg count must use positive whole numbers and minimum cannot exceed maximum.")
-        return
-
-    if not guided and not explicit_max_legs:
-        context.user_data["autobuild_target"] = target
-        context.user_data["slip_flow"] = "autobuild_legs"
-        await reply(update, f"Target combined odds: {target:.2f}.\nHow many legs do you want? Enter an exact number.")
-        return
 
     market_filter = ",".join(market_parts) if market_parts else "all"
-    leg_plan = f"exactly {min_legs} legs"
     try:
         # Keep all feed scanning, matching and model research internal. Telegram receives
         # only the resulting fixture shortlist and the completed slip.
@@ -2218,22 +2172,16 @@ async def autobuild_sportybet_command(update, context):
             rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
 
         available_fixtures = len({(str(x.get("home") or "").casefold(), str(x.get("away") or "").casefold()) for x in rows})
-        effective_max_legs = max_legs if explicit_max_legs else available_fixtures
-        if effective_max_legs is None:
-            effective_max_legs = available_fixtures
-        if effective_max_legs < min_legs:
-            await reply(update, f"Only {available_fixtures} distinct eligible fixtures are available; cannot satisfy minlegs={min_legs}.")
+        effective_max_legs = available_fixtures
+        if effective_max_legs < 1:
+            await reply(update, "Fixtures were retrieved, but none produced a distinct eligible SportyBet selection.")
             return
         build = build_accumulator(
-            rows, target, min_legs=min_legs, max_legs=effective_max_legs,
+            rows, target, min_legs=1, max_legs=effective_max_legs,
             ranking=("value" if rank_mode == "parlay" else rank_mode),
             max_candidates=None,
         )
         chosen = build["selections"]
-        if len(chosen) < min_legs or (max_legs is not None and len(chosen) > max_legs):
-            context.user_data.pop("pending_sportybet_booking", None)
-            await reply(update, f"NO SLIP: I could not find a qualifying combination with exactly {min_legs} legs near your {target:.2f} target. I will not silently change your requested leg count or fill it with negative-value picks.")
-            return
         if not chosen:
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(update, "No qualifying SportyBet selections were found.")
