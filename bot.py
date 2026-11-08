@@ -1128,7 +1128,7 @@ def main_menu_keyboard():
         [
             [KeyboardButton("📅 Today's Matches"), KeyboardButton("🏆 Top Leagues")],
             [KeyboardButton("🔎 Analyze Match"), KeyboardButton("ℹ️ iHelp")],
-            [KeyboardButton("🤖 Build a slip"), KeyboardButton("🧠 AI build slip")],
+            [KeyboardButton("🤖 Build a slip"), KeyboardButton("📝 Manual slip")],
             [KeyboardButton("✏️ Edit slip"), KeyboardButton("🔗 Merge slips")],
             [KeyboardButton("✂️ Split slip"), KeyboardButton("🎯 Trim to target odds")],
             [KeyboardButton("🔄 Convert bet code")],
@@ -1688,8 +1688,14 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
 
 
 async def build_sportybet_command(update, context):
+    """Default /build and /slip commands automatically select qualifying SportyBet picks."""
+    context.args = []
+    await autobuild_sportybet_command(update, context)
+
+
+async def manual_sportybet_command(update, context):
     context.user_data["slip_flow"] = "sportybet_build"
-    await reply(update, "🎟️ BUILD SPORTYBET KENYA SLIP\\nSend one selection per line: Fixture | Market | Selection\\nExample: Arsenal vs Chelsea | 1X2 | Arsenal\\n/cancel to stop.")
+    await reply(update, "📝 MANUAL SPORTYBET KENYA SLIP\\nSend one selection per line: Fixture | Market | Selection\\n/cancel to stop.")
 
 
 async def edit_sportybet_command(update, context):
@@ -1769,21 +1775,17 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif choice in prompts:
         context.user_data["slip_flow"] = prompts[choice][0]
         await reply(update, prompts[choice][1] + "\n\nSend /cancel to stop.")
-    elif choice == "🧠 AI build slip":
+    elif choice == "🧠 AI build slip" or choice == "🤖 Build a slip":
         context.args = []
         await autobuild_sportybet_command(update, context)
-    elif choice == "🤖 Build a slip":
+    elif choice == "📝 Manual slip":
         context.user_data["slip_flow"] = "sportybet_build"
         await reply(update,
-            "🎟️ BUILD A GENUINE SPORTYBET KENYA SLIP\n"
+            "📝 MANUAL SPORTYBET KENYA SLIP\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "Send one selection per line in this format:\n"
             "Fixture | Market | Selection\n\n"
-            "Examples:\n"
-            "Arsenal vs Chelsea | 1X2 | Arsenal\n"
-            "Liverpool vs Brighton | 1X2 | Draw\n"
-            "Use exact upcoming fixture names. Markets and selections are checked against SportyBet Kenya live data.\n\n"
-            "I'll show the resolved selections and current odds before asking you to generate the code. No bet is placed.\n"
+            "I'll verify each selection against SportyBet Kenya live markets and show current odds before generating a code. No bet is placed.\n"
             "Send /cancel to stop.")
     elif choice == "✏️ Edit slip":
         context.user_data["slip_flow"] = "sportybet_edit_code"
@@ -4493,6 +4495,7 @@ def main():
         ("accumulator", accumulator_status_command),
         ("myslips", my_slips_command),
         ("build", build_sportybet_command),
+        ("manualbuild", manual_sportybet_command),
         ("slip", build_sportybet_command),
         ("autobuild", autobuild_sportybet_command),
         ("edit", edit_sportybet_command),
