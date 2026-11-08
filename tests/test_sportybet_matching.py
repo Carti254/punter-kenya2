@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch
-from sportybet_client import SportyBetError, _resolve_market, _find_fixture, _revalidate_selections, create_booking
+from sportybet_client import SportyBetError, _resolve_market, _find_fixture, _revalidate_selections, prepare_slip_from_candidates, create_booking
 
 
 class FakeResponse:
@@ -90,6 +90,35 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
              patch("sportybet_client.SESSION.post", return_value=FakeResponse(payload)):
             with self.assertRaises(SportyBetError):
                 create_booking([leg])
+
+
+    def test_ai_candidate_preserves_exact_native_ids(self):
+        candidate = {
+            "event_id": "event-1", "market_id": "market-1",
+            "outcome_id": "out-under", "specifier": "total=6.5",
+            "odds": 4.5, "market": "Over/Under", "selection": "Under 6.5",
+        }
+        with patch("sportybet_client._get_fixtures", return_value=[self.event]):
+            resolved = prepare_slip_from_candidates([candidate])
+        self.assertEqual(resolved[0]["eventId"], "event-1")
+        self.assertEqual(resolved[0]["marketId"], "market-1")
+        self.assertEqual(resolved[0]["outcomeId"], "out-under")
+
+    def test_ai_candidate_rejects_changed_price(self):
+        candidate = {
+            "event_id": "event-1", "market_id": "market-1",
+            "outcome_id": "out-under", "specifier": "total=6.5",
+            "odds": 4.0, "market": "Over/Under", "selection": "Under 6.5",
+        }
+        with patch("sportybet_client._get_fixtures", return_value=[self.event]):
+            with self.assertRaisesRegex(SportyBetError, "odds changed"):
+                prepare_slip_from_candidates([candidate])
+
+    def test_ai_candidate_rejects_missing_native_ids(self):
+        with patch("sportybet_client._get_fixtures", return_value=[self.event]):
+            with self.assertRaisesRegex(SportyBetError, "native IDs"):
+                prepare_slip_from_candidates([{"odds": 4.5}])
+
 
 
 if __name__ == "__main__":
