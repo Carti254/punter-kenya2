@@ -33,6 +33,29 @@ class BetSettlementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             grade_selection("Corners", "Over 8.5", 2, 1)
 
+    def test_double_chance(self):
+        self.assertEqual(grade_selection("Double Chance", "1X", 1, 1), "WON")
+        self.assertEqual(grade_selection("Double Chance", "X2", 2, 0), "LOST")
+
+    def test_draw_no_bet_draw_is_void(self):
+        self.assertEqual(grade_selection("Draw No Bet", "Home", 1, 1), "VOID")
+        self.assertEqual(grade_selection("DNB", "Away", 0, 2), "WON")
+
+    def test_btts_and_odd_even(self):
+        self.assertEqual(grade_selection("BTTS", "Yes", 1, 1), "WON")
+        self.assertEqual(grade_selection("BTTS", "No", 0, 1), "WON")
+        self.assertEqual(grade_selection("Odd/Even", "Even", 2, 2), "WON")
+
+    def test_correct_score(self):
+        self.assertEqual(grade_selection("Correct Score", "2-1", 2, 1), "WON")
+        self.assertEqual(grade_selection("Correct Score", "0-0", 2, 1), "LOST")
+
+    def test_unknown_or_unsupported_market_fails_closed(self):
+        with self.assertRaises(ValueError):
+            grade_selection("Corners", "Over 8.5", 2, 1)
+        with self.assertRaises(ValueError):
+            grade_selection("Asian Handicap", "Home -0.25", 2, 1)
+
 
 @unittest.skipUnless(os.getenv("PUNTER_MYSQL_INTEGRATION") == "1", "requires disposable MySQL service")
 class MySQLMigrationIntegrationTests(unittest.TestCase):
