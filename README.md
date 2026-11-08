@@ -62,7 +62,7 @@ To enable those features, configure a MySQL-compatible database using the variab
 - `DB_NAME`
 - `DB_SSL=true` (TLS is required)
 
-The database account needs permission to create and write the tables used by the bot. Do not commit database credentials.
+The database account needs permission to create and write the tables used by the bot. Do not commit database credentials.\n\nFor an explicit production check, open the deployed service's console and run `python schema_migrations.py`. It connects using the existing `DB_*` environment variables, applies the idempotent migrations, and verifies the recorded schema version without printing credentials. The bot also runs migrations during startup when database access is configured.
 
 ## Telegram commands
 
@@ -93,7 +93,7 @@ Liverpool vs Brighton | 1X2 | Draw
 
 The bot must show the resolved current selections and obtain confirmation before requesting a booking/share code from SportyBet. It must never claim that a bet has been placed.
 
-## Data sources and bookmaker coverage
+## Optional match-statistics provider\n\nSet `API_FOOTBALL_KEY` to enable the API-Sports / API-Football adapter in `football_stats_provider.py`. It requests the fixture by UTC date and exact home/away team names, then retrieves full-time statistics, half-time statistics, player statistics and match events. It refuses ambiguous fixture matches. API-Football documents corners, yellow/red cards and the `half=true` statistics option (available from the 2024 season); player-statistics coverage varies by competition. A valid API key and provider coverage are required. The free plan is limited to 100 requests/day; pricing and coverage must be checked before production use. This adapter is a data-access layer only: it does not yet automatically grade all bookmaker-specific player/card/Asian market rules.\n\n## Data sources and bookmaker coverage
 
 - Fixtures and competition catalogue: [open-matchday](https://github.com/oladeeayo/open-matchday). This is a community-maintained dataset, not a real-time live-score service.
 - Bookmaker adapters: Betika Kenya and SportyBet Kenya. BetPawa is not configured. Betika odds use the public `/v1/uo/matches` list and `/v1/uo/match?parent_match_id=` detail requests; these endpoints are undocumented.
