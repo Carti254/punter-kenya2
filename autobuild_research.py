@@ -223,6 +223,10 @@ def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None, 
             failures += 1
             continue
         for row in candidates:
+            if report.get("lineup_evidence"):
+                row["lineup_evidence"] = report["lineup_evidence"]
+            if report.get("team_news_evidence"):
+                row["team_news_evidence"] = report["team_news_evidence"]
             market_name = str(row.get("market") or "").casefold()
             selection = str(row.get("selection") or "").strip().casefold()
             try:
