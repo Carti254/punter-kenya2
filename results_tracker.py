@@ -67,7 +67,7 @@ def grade_selection(market, selection, home_goals, away_goals, home_team=None, a
         actual = home > 0 and away > 0
         return "WON" if actual == (pick == "yes") else "LOST"
 
-    if key in {"oddoreven", "totalgoalsoddoreven"}:
+    if key in {"oddoreven", "totalgoalsoddoreven", "totaloddoreven"}:
         if pick not in {"odd", "even"}:
             raise ValueError("Selection must be Odd or Even.")
         return "WON" if (total % 2 == 1) == (pick == "odd") else "LOST"
