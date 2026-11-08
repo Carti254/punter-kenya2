@@ -1,5 +1,8 @@
+import os
 import unittest
 from results_tracker import grade_selection
+from database import get_connection
+from schema_migrations import run_migrations
 
 
 class BetSettlementTests(unittest.TestCase):
@@ -29,6 +32,49 @@ class BetSettlementTests(unittest.TestCase):
     def test_unknown_market_fails_closed(self):
         with self.assertRaises(ValueError):
             grade_selection("Corners", "Over 8.5", 2, 1)
+
+
+@unittest.skipUnless(os.getenv("PUNTER_MYSQL_INTEGRATION") == "1", "requires disposable MySQL service")
+class MySQLMigrationIntegrationTests(unittest.TestCase):
+    def test_legacy_matches_table_is_repaired_and_migrations_are_idempotent(self):
+        connection = get_connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("DROP TABLE IF EXISTS punter_bet_records")
+                cursor.execute("DROP TABLE IF EXISTS punter_slips")
+                cursor.execute("DROP TABLE IF EXISTS punter_schema_migrations")
+                cursor.execute("DROP TABLE IF EXISTS matches")
+                cursor.execute("CREATE TABLE matches (id BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB")
+        finally:
+            connection.close()
+
+        first = run_migrations()
+        self.assertEqual(first["latest_version"], 2)
+        self.assertEqual(first["applied"], [1, 2])
+
+        connection = get_connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT COUNT(*) AS n FROM information_schema.columns
+                    WHERE table_schema=DATABASE() AND table_name='matches'
+                      AND column_name='last_synced_at'
+                """)
+                self.assertEqual(int(cursor.fetchone()["n"]), 1)
+                cursor.execute("""
+                    SELECT COUNT(*) AS n FROM information_schema.tables
+                    WHERE table_schema=DATABASE()
+                      AND table_name IN ('punter_bet_records', 'punter_slips')
+                """)
+                self.assertEqual(int(cursor.fetchone()["n"]), 2)
+        finally:
+            connection.close()
+
+        second = run_migrations()
+        self.assertEqual(second["applied"], [])
+        self.assertEqual(second["latest_version"], 2)
+
+
 
 
 if __name__ == "__main__":
