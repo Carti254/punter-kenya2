@@ -25,7 +25,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
 from database import get_connection, test_connection
-from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find_bookmaker_event
+from bookmaker_odds import fetch_all as fetch_bookmaker_odds, fetch_sportybet as fetch_sportybet_odds, find_event as find_bookmaker_event
 from slip_manager import create_slip, get_slip, list_slips, update_slip
 from schema_migrations import run_migrations
 from results_tracker import record_bet, settle_bet, bet_statistics, list_pending_bets, utc_match_date
