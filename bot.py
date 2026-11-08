@@ -1164,6 +1164,11 @@ def main_menu_keyboard():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = (
         "⚽ PUNTER KENYA\n"
+        "FOOTBALL INTELLIGENCE & BETTING CENTRE\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "Research matches, compare available bookmaker prices async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = (
+        "⚽ PUNTER KENYA\n"
         "YOUR FOOTBALL RESEARCH ASSISTANT\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "Choose what you want to do. I'll keep the process simple.\n\n"
@@ -1178,15 +1183,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
         message,
         reply_markup=main_menu_keyboard(),
-    )
-
-
-def parse_slip_lines(raw_text):
-    """Parse one selection per line: Fixture | Market | Pick | Decimal odds [| Bookmaker]."""
-    selections = []
-    bookmaker = "Manual"
-    for line_number, raw in enumerate(raw_text.splitlines(), 1):
-        line = raw.strip()
+    )strip()
         if not line:
             continue
         parts = [part.strip() for part in line.split("|")]
@@ -4701,18 +4698,18 @@ async def calibrate_command(update, context):
             and result["candidate_logloss"] < result["baseline_logloss"]
         )
         await reply(update,
-            "📊 HISTORICAL MODEL VALIDATION\n\n"
-            f"Forecast sample: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\n"
-            f"Data source: {result['source']}\n"
-            f"Fitted temperature (not applied): {result['temperature']:.2f}\n\n"
-            f"Current model Brier: {result['raw_brier']:.4f} | calibrated: {result['calibrated_brier']:.4f}\n"
-            f"Current model log loss: {result['raw_logloss']:.4f} | calibrated: {result['calibrated_logloss']:.4f}\n"
-            f"Venue-weighted candidate: Brier {result['candidate_brier']:.4f} | log loss {result['candidate_logloss']:.4f}\n"
-            f"Training-prevalence baseline: Brier {result['baseline_brier']:.4f} | log loss {result['baseline_logloss']:.4f}\n\n"
+            "📊 HISTORICAL MODEL VALIDATION\\n\\n"
+            f"Forecast sample: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\\n"
+            f"Data source: {result['source']}\\n"
+            f"Fitted temperature (not applied): {result['temperature']:.2f}\\n\\n"
+            f"Current model Brier: {result['raw_brier']:.4f} | calibrated: {result['calibrated_brier']:.4f}\\n"
+            f"Current model log loss: {result['raw_logloss']:.4f} | calibrated: {result['calibrated_logloss']:.4f}\\n"
+            f"Venue-weighted candidate: Brier {result['candidate_brier']:.4f} | log loss {result['candidate_logloss']:.4f}\\n"
+            f"Training-prevalence baseline: Brier {result['baseline_brier']:.4f} | log loss {result['baseline_logloss']:.4f}\\n\\n"
             + ("Candidate beat both the current model and baseline on both metrics; it may proceed to further validation." if candidate_improved else "Candidate did not beat both the current model and baseline on both metrics. Do not promote it; keep the model experimental.")
-            + "\n"
+            + "\\n"
             + ("Temperature calibration improved both holdout metrics." if improved else "Temperature calibration did not improve both holdout metrics and remains disabled.")
-            + "\n\nNo live prediction settings are changed automatically.")
+            + "\\n\\nNo live prediction settings are changed automatically.")
     except Exception as exc:
         await reply(update, f"⚠️ Calibration evaluation failed: {type(exc).__name__}: {str(exc)[:250]}")
 
@@ -4802,7 +4799,7 @@ async def marketdata_command(update, context):
     raw = " ".join(context.args or [])
     parts = [part.strip() for part in raw.split("|")]
     if len(parts) != 2 or " vs " not in parts[0].casefold():
-        await reply(update, "Usage: /marketdata HOME vs AWAY | YYYY-MM-DD\nExample: /marketdata Arsenal vs Chelsea | 2026-11-08")
+        await reply(update, "Usage: /marketdata HOME vs AWAY | YYYY-MM-DD\\nExample: /marketdata Arsenal vs Chelsea | 2026-11-08")
         return
     teams = re.split(r"\\s+vs\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
     if len(teams) != 2:
@@ -4838,7 +4835,7 @@ async def marketdata_command(update, context):
         lines.append("Half-time statistics: " + (", ".join(f"{k}={v}" for k, v in half_stats.items()) if half_stats else "not supplied by this competition/fixture"))
         lines.append(f"Player-stat response groups: {len(data['players'])} | Match events: {len(data['events'])}")
         lines.extend(["", "Provider data retrieval verified for this fixture only. Market-specific settlement is not enabled until the market's exact bookmaker rules are mapped and tested."])
-        await reply(update, "\n".join(lines))
+        await reply(update, "\\n".join(lines))
     except Exception as exc:
         await reply(update, f"⚠️ Match-statistics provider unavailable: {type(exc).__name__}: {str(exc)[:250]}")
 
