@@ -25,7 +25,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
 from database import get_connection, test_connection
-from bookmaker_odds import fetch_all as fetch_bookmaker_odds, find_event as find_bookmaker_event
+from bookmaker_odds import fetch_all as fetch_bookmaker_odds, fetch_sportybet as fetch_sportybet_odds, find_event as find_bookmaker_event
 from slip_manager import create_slip, get_slip, list_slips, update_slip
 from schema_migrations import run_migrations
 from results_tracker import record_bet, settle_bet, bet_statistics, list_pending_bets, utc_match_date
@@ -1943,7 +1943,7 @@ async def autobuild_sportybet_command(update, context):
     market_filter = ",".join(market_parts) if market_parts else "all"
     await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\nTarget combined odds: {target:.2f}\nMarket filter: {market_filter}\nRanking: {rank_mode}\nScanning available model-supported SportyBet markets…\n\nControls: /autobuild 5 BTTS rank=odds | /autobuild 20 Correct Score rank=odds | /autobuild 10 market=1X2,Under 2.5 rank=value")
     try:
-        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), market_filter)
+        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet")
         rows = [x for x in rows if str(x.get("bookmaker", "")).casefold() == "sportybet"]
         if rank_mode == "odds":
             rows.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
@@ -3497,7 +3497,7 @@ def _selection_probability_key(market_key, selection, handicap=None):
     return _normal_market_text(selection) or None
 
 
-def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"):
+def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all", bookmaker_only=None):
     """Scan every retrieved SportyBet football market; score only markets supported by model data."""
     candidates, diagnostics = [], []
     for day_filter in day_filters:
@@ -3507,10 +3507,16 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             diagnostics.append(f"{day_filter}: no fixtures from open-matchday")
             continue
         target_day = datetime.now(EAT).date() + (timedelta(days=1) if day_filter == "tomorrow" else timedelta())
-        odds_result = fetch_bookmaker_odds(target_day)
+        if str(bookmaker_only or "").casefold() == "sportybet":
+            # Autobuild only needs SportyBet; skip Betika's slower detail requests.
+            sporty_games = fetch_sportybet_odds(target_day)
+            odds_result = {"bookmakers": {"SportyBet": {"games": sporty_games}}, "errors": {}}
+        else:
+            odds_result = fetch_bookmaker_odds(target_day)
         priced_games = []
         for provider in odds_result.get("bookmakers", {}).values():
             priced_games.extend(provider.get("games", []))
+        diagnostics.append(f"{day_filter}: {len(fixtures)} fixtures checked; {len(priced_games)} bookmaker events retrieved")
         matched_events = 0
         unsupported = set()
         for raw, fixture in fixtures:
