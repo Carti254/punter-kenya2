@@ -37,7 +37,7 @@ from premium_intelligence import market_probabilities, assess_price, rollover_pr
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
-from autobuild_research import prepare_candidate_pool, candidate_research_summary
+from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
@@ -2040,6 +2040,10 @@ async def autobuild_sportybet_command(update, context):
             if str(x.get("bookmaker", "")).casefold() == "sportybet"
             and float(x.get("odds") or 0) > 1.0
         ]
+        # Run optional API-Football specialist research (corners, cards, shots,
+        # shots on target and first-half goals) against exact fixture/date/price matches.
+        # If the provider key or a reliable exact match is absent, base candidates remain unchanged.
+        rows, specialist_stats = await asyncio.to_thread(enrich_with_specialist_models, rows)
         # Apply one auditable research/value gate. Keep non-negative-EV candidates;
         # never silently pad a requested slip with negative-EV selections.
         rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.0)
@@ -2135,6 +2139,9 @@ async def autobuild_sportybet_command(update, context):
         lines.extend([
             "",
             candidate_research_summary(rows),
+            (f"Specialist research: {specialist_stats.get('fixtures_checked', 0)} fixtures checked; "
+             f"{specialist_stats.get('matched_prices', 0)} exact market prices enriched. "
+             f"{specialist_stats.get('reason', '')}"),
             f"Research checks: {research_stats['research_scope']}.",
             "Unsupported markets are not guessed. Team news, xG, tactics, odds movement and cross-fixture correlation are shown as gaps unless their data sources are actually connected and verified.",
             "Model probabilities and estimated value are experimental, not calibrated guarantees of profit.",
