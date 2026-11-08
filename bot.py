@@ -5169,7 +5169,7 @@ async def playerprop_command(update, context):
 
 async def xresearch_command(update, context):
     raw = " ".join(context.args or [])
-    split = re.split(r"\s+vs\\.?\\s+|\\s+v\\.?\\s+", raw, maxsplit=1, flags=re.I)
+    split = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", raw, maxsplit=1, flags=re.I)
     if len(split) != 2:
         await reply(update, "Usage: /xresearch HOME TEAM vs AWAY TEAM")
         return
