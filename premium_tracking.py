@@ -103,10 +103,12 @@ def closing_line_value(user_id):
                       AND LOWER(away_team)=LOWER(%s)
                       AND LOWER(market_name)=LOWER(%s)
                       AND LOWER(selection_name)=LOWER(%s)
+                      AND LOWER(bookmaker)=LOWER(%s)
+                      AND fetched_at >= %s
                       AND fetched_at <= DATE_ADD(%s, INTERVAL 1 DAY)
                     ORDER BY fetched_at DESC LIMIT 1
                 """, (bet["home_team"], bet["away_team"], bet["market"],
-                      bet["selection"], bet["match_date"]))
+                      bet["selection"], bet["bookmaker"], bet["created_at"], bet["match_date"]))
                 close = cursor.fetchone()
                 if not close:
                     continue
@@ -181,8 +183,8 @@ def record_rollover_day(user_id, result, actual_odds=None):
     connection = get_connection()
     try:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT updated_at FROM punter_user_settings WHERE user_id=%s", (int(user_id),))
-            plan_started = cursor.fetchone()["updated_at"].date()
+            cursor.execute("SELECT COALESCE(rollover_started_on,DATE(updated_at)) AS plan_started FROM punter_user_settings WHERE user_id=%s", (int(user_id),))
+            plan_started = cursor.fetchone()["plan_started"]
             cursor.execute("""
                 INSERT INTO punter_rollover_progress
                 (user_id,plan_started,day_number,target_odds,result,actual_odds)
