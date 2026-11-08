@@ -1147,42 +1147,33 @@ async def reply(update: Update, message: str):
 # ============================================================
 
 def main_menu_keyboard():
-    """Persistent Telegram menu inspired by the reference layout."""
+    """Compact, task-first home screen; specialist tools stay in their sections."""
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("📅 Today's Matches"), KeyboardButton("🏆 Top Leagues")],
-            [KeyboardButton("🔎 Analyze Match"), KeyboardButton("ℹ️ iHelp")],
-            [KeyboardButton("🤖 Build a slip"), KeyboardButton("📝 Manual slip")],
-            [KeyboardButton("✏️ Edit slip"), KeyboardButton("🔗 Merge slips")],
-            [KeyboardButton("✂️ Split slip"), KeyboardButton("🎯 Trim to target odds")],
-            [KeyboardButton("📋 Bookies & regions"), KeyboardButton("🎟️ My slips")],
-            [KeyboardButton("⚽ Match intelligence"), KeyboardButton("❓ Contact support")],
+            [KeyboardButton("📅 Today's Matches"), KeyboardButton("🔎 Analyze Match")],
+            [KeyboardButton("🤖 Build a slip"), KeyboardButton("🎟️ My slips")],
+            [KeyboardButton("🧠 Match intelligence"), KeyboardButton("💹 Bookmaker odds")],
+            [KeyboardButton("❔ Help & tools")],
         ],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Pick an option…",
+        input_field_placeholder="What would you like to do?",
     )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = (
         "⚽ PUNTER KENYA\n"
-        "FOOTBALL INTELLIGENCE & BETTING CENTRE\n"
+        "YOUR FOOTBALL RESEARCH ASSISTANT\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "Research matches, compare available bookmaker prices and review potential value.\n\n"
-        "🎟️ SLIP MANAGEMENT\n"
-        "🎟️ Generate genuine SportyBet Kenya booking codes from live fixtures and markets.\n"
-        "No bookmaker account, API key or stake is used to prepare a code.\n\n"
-        "🧠 INTELLIGENCE\n"
-        "/fullintel — all research and analysis commands\n"
-        "/deepdive HOME vs AWAY — full match report\n"
-        "/topvalue — bookmaker value scan\n"
-        "/accumulator [TARGET] — qualifying-leg accumulator scan\n"
-        "/bookies — bookmaker feed status\n"
-        "/odds HOME vs AWAY — compare retrieved prices\n"
-        "/fixtures — upcoming fixtures\n\n"
-        "⚠️ Estimates are not guarantees. Prices must be checked with the bookmaker. "
-        "PUNTER KENYA does not place bets."
+        "Choose what you want to do. I'll keep the process simple.\n\n"
+        "📅 TODAY'S MATCHES  ·  Browse fixtures\n"
+        "🔎 ANALYSE A MATCH  ·  Research one fixture\n"
+        "🤖 BUILD A SLIP  ·  Compare supported markets and prices\n"
+        "🎟️ MY SLIPS  ·  View saved slip records\n\n"
+        "Use Match intelligence for deeper research, market analysis and specialist tools.\n\n"
+        "⚠️ Predictions are uncertain. Check live bookmaker prices and rules. "
+        "No bet is placed by this bot."
     )
     await update.effective_message.reply_text(
         message,
@@ -1663,10 +1654,12 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle home-menu navigation before treating text as slip input."""
     choice = (update.effective_message.text or "").strip()
     menu_choices = {
-        "📅 Today's Matches", "🏆 Top Leagues", "🔎 Analyze Match", "ℹ️ iHelp",
-        "🤖 Build a slip", "🧠 AI build slip", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip", "🎯 Trim to target odds",
-        "📋 Bookies & regions", "🎟️ My slips",
-        "⚽ Match intelligence", "📅 Fixtures & leagues", "❓ Contact support",
+        "📅 Today's Matches", "🔎 Analyze Match", "🤖 Build a slip", "🎟️ My slips",
+        "🧠 Match intelligence", "💹 Bookmaker odds", "❔ Help & tools",
+        "🏆 Top Leagues", "ℹ️ iHelp", "📝 Manual slip", "✏️ Edit slip",
+        "🔗 Merge slips", "✂️ Split slip", "🎯 Trim to target odds",
+        "📋 Bookies & regions", "⚽ Match intelligence",
+        "📅 Fixtures & leagues", "❓ Contact support",
     }
     # A menu tap must always navigate, even if the user was halfway through
     # entering slip IDs or selection details.
@@ -1715,8 +1708,20 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply(update, "🎯 TRIM SPORTYBET SLIP\nSend an existing SportyBet Kenya booking code. Then enter your target maximum combined odds. The system removes the highest-odds legs first and previews the result.\n/cancel to stop.")
     elif choice == "📋 Bookies & regions":
         await bookmakers_command(update, context)
-    elif choice == "⚽ Match intelligence":
+    elif choice in ("🧠 Match intelligence", "⚽ Match intelligence"):
         await fullintel_command(update, context)
+    elif choice == "💹 Bookmaker odds":
+        await bookmakers_command(update, context)
+    elif choice == "❔ Help & tools":
+        await reply(update,
+            "❔ PUNTER KENYA — HELP & TOOLS\n\n"
+            "Use /fullintel for fixtures, team research, market probabilities, value checks and tracking.\n"
+            "Use /manualbuild to enter your own SportyBet selections.\n"
+            "Use /edit, /merge, /split or /trim to manage booking codes.\n"
+            "Use /odds HOME vs AWAY to compare retrieved bookmaker prices.\n"
+            "Use /cancel to stop an active input flow.\n\n"
+            "Predictions are not guarantees; verify all markets and prices before placing a bet."
+        )
     elif choice == "📅 Fixtures & leagues":
         await reply(update,
             "📅 FIXTURES & LEAGUES\n\n"
