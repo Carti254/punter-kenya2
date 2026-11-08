@@ -144,7 +144,7 @@ def rollover_status(user_id):
                 FROM punter_rollover_progress
                 WHERE user_id=%s AND plan_started=%s
                 ORDER BY day_number
-            """, (int(user_id), plan["updated_at"].date()))
+            """, (int(user_id), plan["rollover_started_on"]))
             entries = cursor.fetchall()
         completed = len(entries)
         wins = sum(r["result"] == "WON" for r in entries)
