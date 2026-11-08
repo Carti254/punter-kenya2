@@ -37,6 +37,7 @@ from premium_intelligence import market_probabilities, assess_price, rollover_pr
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
+from autobuild_research import prepare_candidate_pool, candidate_research_summary
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
@@ -2038,20 +2039,19 @@ async def autobuild_sportybet_command(update, context):
             x for x in rows
             if str(x.get("bookmaker", "")).casefold() == "sportybet"
             and float(x.get("odds") or 0) > 1.0
-            and float(x.get("ev") or 0) > 0
-            and "btts" not in str(x.get("market", "")).casefold()
-            and "both teams" not in str(x.get("market", "")).casefold()
-            and not (
-                "under" in str(x.get("selection", "")).casefold()
-                and "2.5" in (
-                    str(x.get("selection", "")) + " " + str(x.get("specifier", ""))
-                )
-            )
         ]
+        # Apply one auditable research/value gate. Keep non-negative-EV candidates;
+        # never silently pad a requested slip with negative-EV selections.
+        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.0)
 
         if not rows:
             context.user_data.pop("pending_sportybet_booking", None)
-            await reply(update, "NO BET: the current SportyBet feed has no eligible, model-supported selections with positive estimated value after your market exclusions. I will not pad the slip with weak or negative-value legs.")
+            await reply(
+                update,
+                "NO BET: no model-supported SportyBet selection passed the non-negative expected-value check. "
+                "The research engine will not invent evidence or add negative-value legs. "
+                + " ".join(diagnostics[:4])
+            )
             return
 
         if rank_mode in ("parlay", "odds"):
@@ -2110,13 +2110,15 @@ async def autobuild_sportybet_command(update, context):
                 f"{i}. {leg['fixture']} — {leg['market']}: "
                 f"{leg['selection']} @ {leg['odds']:.2f}"
             )
-            assessment = "Positive estimated value" if float(leg.get("ev") or 0) > 0 else "Value edge not established"
+            assessment = "Positive estimated value" if float(leg.get("ev") or 0) > 0 else "Break-even estimate; no positive edge established"
             lines.append(f"   Internal price assessment: {assessment}")
 
         lines.extend([
             "",
-            "The builder screened markets returned by SportyBet that the current statistical model can price; unsupported markets were not guessed.",
-            "Only supported markets with usable model evidence are considered. No guaranteed profit.",
+            candidate_research_summary(rows),
+            f"Research checks: {research_stats['research_scope']}.",
+            "Unsupported markets are not guessed. Team news, xG, tactics, odds movement and cross-fixture correlation are shown as gaps unless their data sources are actually connected and verified.",
+            "Model probabilities and estimated value are experimental, not calibrated guarantees of profit.",
         ])
         if not target_reached:
             lines.append("")
