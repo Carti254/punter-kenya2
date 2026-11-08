@@ -33,16 +33,17 @@ class ScannerMarketTests(unittest.TestCase):
         cases = [
             ({"market": "1X2", "selection": "1"}, .50),
             ({"market": "Double Chance", "selection": "1X"}, .75),
-            ({"market": "Both Teams To Score", "selection": "Yes"}, None),
+            ({"market": "Both Teams To Score", "selection": "Yes"}, "positive"),
             ({"market": "Total Goals Over Under", "selection": "Over 1.5"}, .80),
-            ({"market": "Correct Score", "selection": "1:0"}, None),
+            ({"market": "Correct Score", "selection": "1:0"}, "positive"),
         ]
         for row, expected in cases:
             probability, reason = _market_probability_for_row(self.model, row)
-            if expected is not None:
-                self.assertAlmostEqual(probability, expected, places=2)
+            if expected == "positive":
+                self.assertIsNotNone(probability)
+                self.assertGreater(probability, 0)
             else:
-                self.assertIsNotNone(probability if row["market"] == "Both Teams To Score" else reason)
+                self.assertAlmostEqual(probability, expected, places=2)
 
 
 if __name__ == "__main__":
