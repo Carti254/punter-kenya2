@@ -112,8 +112,18 @@ _polling_lock_keepalive_thread = None
 
 
 def acquire_polling_lock():
-    """Ensure only one Railway/local process polls Telegram for this bot."""
+    """Use a database advisory lock when configured; keep local mode database-optional."""
     global _polling_lock_connection, _polling_lock_keepalive_thread
+
+    required = ("DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME")
+    missing = [name for name in required if not os.getenv(name)]
+    if missing:
+        logger.warning(
+            "Database is not configured (%s). Starting in local/basic mode; "
+            "database-backed history and saved-slip features will be unavailable.",
+            ", ".join(missing),
+        )
+        return False
 
     connection = get_connection()
     try:
@@ -123,8 +133,8 @@ def acquire_polling_lock():
         acquired = row.get("acquired") if isinstance(row, dict) else None
         if acquired != 1:
             raise RuntimeError(
-                "Another Punter Kenya process already owns the Telegram polling lock. "
-                "Stop the duplicate Railway replica or local bot process."
+                "Another PUNTER KENYA process already owns the Telegram polling lock. "
+                "Stop the duplicate bot process before starting another."
             )
         _polling_lock_connection = connection
     except Exception:
@@ -134,7 +144,6 @@ def acquire_polling_lock():
     def keep_lock_alive():
         while not _polling_lock_keepalive_stop.wait(45):
             try:
-                # The connection is dedicated to the advisory lock.
                 _polling_lock_connection.ping(reconnect=False)
             except Exception:
                 logger.critical(
@@ -151,7 +160,7 @@ def acquire_polling_lock():
     )
     _polling_lock_keepalive_thread.start()
     logger.info("Telegram polling singleton lock acquired.")
-
+    return True
 
 def release_polling_lock():
     global _polling_lock_connection
