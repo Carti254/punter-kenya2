@@ -1345,7 +1345,7 @@ async def process_slip_flow(update, context):
             for i, leg in enumerate(booking["selections"], 1):
                 lines.append(f"{i}. {leg['fixture']} | {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}")
             lines.extend(["", "Send the leg numbers to REMOVE, separated by commas (e.g. 2,5,7).", "Send KEEP ALL to recreate an unchanged copy, or /cancel."])
-    await reply(update, "\n".join(lines))
+            await reply(update, "\n".join(lines))
             return True
 
         if state == "sportybet_edit_remove":
