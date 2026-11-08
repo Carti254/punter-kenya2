@@ -40,6 +40,27 @@ def assess_candidate_risk(row: dict) -> dict:
     else:
         gaps.append("independent model comparison unavailable")
 
+    upset = row.get("upset_risk")
+    if isinstance(upset, dict):
+        upset_level = str(upset.get("level") or "").upper()
+        if upset_level == "HIGH":
+            flags.append("high upset risk: independent model disagreement is material")
+            score += 2
+            reject = True
+        elif upset_level == "MEDIUM":
+            flags.append("moderate upset risk; favourite outcome needs extra scrutiny")
+            score += 1
+        if upset.get("draw_probability") is not None:
+            try:
+                draw_probability = float(upset["draw_probability"])
+                if draw_probability >= 0.32:
+                    flags.append(f"elevated draw probability ({draw_probability:.1%})")
+                    score += 1
+            except (TypeError, ValueError, OverflowError):
+                gaps.append("draw-risk estimate was not numeric")
+    else:
+        gaps.append("ensemble upset-risk assessment unavailable")
+
     for field, label in (("home_sample", "home-team recent form"), ("away_sample", "away-team recent form")):
         value = row.get(field)
         try:
