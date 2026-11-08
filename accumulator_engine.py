@@ -39,6 +39,7 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
         clean.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
     else:
         clean.sort(key=lambda x: (x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
+    clean = [item for item in clean if item["odds"] <= target * 1.20]
     clean = clean[:max_candidates]
     if not clean:
         return {"selections": [], "combined_odds": 1.0, "combined_probability": 0.0,
@@ -68,9 +69,9 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
                 new_picks = picks + [item]
                 factor = new_odds * new_probability
                 state = (new_picks, new_odds, new_probability, used | {fixture_key}, item_index + 1)
-                if new_odds >= target:
+                if target <= new_odds <= target * 1.20:
                     completed.append(state)
-                else:
+                elif new_odds < target:
                     expanded.append(state)
         # Bound completed-state memory on large fixture slates.
         if len(completed) > beam_width * 4:
@@ -93,13 +94,12 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
         states = expanded[:beam_width]
 
     if completed:
-        # Highest expected payout factor; then probability; then fewer legs.
-        if ranking == "probability":
-            best = max(completed, key=lambda s: (s[2], s[1] * s[2], -len(s[0])))
-        elif ranking == "odds":
-            best = max(completed, key=lambda s: (s[1], s[1] * s[2], -len(s[0])))
-        else:
-            best = max(completed, key=lambda s: (s[1] * s[2], s[2], -len(s[0])))
+        # Minimise overshoot first; ranking is only a tie-breaker.
+        def completion_score(state):
+            picks, odds_now, probability_now, _, _ = state
+            secondary = probability_now if ranking in {"probability", "odds"} else odds_now * probability_now
+            return (-((odds_now / target) - 1.0), secondary, probability_now, -len(picks))
+        best = max(completed, key=completion_score)
     else:
         # Return the best available partial construction, never pretend target was met.
         all_states = states
@@ -121,7 +121,7 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
         "combined_probability": probability_product,
         "expected_return_factor": odds_product * probability_product,
         "expected_roi": odds_product * probability_product - 1,
-        "target_reached": odds_product >= target,
+        "target_reached": target <= odds_product <= target * 1.20,
         "independence_assumption": True,
-        "reason": None if odds_product >= target else "Best available combination did not reach the target.",
+        "reason": None if target <= odds_product <= target * 1.20 else "No combination found within 20% above target.",
     }
