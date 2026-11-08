@@ -14,7 +14,7 @@ def grade_selection(market, selection, home_goals, away_goals, home_team=None, a
 
     if market_key in {"1x2", "matchresult", "fulltimeresult", "result"}:
         actual = "home" if home > away else "draw" if home == away else "away"
-        home_names = {"1", "home", str(home_team or "").strip().casefold()}\n        away_names = {"2", "away", str(away_team or "").strip().casefold()}\n        wanted = "home" if pick in home_names else "draw" if pick in {"x", "draw"} else "away" if pick in away_names else None
+        home_names = {"1", "home"}\n        away_names = {"2", "away"}\n        if home_team:\n            home_names.add(str(home_team).strip().casefold())\n        if away_team:\n            away_names.add(str(away_team).strip().casefold())\n        wanted = "home" if pick in home_names else "draw" if pick in {"x", "draw"} else "away" if pick in away_names else None
         if wanted is None:
             raise ValueError("Unsupported 1X2 selection.")
         return "WON" if wanted == actual else "LOST"
