@@ -2257,7 +2257,8 @@ async def autobuild_sportybet_command(update, context):
                                  "best_other_bookmaker", "cross_bookmaker_edge",
                                  "external_evidence_sources", "external_market_probability",
                                  "external_model_disagreement", "bsd_consensus_odds",
-                                 "price_vs_bsd_consensus"):
+                                 "price_vs_bsd_consensus", "lineup_evidence",
+                                 "team_news_evidence"):
                 live_leg[evidence_key] = model_leg.get(evidence_key)
         combined = math.prod(float(x["odds"]) for x in resolved)
         combined_probability = math.prod(float(x["probability"]) for x in resolved)
@@ -2291,6 +2292,20 @@ async def autobuild_sportybet_command(update, context):
                 )
             if leg.get("external_model_disagreement") is not None:
                 lines.append(f"   Independent model probability gap: {float(leg['external_model_disagreement']):.1%}")
+            lineup = leg.get("lineup_evidence") or {}
+            if lineup.get("confirmed"):
+                lines.append("   Confirmed lineups: " + ", ".join(
+                    f"{side.get('team')} ({side.get('formation') or 'formation n/a'})"
+                    for side in lineup.get("sides", [])
+                ))
+            team_news = leg.get("team_news_evidence") or {}
+            absences = team_news.get("reported_absences") or []
+            if absences:
+                lines.append("   Reported absences: " + "; ".join(
+                    f"{item.get('player') or 'Player'} — {item.get('team') or 'Team'} "
+                    f"({item.get('type') or 'status n/a'}: {item.get('reason') or 'reason n/a'})"
+                    for item in absences[:4]
+                ))
             specialist = leg.get("research_evidence", {}).get("specialist_evidence")
             if specialist:
                 lines.append(
