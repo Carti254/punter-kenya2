@@ -121,7 +121,7 @@ The database account needs permission to create and write the tables used by the
 - `/marketsim HOME_GOALS_RATE | AWAY_GOALS_RATE | MARKET | BOOKMAKER_ODDS` — transparent independent-Poisson scenario and price comparison using user-supplied goal rates. It is not a fixture prediction and reports truncated tail mass. This is separate from prediction accuracy.
 - `/fullintel` — full command directory.
 
-The Telegram menu also includes the SportyBet slip builder. AI building accepts a target odds figure and optional market/ranking controls. Manual building lets you request any market and outcome that SportyBet actually returns for the selected fixture; the AI forecast scanner only assigns probabilities to markets supported by its available evidence, and it reports unsupported markets rather than inventing estimates. BTTS and Under 2.5 are not hard-excluded. Match analysis accepts both team names and tolerates small spelling mistakes; use `TEAM A vs TEAM B`.
+The Telegram menu also includes the SportyBet slip builder. AI building accepts a target odds figure and optional market/ranking controls. Manual building lets you request any market and outcome that SportyBet actually returns for the selected fixture; the AI forecast scanner only assigns probabilities to markets supported by its available evidence, and it reports unsupported markets rather than inventing estimates. BTTS and Under 2.5 are excluded from automatic accumulator recommendations. Match analysis accepts both team names and tolerates small spelling mistakes; use `TEAM A vs TEAM B`.
 
 It accepts one selection per line in this format:
 
