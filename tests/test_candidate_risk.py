@@ -27,6 +27,25 @@ class CandidateRiskTests(unittest.TestCase):
         self.assertEqual(result["risk_level"], "MEDIUM")
         self.assertTrue(result["risk_flags"])
 
+    def test_high_ensemble_upset_risk_is_rejected(self):
+        result = assess_candidate_risk({
+            "upset_risk": {"level": "HIGH", "draw_probability": 0.34},
+            "external_model_disagreement": 0.26,
+            "model_confidence": "LOW",
+        })
+        self.assertTrue(result["risk_rejected"])
+        self.assertEqual(result["risk_level"], "HIGH")
+
+    def test_xg_disagreement_is_used_as_a_risk_flag(self):
+        result = assess_candidate_risk({
+            "lambda_home": 1.8, "lambda_away": 0.9,
+            "xg_evidence": {
+                "home_xg_for": 0.8, "away_xg_against": 0.7,
+                "away_xg_for": 1.7, "home_xg_against": 1.6,
+            },
+        })
+        self.assertTrue(any("xG-versus-goal-model" in flag for flag in result["risk_flags"]))
+
 
 if __name__ == "__main__":
     unittest.main()
