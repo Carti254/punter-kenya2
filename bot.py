@@ -1734,7 +1734,7 @@ async def ai_slip_photo_handler(update: Update, context: ContextTypes.DEFAULT_TY
         return
     await reply(update, "🖼️ Reading the slip image. I will not trust the screenshot's odds; current SportyBet prices will be checked separately.")
     try:
-        telegram_file = await photo[-1].get_file()
+        telegram_file = await context.bot.get_file(photo[-1].file_id)
         image_bytes = bytes(await telegram_file.download_as_bytearray())
         lines = await asyncio.to_thread(read_slip_image, image_bytes, "image/jpeg")
         context.user_data["ai_ocr_lines"] = lines
@@ -3967,11 +3967,11 @@ async def deepdive_command(update, context):
             decision_text = f"Bookmaker comparison failed ({type(exc).__name__}). No value verdict is available."
     else:
         lines.append("Forecast withheld: " + pred.get("reason", "insufficient data"))
-    lines.extend(["", "7. PLAIN-ENGLISH SUMMARY",
+    lines.extend(["", "8. PLAIN-ENGLISH SUMMARY",
         f"{edge} recent-points advantage. " +
         ("The data shows a measurable difference, but it is not enough on its own to justify a bet." if edge != "No clear" else "Recent points rates are close; this matchup has no clear form leader."),
         "",
-        "8. BETTING DECISION",
+        "9. BETTING DECISION",
         decision_text,
         "",
         "DATA QUALITY & LIMITATIONS",
