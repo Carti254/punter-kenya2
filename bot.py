@@ -2121,6 +2121,13 @@ async def autobuild_sportybet_command(update, context):
             )
             assessment = "Positive estimated value" if float(leg.get("ev") or 0) > 0 else "Break-even estimate; no positive edge established"
             lines.append(f"   Internal price assessment: {assessment}")
+            specialist = leg.get("research_evidence", {}).get("specialist_evidence")
+            if specialist:
+                lines.append(
+                    f"   Specialist model: {specialist.get('market')} | "
+                    f"expected total {specialist.get('expected_total') if specialist.get('expected_total') is not None else 'n/a'} "
+                    f"| {specialist.get('model') or 'experimental'}"
+                )
             evidence = leg.get("research_evidence") or {}
             lines.append(
                 f"   Form: {evidence.get('home_form') or 'n/a'} / {evidence.get('away_form') or 'n/a'} "
