@@ -37,6 +37,7 @@ from premium_intelligence import market_probabilities, assess_price, rollover_pr
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
+from advanced_prediction import build_ensemble as build_advanced_prediction_ensemble
 from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models as enrich_specialist_candidates
 from free_football_sources import enrich_candidates as enrich_free_football_sources, fetch_provider_fixtures as fetch_free_provider_fixtures, provider_key_status
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
@@ -3410,6 +3411,19 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
     top_outcome = max(probabilities, key=probabilities.get)
     confidence = "LOW" if len(home_results) + len(away_results) < 14 else "MODERATE"
 
+    # Independent pre-match ensemble: Dixon-Coles low-score correction, Elo replay
+    # and reproducible Monte Carlo. Historical rows are already cutoff-filtered above.
+    advanced_ensemble = build_advanced_prediction_ensemble(
+        fixture["home_team"], fixture["away_team"], lambda_home, lambda_away, rows
+    )
+    home_win = advanced_ensemble["probabilities"]["1"]
+    draw = advanced_ensemble["probabilities"]["X"]
+    away_win = advanced_ensemble["probabilities"]["2"]
+    probabilities = {"1": home_win, "X": draw, "2": away_win}
+    top_outcome = max(probabilities, key=probabilities.get)
+    if advanced_ensemble["model_disagreement"] >= 0.15:
+        confidence = "LOW"
+
     # Same-competition head-to-head sample, restricted to completed results
     # already available before this fixture's forecast cutoff.
     h2h_results = []
@@ -3463,6 +3477,11 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
         "score": (most_likely[1], most_likely[2]),
         "top_outcome": top_outcome,
         "confidence": confidence,
+        "model_components": advanced_ensemble["components"],
+        "external_model_disagreement": advanced_ensemble["model_disagreement"],
+        "upset_risk": advanced_ensemble["upset_risk"],
+        "model_method": advanced_ensemble["method"],
+        "monte_carlo_simulations": advanced_ensemble["simulations"],
     }
 
 
@@ -4186,6 +4205,11 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         "odds": odds, "probability": probability, "ev": ev,
                         "fair_odds": (1 / probability) if probability is not None else None,
                         "model_confidence": prediction.get("confidence"),
+                        "model_components": prediction.get("model_components"),
+                        "external_model_disagreement": prediction.get("external_model_disagreement"),
+                        "upset_risk": prediction.get("upset_risk"),
+                        "model_method": prediction.get("model_method"),
+                        "monte_carlo_simulations": prediction.get("monte_carlo_simulations"),
                         "home_form": prediction.get("home_form"),
                         "away_form": prediction.get("away_form"),
                         "home_sample": prediction.get("home_results"),
