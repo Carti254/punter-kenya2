@@ -4597,9 +4597,9 @@ async def calibrate_command(update, context):
 
 
 
-def refresh_pending_bet_records():
+def refresh_pending_bet_records(user_id=None):
     """Settle logged bets only when one exact team/date result exists in source CSV."""
-    pending = list_pending_bets()
+    pending = list_pending_bets(user_id)
     if not pending:
         return {"checked": 0, "settled": 0, "ambiguous": 0, "pending": 0}
     leagues = fetch_all_leagues()
@@ -4662,7 +4662,7 @@ async def automatic_bet_settlement_job(context):
 async def betresults_command(update, context):
     await reply(update, "🔄 Checking completed results and settling only exact fixture/date matches...")
     try:
-        result = await asyncio.to_thread(refresh_pending_bet_records)
+        result = await asyncio.to_thread(refresh_pending_bet_records, update.effective_user.id)
         await reply(update,
             "📊 AUTOMATIC BET SETTLEMENT\n\n"
             f"Pending bets checked: {result['checked']}\n"
@@ -4701,7 +4701,14 @@ async def betlog_command(update, context):
         return
     bookmaker = parts[5] if len(parts) >= 6 and parts[5] else "SportyBet"
     try:
-        match_date = datetime.strptime(parts[6], "%Y-%m-%d").date() if len(parts) == 7 else await asyncio.to_thread(resolve_bet_match_date, fixture[0], fixture[1])
+        if len(parts) == 7:
+            match_date = datetime.strptime(parts[6], "%Y-%m-%d").date()
+        else:
+            try:
+                match_date = await asyncio.to_thread(resolve_bet_match_date, fixture[0], fixture[1])
+            except Exception as date_error:
+                logger.warning("Could not resolve bet match date; keeping bet log but automatic settlement will need a date: %s", date_error)
+                match_date = None
         bet_id = await asyncio.to_thread(
             record_bet, update.effective_user.id, bookmaker,
             fixture[0], fixture[1], parts[1], parts[2], parts[3], parts[4], match_date
