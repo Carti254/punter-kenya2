@@ -79,3 +79,17 @@ class MySQLMigrationIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UtcMatchDateTests(unittest.TestCase):
+    def test_utc_match_date_uses_source_calendar_day(self):
+        from datetime import datetime, timezone, timedelta
+        from results_tracker import utc_match_date
+        # 00:30 EAT on 9 November is 21:30 UTC on 8 November.
+        kickoff = datetime(2026, 11, 9, 0, 30, tzinfo=timezone(timedelta(hours=3)))
+        self.assertEqual(utc_match_date(kickoff).isoformat(), "2026-11-08")
+
+    def test_naive_fixture_datetime_is_treated_as_utc(self):
+        from datetime import datetime
+        from results_tracker import utc_match_date
+        self.assertEqual(utc_match_date(datetime(2026, 11, 8, 23, 30)).isoformat(), "2026-11-08")
