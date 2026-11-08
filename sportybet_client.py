@@ -87,7 +87,7 @@ def _resolve_market(event, market_text, selection_text):
     markets = event.get("markets") or []
     m = market_text.strip()
     line = None
-    total_match = re.search(r"(?:over(?:/under)?|under|total|goals?)\s*(\d+(?:\.\d+)?)", m, re.I)
+    total_match = re.search(r"(?:over(?:/under)?|under|total|goals?)\s*(\d+(?:\.\d+)?)", m + " " + selection_text, re.I)
     if total_match:
         line = total_match.group(1)
     wanted = _norm(m)
@@ -119,8 +119,9 @@ def _resolve_market(event, market_text, selection_text):
         else:
             targets = {pnorm}
         outcome = next((o for o in outcomes if _norm(o.get("desc")) in targets), None)
-    elif line and pnorm in ("over", "o", "under", "u"):
-        outcome = next((o for o in outcomes if _norm(o.get("desc")) in ({"over", "o"} if pnorm in ("over", "o") else {"under", "u"})), None)
+    elif line and (pnorm.startswith("over") or pnorm.startswith("o") or pnorm.startswith("under") or pnorm.startswith("u")):
+        wanted_side = "over" if pnorm.startswith(("over", "o")) else "under"
+        outcome = next((o for o in outcomes if _norm(o.get("desc")) in {wanted_side, wanted_side[0]}), None)
     else:
         outcome = next((o for o in outcomes if _norm(o.get("desc")) == pnorm), None)
     if not outcome or int(outcome.get("isActive", 1)) != 1:
