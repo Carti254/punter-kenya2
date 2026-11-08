@@ -38,6 +38,7 @@ from user_portfolio import save_bankroll, get_settings, save_rollover, save_pref
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
 from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models as enrich_specialist_candidates
+from free_football_sources import enrich_candidates as enrich_free_football_sources, provider_key_status
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
@@ -2160,6 +2161,12 @@ async def autobuild_sportybet_command(update, context):
             league = items[0].get("league") or "Competition"
             fixture_lines.append(f"• {home} vs {away}")
             fixture_lines.append(f"  {day} | {league} | {len(items)} eligible market selections")
+            sources = sorted({source for item in items for source in (item.get("external_evidence_sources") or [])})
+            if sources:
+                fixture_lines.append("  Research sources: " + " + ".join(source.upper() for source in sources))
+            if any(item.get("external_model_disagreement") is not None for item in items):
+                deltas = [float(item["external_model_disagreement"]) for item in items if item.get("external_model_disagreement") is not None]
+                fixture_lines.append(f"  Independent model comparison: max probability gap {max(deltas):.1%}")
             seen_markets = set()
             shown = 0
             for item in items:
@@ -4095,9 +4102,23 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         if unsupported:
             diagnostics.append("Markets retrieved but not model-supported yet: " + ", ".join(sorted(unsupported)[:12]))
 
+    # Silently enrich exact SportyBet fixture matches with free BSD and PitchAPI
+    # evidence. External probabilities are cross-checks; only exact, supported
+    # corner lines may supply a missing specialist probability. SportyBet prices
+    # remain the executable prices used by the accumulator.
+    try:
+        candidates, free_source_stats = enrich_free_football_sources(candidates, max_fixtures=20)
+        logger.info("Free football source enrichment: %s", free_source_stats)
+        if free_source_stats.get("errors"):
+            diagnostics.extend("Free source: " + str(x)[:160] for x in free_source_stats["errors"][:5])
+    except Exception as source_error:
+        logger.warning("Optional free football source enrichment failed: %s", source_error)
+        free_source_stats = {"error": f"{type(source_error).__name__}: {str(source_error)[:160]}"}
+
     for name, error in feed_errors.items():
         diagnostics.append(f"{name}: {str(error)[:100]}")
-    candidates.sort(key=lambda x: (x["ev"], x["probability"]), reverse=True)
+    candidates.sort(key=lambda x: (x["ev"] if x.get("ev") is not None else -1.0,
+                                   x["probability"] if x.get("probability") is not None else 0.0), reverse=True)
     best = {}
     for item in candidates:
         key = (item["home"], item["away"], item["market_key"])
