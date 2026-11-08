@@ -116,6 +116,67 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
         raise FootballStatsError(f"Expected one exact fixture for {home} vs {away} on {target}; found {len(exact)}.")
     teams = exact[0].get("teams") or {}
     home_team, away_team = teams.get("home") or {}, teams.get("away") or {}
+    fixture_id = int(((exact[0].get("fixture") or {}).get("id") or 0))
+    lineup_evidence = None
+    team_news_evidence = None
+    provider_warnings = []
+
+    # API-Football exposes official lineups and fixture-specific injuries on
+    # the free plan, but coverage varies. Never infer a clean bill of health
+    # from an empty or unavailable response.
+    if fixture_id:
+        try:
+            lineup_rows = _get("fixtures/lineups", {"fixture": fixture_id}, key, session)
+            confirmed_sides = []
+            for lineup in lineup_rows or []:
+                team = (lineup.get("team") or {}).get("name") or "Team"
+                starters = lineup.get("startXI") or []
+                if starters:
+                    confirmed_sides.append({
+                        "team": team,
+                        "formation": lineup.get("formation"),
+                        "coach": (lineup.get("coach") or {}).get("name"),
+                        "starters": [
+                            (item.get("player") or {}).get("name")
+                            for item in starters
+                            if (item.get("player") or {}).get("name")
+                        ],
+                        "substitutes": [
+                            (item.get("player") or {}).get("name")
+                            for item in (lineup.get("substitutes") or [])
+                            if (item.get("player") or {}).get("name")
+                        ],
+                    })
+            if confirmed_sides:
+                lineup_evidence = {
+                    "provider": "API-Football",
+                    "status": "provider lineup published",
+                    "confirmed": True,
+                    "sides": confirmed_sides,
+                }
+        except Exception as exc:
+            provider_warnings.append(f"Lineups unavailable: {type(exc).__name__}")
+
+        try:
+            injury_rows = _get("injuries", {"fixture": fixture_id}, key, session)
+            absences = []
+            for injury in injury_rows or []:
+                player = injury.get("player") or {}
+                team = injury.get("team") or {}
+                absences.append({
+                    "player": player.get("name"),
+                    "team": team.get("name"),
+                    "type": injury.get("type"),
+                    "reason": injury.get("reason"),
+                })
+            if absences:
+                team_news_evidence = {
+                    "provider": "API-Football",
+                    "fixture_id": fixture_id,
+                    "reported_absences": absences,
+                }
+        except Exception as exc:
+            provider_warnings.append(f"Injury feed unavailable: {type(exc).__name__}")
     if not home_team.get("id") or not away_team.get("id"):
         raise FootballStatsError("The stats provider omitted one or both team IDs.")
     home_rows = _recent_team_observations(home_team["id"], target, key, session, last)
@@ -148,8 +209,11 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
     available = [p for p in panels if p["available"]]
     return {
         "fixture": f"{home} vs {away}", "date": target.isoformat(),
-        "fixture_id": int(((exact[0].get("fixture") or {}).get("id") or 0)),
+        "fixture_id": fixture_id,
         "provider": "API-Football", "panels": panels,
+        "lineup_evidence": lineup_evidence,
+        "team_news_evidence": team_news_evidence,
+        "provider_warnings": provider_warnings,
         "council": {
             "available_panels": len(available),
             "unsupported_panels": [p["market"] for p in panels if not p["available"]],
