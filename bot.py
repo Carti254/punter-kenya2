@@ -1128,7 +1128,7 @@ def main_menu_keyboard():
         [
             [KeyboardButton("📅 Today's Matches"), KeyboardButton("🏆 Top Leagues")],
             [KeyboardButton("🔎 Analyze Match"), KeyboardButton("ℹ️ iHelp")],
-            [KeyboardButton("🤖 Build a slip")],
+            [KeyboardButton("🤖 Build a slip"), KeyboardButton("🧠 AI build slip")],
             [KeyboardButton("✏️ Edit slip"), KeyboardButton("🔗 Merge slips")],
             [KeyboardButton("✂️ Split slip"), KeyboardButton("🎯 Trim to target odds")],
             [KeyboardButton("🔄 Convert bet code")],
@@ -1744,7 +1744,7 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     choice = (update.effective_message.text or "").strip()
     menu_choices = {
         "📅 Today's Matches", "🏆 Top Leagues", "🔎 Analyze Match", "ℹ️ iHelp",
-        "🤖 Build a slip", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip", "🎯 Trim to target odds",
+        "🤖 Build a slip", "🧠 AI build slip", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip", "🎯 Trim to target odds",
         "🔄 Convert bet code", "📋 Bookies & regions", "🎟️ My slips",
         "⚽ Match intelligence", "📅 Fixtures & leagues", "❓ Contact support",
     }
@@ -1769,6 +1769,9 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif choice in prompts:
         context.user_data["slip_flow"] = prompts[choice][0]
         await reply(update, prompts[choice][1] + "\n\nSend /cancel to stop.")
+    elif choice == "🧠 AI build slip":
+        context.args = []
+        await autobuild_sportybet_command(update, context)
     elif choice == "🤖 Build a slip":
         context.user_data["slip_flow"] = "sportybet_build"
         await reply(update,
