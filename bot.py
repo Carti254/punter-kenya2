@@ -5006,7 +5006,9 @@ async def automatic_bet_settlement_job(context):
             logger.info("Automatically settled %s logged bets from completed-results CSV.", result["settled"])
     except Exception:
         logger.exception("Scheduled bet-result refresh failed")
-\n\nasync def betresults_command(update, context):
+
+
+async def betresults_command(update, context):
     await reply(update, "🔄 Checking completed results and settling only exact fixture/date matches...")
     try:
         result = await asyncio.to_thread(refresh_pending_bet_records, update.effective_user.id)
