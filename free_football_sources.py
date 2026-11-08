@@ -256,7 +256,7 @@ def enrich_candidates(rows: list[dict], max_fixtures: int = 30):
         "fixtures_enriched": 0,
         "bsd_matches": 0,
         "pitchapi_matches": 0,
-        "corner_probabilities_added": 0,
+        "corner_probabilities_added": 0,\n        "external_probabilities_added": 0,
         "errors": [],
     }
     if not output or not (bsd_key or pitch_key):
@@ -342,20 +342,32 @@ def enrich_candidates(rows: list[dict], max_fixtures: int = 30):
                     # Keep the original PUNTER probability. This is a disagreement
                     # diagnostic, not an unvalidated model blend.
                     row["external_model_disagreement"] = abs(float(own_p) - max(p1x2.values()))
-            if row.get("probability") is None:
-                external_p = _external_probability(prediction, row.get("market"), row.get("selection"))
-                if external_p is not None:
+            external_p = _external_probability(prediction, row.get("market"), row.get("selection"))
+            if external_p is not None:
+                row["external_market_probability"] = external_p
+                own_p = row.get("probability")
+                if own_p is not None:
+                    row["external_model_disagreement"] = abs(float(own_p) - external_p)
+                else:
                     row["probability"] = external_p
-                    row["probability_source"] = "BSD free football model — exact total-corners line"
+                    row["probability_source"] = "BSD free football model — exact market/selection mapping"
                     row["ev"] = external_p * float(row["odds"]) - 1.0
                     row["fair_odds"] = 1.0 / external_p
+                    market_text = _normal(f"{row.get('market')} {row.get('selection')}")
+                    mapped_market = (
+                        "total_corners" if "corner" in market_text else
+                        "total_goals" if any(x in market_text for x in ("goal", "over under")) else
+                        "1x2_or_double_chance"
+                    )
                     row["specialist_evidence"] = {
                         "provider": "BSD",
-                        "market": "total_corners",
+                        "market": mapped_market,
                         "probability": external_p,
                         "warning": "External provider estimate; validate calibration separately.",
                     }
-                    summary["corner_probabilities_added"] += 1
+                    summary["external_probabilities_added"] = summary.get("external_probabilities_added", 0) + 1
+                    if mapped_market == "total_corners":
+                        summary["corner_probabilities_added"] += 1
 
     return output, summary
 
