@@ -74,6 +74,59 @@ def grade_market_evidence(market, selection, evidence):
             raise ValueError("Half-time score is unavailable; left pending.")
         return _grade_total(ht_home + ht_away, selection)
 
+    if "player" in key or "goalscorer" in key:
+        if "shotontarget" in key:
+            stat_path, stat_label = ("shots", "on"), "player shots on target"
+        elif "shot" in key:
+            stat_path, stat_label = ("shots", "total"), "player shots"
+        elif "assist" in key:
+            stat_path, stat_label = ("goals", "assists"), "player assists"
+        elif "yellow" in key and "card" in key:
+            stat_path, stat_label = ("cards", "yellow"), "player yellow cards"
+        elif "red" in key and "card" in key:
+            stat_path, stat_label = ("cards", "red"), "player red cards"
+        elif "goal" in key or "goalscorer" in key:
+            stat_path, stat_label = ("goals", "total"), "player goals"
+        else:
+            raise ValueError("Player market type is not supported; left pending.")
+
+        groups = evidence.get("players") or []
+        candidates = []
+        for group in groups:
+            for item in group.get("players") or []:
+                player = item.get("player") or {}
+                stats_list = item.get("statistics") or []
+                if player.get("name") and stats_list:
+                    candidates.append((str(player["name"]), stats_list[0]))
+        if "over" in pick or "under" in pick or re.search(r"\\b[ou]\\s*\\d", pick):
+            match = re.fullmatch(r"\\s*(.+?)\\s+(over|under|o|u)\\s*(\\d+(?:\\.\\d+)?)\\s*", str(selection), re.I)
+            if not match:
+                raise ValueError("Player selection must include an exact name and Over/Under line.")
+            player_name, side_text, line_text = match.groups()
+            matching = [row for row in candidates if re.sub(r"[^a-z0-9]", "", row[0].casefold()) == re.sub(r"[^a-z0-9]", "", player_name.casefold())]
+            if len(matching) != 1:
+                raise ValueError("Player name did not resolve to exactly one provider player; left pending.")
+            stat = matching[0][1]
+            value = ((stat.get(stat_path[0]) or {}).get(stat_path[1]))
+            if value is None:
+                raise ValueError(f"Provider omitted {stat_label}; left pending.")
+            side = "over" if side_text.casefold() in {"over", "o"} else "under"
+            line = float(line_text)
+            if line % 1 == 0:
+                raise ValueError("Integer-line player market requires bookmaker-specific push rules; left pending.")
+            return "WON" if (float(value) > line if side == "over" else float(value) < line) else "LOST"
+
+        if "goalscorer" not in key and "goal" not in key:
+            raise ValueError("Player selection needs an explicit Over/Under line; left pending.")
+        player_name = re.sub(r"\\s+(to score|anytime|first goalscorer)$", "", str(selection).strip(), flags=re.I)
+        matching = [row for row in candidates if re.sub(r"[^a-z0-9]", "", row[0].casefold()) == re.sub(r"[^a-z0-9]", "", player_name.casefold())]
+        if len(matching) != 1:
+            raise ValueError("Player name did not resolve to exactly one provider player; left pending.")
+        value = ((matching[0][1].get("goals") or {}).get("total"))
+        if value is None:
+            raise ValueError("Provider omitted player goal data; left pending.")
+        return "WON" if float(value) > 0 else "LOST"
+
     full_rows = _stat_rows(evidence.get("statistics_full_time"))
     half_rows = _stat_rows(evidence.get("statistics_half_time"))
     if ("half" in key or key.startswith("ht")) and "corner" in key:
