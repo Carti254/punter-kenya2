@@ -38,7 +38,7 @@ class ScannerMarketTests(unittest.TestCase):
         today_eat = datetime.now(timezone.utc).astimezone(ZoneInfo("Africa/Nairobi")).date().isoformat()
         fixture = {
             "home_team": "Brighton", "away_team": "Brentford",
-            "competition": "Premier League", "kickoffUtc": f"{today_eat}T20:00:00+03:00",
+            "competition": "Premier League", "kickoff_at": datetime.fromisoformat(f"{today_eat}T12:00:00"),
         }
         game = {
             "bookmaker": "SportyBet", "kickoff_eat": f"{today_eat} 23:00",
