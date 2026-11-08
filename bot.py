@@ -36,6 +36,7 @@ from ai_assistant import ai_is_configured, interpret_request, read_slip_image
 from premium_intelligence import market_probabilities, assess_price, rollover_projection
 from user_portfolio import save_bankroll, get_settings, save_rollover, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
+from accumulator_engine import build_accumulator
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -1949,13 +1950,8 @@ async def autobuild_sportybet_command(update, context):
             rows.sort(key=lambda x: (x["probability"], x["ev"]), reverse=True)
         else:
             rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
-        chosen, product = [], 1.0
-        for item in rows:
-            # Keep the builder open to multiple markets from the same fixture.
-            chosen.append(item)
-            product *= float(item["odds"])
-            if product >= target or len(chosen) >= 20:
-                break
+        build = build_accumulator(rows, target, max_legs=20, ranking=rank_mode)
+        chosen, product = build["selections"], build["combined_odds"]
         if not chosen:
             await reply(update, "⚠️ NO USABLE SPORTYBET PICKS FOUND\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No SportyBet-priced, model-supported candidates were found."))
             return
@@ -1995,16 +1991,8 @@ async def accumulator_status_command(update, context):
         await reply(update, f"❌ ACCUMULATOR SCAN FAILED: {type(exc).__name__}: {str(exc)[:250]}")
         return
 
-    chosen, combined, used = [], 1.0, set()
-    for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
-        fixture_key = (item["home"], item["away"])
-        if fixture_key in used:
-            continue
-        chosen.append(item)
-        used.add(fixture_key)
-        combined *= item["odds"]
-        if combined >= target or len(chosen) >= 6:
-            break
+    build = build_accumulator(rows, target, max_legs=6, ranking="probability")
+    chosen, combined = build["selections"], build["combined_odds"]
 
     if not chosen:
         await reply(update, "⚠️ NO USABLE ACCUMULATOR CANDIDATES\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No model-supported bookmaker prices were retrieved."))
