@@ -2241,6 +2241,11 @@ async def autobuild_sportybet_command(update, context):
             live_leg["research_evidence"] = model_leg.get("research_evidence") or {}
             live_leg["research_checks"] = model_leg.get("research_checks") or []
             live_leg["research_gaps"] = model_leg.get("research_gaps") or []
+            live_leg["risk_score"] = model_leg.get("risk_score", 0)
+            live_leg["risk_level"] = model_leg.get("risk_level") or "UNKNOWN"
+            live_leg["risk_flags"] = model_leg.get("risk_flags") or []
+            live_leg["risk_gaps"] = model_leg.get("risk_gaps") or []
+            live_leg["risk_method"] = model_leg.get("risk_method")
             live_leg["probability_source"] = model_leg.get("probability_source") or "PUNTER statistical model"
             for evidence_key in ("specialist_evidence", "specialist_panels", "x_research_evidence",
                                  "x_research_warning", "other_bookmaker_prices",
@@ -2279,6 +2284,14 @@ async def autobuild_sportybet_command(update, context):
                 f"   Model probability: {float(leg['probability']):.1%} "
                 f"| Source: {leg.get('probability_source') or 'PUNTER statistical model'}"
             )
+            lines.append(
+                f"   Risk screen: {leg.get('risk_level', 'UNKNOWN')} "
+                f"(score {int(leg.get('risk_score') or 0)})"
+            )
+            if leg.get("risk_flags"):
+                lines.append("   Risk flags: " + "; ".join(leg["risk_flags"][:3]))
+            if leg.get("risk_gaps"):
+                lines.append("   Missing risk evidence: " + "; ".join(leg["risk_gaps"][:3]))
             if leg.get("bsd_consensus_odds"):
                 lines.append(
                     f"   BSD consensus reference: {float(leg['bsd_consensus_odds']):.2f} "
@@ -2347,6 +2360,7 @@ async def autobuild_sportybet_command(update, context):
              f"X public leads: {specialist_stats.get('x_posts', 0)}. "
              f"{specialist_stats.get('reason', '')}"),
             f"Research checks: {research_stats['research_scope']}.",
+            f"Risk screening: {research_stats.get('high_risk', 0)} high-risk and {research_stats.get('medium_risk', 0)} medium-risk candidates retained with visible warnings; severe independent-model disagreement was rejected.",
             "Correlation review: " + (", ".join(build.get("correlation_warnings") or []) if build.get("correlation_warnings") else "no same-competition/date cluster detected; other dependencies are not quantified."),
             (f"SportyBet integration selection limit: {SPORTYBET_MAX_SELECTIONS}; {available_fixtures} distinct eligible fixtures were available." if available_fixtures > SPORTYBET_MAX_SELECTIONS else ""),
             "Unsupported markets are not guessed. Verified lineups, injuries, xG, tactics and true closing-line movement remain gaps unless their sources are actually available.",
