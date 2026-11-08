@@ -17,7 +17,7 @@ class BetSettlementTests(unittest.TestCase):
     def test_integer_line_push_is_void(self):
         self.assertEqual(grade_selection("Over/Under", "Under 3.0", 2, 1), "VOID")
 
-    def test_unknown_market_fails_closed(self):
+    def test_actual_home_team_name_is_accepted(self):\n        self.assertEqual(grade_selection("1X2", "Arsenal", 2, 0, "Arsenal", "Chelsea"), "WON")\n\n    def test_actual_away_team_name_is_accepted(self):\n        self.assertEqual(grade_selection("1X2", "Chelsea", 2, 0, "Arsenal", "Chelsea"), "LOST")\n\n    def test_negative_score_is_rejected(self):\n        with self.assertRaises(ValueError):\n            grade_selection("1X2", "Home", -1, 0)\n\n    def test_unknown_market_fails_closed(self):
         with self.assertRaises(ValueError):
             grade_selection("Corners", "Over 8.5", 2, 1)
 
