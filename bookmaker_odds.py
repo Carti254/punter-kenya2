@@ -277,6 +277,9 @@ def fetch_betika(day: date | None = None, max_pages=30):
             match_id = item.get("parent_match_id")
             if match_id is None or str(match_id) in seen:
                 continue
+            competition_text = " ".join(str(item.get(key) or "") for key in ("category", "competition_name", "league_name", "name"))
+            if re.search(r"-zoom\\b|\\bsrl\\b|virtual|e[- ]?soccer", competition_text, re.I):
+                continue
             seen.add(str(match_id))
             kickoff = _eat_time(item.get("start_time"))
             if not kickoff or kickoff[:10] != day.isoformat():
