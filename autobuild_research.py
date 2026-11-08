@@ -94,6 +94,9 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.0) -> dict | None:
             "expected_home_goals": row.get("lambda_home"),
             "expected_away_goals": row.get("lambda_away"),
             "specialist_evidence": row.get("specialist_evidence"),
+            "xg_evidence": row.get("xg_evidence"),
+            "lineup_evidence": row.get("lineup_evidence"),
+            "team_news_evidence": row.get("team_news_evidence"),
         },
         "research_gaps": [
             name for name, present in (
