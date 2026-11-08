@@ -329,7 +329,7 @@ def enrich_candidates(rows: list[dict], max_fixtures: int = 30):
                     evidence["bsd"] = {"event_id": event_id, "status": bsd_event.get("status")}
                     if event_id:
                         for suffix, key in (("prediction", "prediction"), ("odds", "consensus_odds"),
-                                            ("stats", "stats"), ("lineups", "lineups"), ("h2h", "h2h")):
+                                            ("lineups", "lineups"), ("h2h", "h2h")):
                             try:
                                 evidence["bsd"][key] = _bsd_detail(event_id, suffix, bsd_key)
                             except Exception as exc:
@@ -351,9 +351,7 @@ def enrich_candidates(rows: list[dict], max_fixtures: int = 30):
                     match_id = pitch_event.get("id")
                     evidence["pitchapi"] = {"match_id": match_id, "status": pitch_event.get("status")}
                     if match_id:
-                        for suffix, key in (("stats", "stats"), ("advanced", "advanced"),
-                                            ("lineups", "lineups"), ("h2h", "h2h"),
-                                            ("events", "events"), ("players", "players")):
+                        for suffix, key in (("lineups", "lineups"), ("h2h", "h2h")):
                             try:
                                 evidence["pitchapi"][key] = _pitch_detail(match_id, suffix, pitch_key)
                             except Exception as exc:
