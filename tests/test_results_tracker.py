@@ -73,7 +73,7 @@ class MySQLMigrationIntegrationTests(unittest.TestCase):
 
         first = run_migrations()
         self.assertEqual(first["latest_version"], 3)
-        self.assertEqual(first["applied"], [1, 2])
+        self.assertEqual(first["applied"], [1, 2, 3])
 
         connection = get_connection()
         try:
@@ -88,6 +88,12 @@ class MySQLMigrationIntegrationTests(unittest.TestCase):
                     SELECT COUNT(*) AS n FROM information_schema.tables
                     WHERE table_schema=DATABASE()
                       AND table_name IN ('punter_bet_records', 'punter_slips')
+                """)
+                self.assertEqual(int(cursor.fetchone()["n"]), 2)
+                cursor.execute("""
+                    SELECT COUNT(*) AS n FROM information_schema.columns
+                    WHERE table_schema=DATABASE() AND table_name='punter_bet_records'
+                      AND column_name IN ('settlement_source', 'settlement_evidence_json')
                 """)
                 self.assertEqual(int(cursor.fetchone()["n"]), 2)
         finally:
