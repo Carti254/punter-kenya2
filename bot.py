@@ -1662,7 +1662,7 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     choice = (update.effective_message.text or "").strip()
     menu_choices = {
         "📅 Today's Matches", "🏆 Top Leagues", "🔎 Analyze Match", "ℹ️ iHelp",
-        "🤖 Build a slip", "🧠 AI build slip", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip", "🎯 Trim to target odds",
+        "🤖 Build a slip", "🧠 AI build slip", "📝 Manual slip", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip", "🎯 Trim to target odds",
         "📋 Bookies & regions", "🎟️ My slips",
         "⚽ Match intelligence", "📅 Fixtures & leagues", "❓ Contact support",
     }
