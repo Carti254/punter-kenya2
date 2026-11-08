@@ -5006,15 +5006,7 @@ async def automatic_bet_settlement_job(context):
             logger.info("Automatically settled %s logged bets from completed-results CSV.", result["settled"])
     except Exception:
         logger.exception("Scheduled bet-result refresh failed")
-    try:
-        forecasts = await asyncio.to_thread(refresh_specialist_forecasts)
-        logger.info("Specialist forecast grading: checked=%s settled=%s pending=%s",
-                    forecasts.get("checked"), forecasts.get("settled"), forecasts.get("pending"))
-    except Exception:
-        logger.exception("Scheduled specialist forecast grading failed")
-
-
-async def betresults_command(update, context):
+\n\nasync def betresults_command(update, context):
     await reply(update, "🔄 Checking completed results and settling only exact fixture/date matches...")
     try:
         result = await asyncio.to_thread(refresh_pending_bet_records, update.effective_user.id)
