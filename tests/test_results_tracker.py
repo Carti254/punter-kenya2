@@ -72,7 +72,7 @@ class MySQLMigrationIntegrationTests(unittest.TestCase):
             connection.close()
 
         first = run_migrations()
-        self.assertEqual(first["latest_version"], 2)
+        self.assertEqual(first["latest_version"], 3)
         self.assertEqual(first["applied"], [1, 2])
 
         connection = get_connection()
@@ -95,7 +95,7 @@ class MySQLMigrationIntegrationTests(unittest.TestCase):
 
         second = run_migrations()
         self.assertEqual(second["applied"], [])
-        self.assertEqual(second["latest_version"], 2)
+        self.assertEqual(second["latest_version"], 3)
 
 
 
