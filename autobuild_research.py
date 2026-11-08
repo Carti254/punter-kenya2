@@ -168,7 +168,7 @@ def candidate_research_summary(pool: list[dict]) -> str:
     )
 
 
-def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None) -> tuple[list[dict], dict]:
+def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None, max_fixtures: int = 4) -> tuple[list[dict], dict]:
     """Optionally enrich matching corner/card/shot/first-half prices using API-Football.
 
     This is deliberately opt-in: without API_FOOTBALL_KEY, candidates are returned
@@ -205,7 +205,11 @@ def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None) 
         grouped[(home, away, match_date)].append(row)
 
     checked = matched = failures = 0
-    for (home, away, match_date), candidates in grouped.items():
+    skipped_by_quota_cap = 0
+    for index, ((home, away, match_date), candidates) in enumerate(grouped.items()):
+        if index >= max(1, int(max_fixtures)):
+            skipped_by_quota_cap = len(grouped) - index
+            break
         checked += 1
         market_rows = []
         for row in candidates:
@@ -244,5 +248,5 @@ def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None) 
             }
             matched += 1
     return output, {"enabled": True, "fixtures_checked": checked, "matched_prices": matched,
-                    "fixture_failures": failures,
-                    "reason": "Exact-match specialist evidence applied where provider data and matching bookmaker lines were available."}
+                    "fixture_failures": failures, "fixtures_skipped_by_free_quota_cap": skipped_by_quota_cap,
+                    "reason": "Exact-match specialist evidence applied where provider data and matching bookmaker lines were available. The free API-Football tier is quota-limited; specialist enrichment is capped per autobuild run."}
