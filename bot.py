@@ -5232,7 +5232,7 @@ async def automatic_odds_snapshot_job(context):
         logger.exception("Scheduled bookmaker price capture failed")
 
 
-def rollover_command(update, context):
+async def rollover_command(update, context):
     if len(context.args or []) != 2:
         await reply(update, "Usage: /rollover DAYS DAILY_TARGET_ODDS\nExample: /rollover 5 2")
         return
