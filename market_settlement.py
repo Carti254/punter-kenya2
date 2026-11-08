@@ -93,3 +93,53 @@ def grade_market_evidence(market, selection, evidence):
     if any(value is None for value in values):
         raise ValueError("Provider omitted one or more required team statistics; left pending.")
     return _grade_total(sum(values), selection)
+
+
+
+def settle_bet_with_market_evidence(user_id, bet_id, evidence, source="api-football"):
+    """Settle one pending record with explicit provider evidence and audit payload."""
+    import json
+    from decimal import Decimal
+    from database import get_connection
+
+    fixture = evidence.get("fixture") or {}
+    status = ((fixture.get("fixture") or {}).get("status") or {}).get("short")
+    if status not in {"FT", "AET", "PEN"}:
+        raise ValueError("Provider fixture is not confirmed finished; left pending.")
+    goals = fixture.get("goals") or {}
+    fulltime = ((fixture.get("score") or {}).get("fulltime") or {})
+    home_goals = goals.get("home") if goals.get("home") is not None else fulltime.get("home")
+    away_goals = goals.get("away") if goals.get("away") is not None else fulltime.get("away")
+    if home_goals is None or away_goals is None:
+        raise ValueError("Confirmed full-time score is missing; left pending.")
+    home_goals, away_goals = int(home_goals), int(away_goals)
+
+    connection = get_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM punter_bet_records WHERE id=%s AND user_id=%s AND status='PENDING'",
+                (int(bet_id), int(user_id)),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError("Pending bet record not found.")
+            result = grade_market_evidence(row["market"], row["selection"], evidence)
+            stake = Decimal(str(row["stake"]))
+            odds = Decimal(str(row["decimal_odds"]))
+            pnl = stake * (odds - 1) if result == "WON" else Decimal("0") if result == "VOID" else -stake
+            audit = json.dumps(evidence, separators=(",", ":"), default=str)
+            cursor.execute(
+                """UPDATE punter_bet_records
+                   SET status=%s, actual_home_goals=%s, actual_away_goals=%s,
+                       profit_loss=%s, settlement_source=%s,
+                       settlement_evidence_json=%s, settled_at=CURRENT_TIMESTAMP
+                   WHERE id=%s AND user_id=%s AND status='PENDING'""",
+                (result, home_goals, away_goals, str(pnl), str(source)[:40],
+                 audit, int(bet_id), int(user_id)),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Bet record changed during settlement; refresh and retry.")
+            return {"status": result, "profit_loss": pnl}
+    finally:
+        connection.close()
