@@ -118,6 +118,8 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
         def completion_score(state):
             picks, odds_now, probability_now, _, _ = state
             secondary = probability_now if ranking == "probability" else odds_now * probability_now
+            if ranking == "odds":
+                return (secondary, -((odds_now / target) - 1.0), probability_now, -len(picks))
             return (-((odds_now / target) - 1.0), secondary, probability_now, -len(picks))
         best = max(completed, key=completion_score)
     else:
