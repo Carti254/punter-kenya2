@@ -4674,24 +4674,40 @@ async def betresults_command(update, context):
         await reply(update, f"⚠️ Result refresh failed: {type(exc).__name__}: {str(exc)[:250]}")
 
 
+def resolve_bet_match_date(home, away):
+    """Resolve a logged fixture's EAT date only when the upcoming catalogue has one unique match."""
+    rows = fetch_openmatchday_fixture_rows(30)
+    matches = []
+    for raw in rows:
+        fixture = normalise_fixture(raw)
+        if not fixture or not fixture.get("kickoff_at"):
+            continue
+        if canonical_team_key(fixture.get("home_team")) == canonical_team_key(home) and canonical_team_key(fixture.get("away_team")) == canonical_team_key(away):
+            matches.append(fixture["kickoff_at"].replace(tzinfo=timezone.utc).astimezone(EAT).date())
+    dates = set(matches)
+    return next(iter(dates)) if len(dates) == 1 else None
+
+
 async def betlog_command(update, context):
     """Log a real bookmaker selection and its original price/stake."""
     raw = " ".join(context.args or [])
     parts = [part.strip() for part in raw.split("|")]
-    if len(parts) not in (5, 6):
-        await reply(update, "Usage: /betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER]\nExample: /betlog Arsenal vs Chelsea | 1X2 | Arsenal | 2.10 | 100 | SportyBet")
+    if len(parts) not in (5, 6, 7):
+        await reply(update, "Usage: /betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER | YYYY-MM-DD]\nExample: /betlog Arsenal vs Chelsea | 1X2 | Arsenal | 2.10 | 100 | SportyBet | 2026-11-08")
         return
     fixture = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", parts[0], maxsplit=1, flags=re.I)
     if len(fixture) != 2:
         await reply(update, "Enter the fixture as HOME vs AWAY.")
         return
-    bookmaker = parts[5] if len(parts) == 6 else "SportyBet"
+    bookmaker = parts[5] if len(parts) >= 6 and parts[5] else "SportyBet"
     try:
+        match_date = datetime.strptime(parts[6], "%Y-%m-%d").date() if len(parts) == 7 else await asyncio.to_thread(resolve_bet_match_date, fixture[0], fixture[1])
         bet_id = await asyncio.to_thread(
             record_bet, update.effective_user.id, bookmaker,
-            fixture[0], fixture[1], parts[1], parts[2], parts[3], parts[4]
+            fixture[0], fixture[1], parts[1], parts[2], parts[3], parts[4], match_date
         )
-        await reply(update, f"✅ BET RECORD SAVED — #{bet_id}\n{fixture[0]} vs {fixture[1]}\n{parts[1]}: {parts[2]} @ {float(parts[3]):.2f}\nStake: {float(parts[4]):.2f} KSh\nOriginal odds and stake are now preserved.")
+        date_note = match_date.isoformat() if match_date else "Not resolved — automatic settlement unavailable until date is supplied"
+        await reply(update, f"✅ BET RECORD SAVED — #{bet_id}\n{fixture[0]} vs {fixture[1]}\n{parts[1]}: {parts[2]} @ {float(parts[3]):.2f}\nStake: {float(parts[4]):.2f} KSh\nMatch date: {date_note}\nOriginal odds and stake are preserved.")
     except Exception as exc:
         await reply(update, f"⚠️ Could not save bet record: {type(exc).__name__}: {str(exc)[:250]}")
 
