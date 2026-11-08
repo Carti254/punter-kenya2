@@ -4015,8 +4015,10 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                 continue
             if not prediction.get("available"):
                 prediction_unavailable += 1
-                progress(f"{day.isoformat()}: matched {home_name} vs {away_name}, but model data unavailable.")
-                continue
+                # Keep the exact SportyBet fixture in the research pool. BSD can
+                # independently supply supported 1X2, goal-total and corner
+                # probabilities even when open-matchday history is missing.
+                prediction = {}
             progress(f"{day.isoformat()}: matched {home_name} vs {away_name}; evaluating {sum(len(g.get('markets') or []) for g in matches)} market rows…")
             for game in matches:
                 for row in game.get("markets", []):
@@ -4024,10 +4026,15 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                     market_name = str(row.get("market") or "Unknown")
                     selection_name = str(row.get("selection") or "Unknown")
                     probability, reason = _market_probability_for_row(prediction, row)
-                    specialist_market = any(term in _normal_market_text(market_name + " " + selection_name)
+                    market_text_for_sources = _normal_market_text(market_name + " " + selection_name)
+                    specialist_market = any(term in market_text_for_sources
                         for term in ("corner", "card", "booking", "total shots", "shots on target",
                                      "shots on goal", "first half", "half time", "1st half"))
-                    if probability is None and not specialist_market:
+                    external_market_supported = any(term in market_text_for_sources
+                        for term in ("1x2", "match result", "full time result", "double chance",
+                                     "draw no bet", "dnb", "total goals", "over under", "goals over",
+                                     "goals under", "total corners", "corner"))
+                    if probability is None and not specialist_market and not external_market_supported:
                         if reason:
                             unsupported.add(market_name)
                         continue
