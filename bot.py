@@ -1123,11 +1123,13 @@ def main_menu_keyboard():
     """Persistent Telegram menu inspired by the reference layout."""
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("🔄 Convert bet code")],
-            [KeyboardButton("✏️ Edit slip"), KeyboardButton("🔗 Merge slips"), KeyboardButton("✂️ Split slip")],
+            [KeyboardButton("📅 Today's Matches"), KeyboardButton("🏆 Top Leagues")],
+            [KeyboardButton("🔎 Analyze Match"), KeyboardButton("ℹ️ iHelp")],
             [KeyboardButton("🤖 Build a slip")],
-            [KeyboardButton("📋 Bookies & regions"), KeyboardButton("❓ Contact support")],
-            [KeyboardButton("⚽ Match intelligence"), KeyboardButton("📅 Fixtures & leagues")],
+            [KeyboardButton("✏️ Edit slip"), KeyboardButton("🔗 Merge slips"), KeyboardButton("✂️ Split slip")],
+            [KeyboardButton("🔄 Convert bet code")],
+            [KeyboardButton("📋 Bookies & regions"), KeyboardButton("🎟️ My slips")],
+            [KeyboardButton("⚽ Match intelligence"), KeyboardButton("❓ Contact support")],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -1225,6 +1227,15 @@ async def process_slip_flow(update, context):
         return True
 
     try:
+        if state == "analyze":
+            if " vs " not in message.casefold():
+                await reply(update, "Please use: HOME TEAM vs AWAY TEAM. Example: Arsenal vs Chelsea.")
+                return True
+            context.user_data.pop("slip_flow", None)
+            context.args = re.split(r"\\s+vs\\s+", message, maxsplit=1, flags=re.IGNORECASE)
+            await deepdive_command(update, context)
+            return True
+
         if state == "build":
             selections, bookmaker = parse_slip_lines(message)
             slip_id = await asyncio.to_thread(create_slip, user_id, selections, bookmaker)
@@ -1345,7 +1356,18 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔗 Merge slips": ("merge", "Send two of your saved slip IDs separated by a space. Example: 12 15. A new combined slip is created; the originals remain unchanged."),
         "✂️ Split slip": ("split", "Send: SLIP_ID | LEGS_PER_NEW_SLIP\nExample: 21 | 3. New slips are created in groups of three; the original remains unchanged."),
     }
-    if choice in prompts:
+    if choice == "📅 Today's Matches":
+        context.args = ["today"]
+        await fixtures(update, context)
+    elif choice == "🏆 Top Leagues":
+        context.args = []
+        await leagues(update, context)
+    elif choice == "🔎 Analyze Match":
+        context.user_data["slip_flow"] = "analyze"
+        await reply(update, "🔎 ANALYZE A MATCH\n\nSend the fixture as: HOME TEAM vs AWAY TEAM\nExample: Arsenal vs Chelsea\n\nSend /cancel to stop.")
+    elif choice == "ℹ️ iHelp":
+        await start(update, context)
+    elif choice in prompts:
         context.user_data["slip_flow"] = prompts[choice][0]
         await reply(update, prompts[choice][1] + "\n\nSend /cancel to stop.")
     elif choice == "🔄 Convert bet code":
