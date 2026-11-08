@@ -32,6 +32,7 @@ from results_tracker import record_bet, settle_bet, bet_statistics, list_pending
 from prediction_validation import brier_score, log_loss, fit_temperature, apply_temperature
 from football_stats_provider import fetch_match_market_data, FootballStatsError
 from market_settlement import settle_bet_with_market_evidence
+from ai_assistant import ai_is_configured, interpret_request, read_slip_image
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -1256,7 +1257,13 @@ async def process_slip_flow(update, context):
 
     try:
         if state == "sportybet_build":
-            raw_lines = [line.strip() for line in message.splitlines() if line.strip()]
+            if message.casefold() in ("validate", "confirm selections"):
+                raw_lines = context.user_data.pop("ai_ocr_lines", None) or []
+                if not raw_lines:
+                    await reply(update, "The extracted image selections have expired. Send the screenshot again.")
+                    return True
+            else:
+                raw_lines = [line.strip() for line in message.splitlines() if line.strip()]
             resolved = await asyncio.to_thread(prepare_sportybet_slip, raw_lines)
             context.user_data.pop("slip_flow", None)
             context.user_data["pending_sportybet_booking"] = resolved
@@ -1659,6 +1666,92 @@ async def my_slips_command(update, context):
         await reply(update, f"Could not load slips: {type(exc).__name__}: {str(exc)[:200]}")
 
 
+async def ai_natural_language_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route ordinary language into existing deterministic PUNTER workflows."""
+    message = (update.effective_message.text or "").strip()
+    if not message or message.startswith("/"):
+        return False
+    if not ai_is_configured():
+        await reply(update,
+            "🧠 AI assistant is not connected yet. The bot's existing commands still work. "
+            "To enable natural-language requests, add OPENAI_API_KEY to Railway Variables "
+            "and redeploy. Never send the key in Telegram.")
+        return True
+    await reply(update, "🧠 Understanding your request and connecting it to PUNTER's live tools…")
+    try:
+        intent = await asyncio.to_thread(interpret_request, message)
+        action = intent["action"]
+        fixture = intent.get("fixture") or ""
+        date = intent.get("date") or "both"
+        if action == "deepdive":
+            if not fixture:
+                await reply(update, "Please name both teams, for example: Analyse Brighton vs Brentford.")
+                return True
+            context.args = fixture.split()
+            await deepdive_command(update, context)
+        elif action == "odds":
+            if not fixture:
+                await reply(update, "Please name both teams, for example: Show odds for Brighton vs Brentford.")
+                return True
+            context.args = fixture.split() + ([date] if date in ("today", "tomorrow") else [])
+            await bookmaker_odds_command(update, context)
+        elif action == "fixtures":
+            context.args = [] if date == "both" else [date]
+            await fixtures(update, context)
+        elif action == "topvalue":
+            market = str(intent.get("market") or "all").casefold()
+            context.args = ([market] if market in ("home", "draw", "away", "over15", "over25", "safest") else [])
+            if date in ("today", "tomorrow"):
+                context.args.append(date)
+            await topvalue_command(update, context)
+        elif action == "autobuild":
+            target = float(intent.get("target_odds") or 5.0)
+            market = str(intent.get("market") or "all")
+            context.args = [f"{target:g}"] + ([] if market.casefold() == "all" else [market])
+            await autobuild_sportybet_command(update, context)
+        elif action == "explain":
+            await reply(update, intent.get("explanation") or "I can explain betting terms, but match-specific facts and prices must come from PUNTER's live data tools.")
+        else:
+            await reply(update,
+                "I can understand requests such as:\n"
+                "• Analyse a named match\n• Compare SportyBet and Betika prices\n"
+                "• Find today's fixtures\n• Scan available markets for potential value\n"
+                "• Build a slip preview to a target combined odd\n"
+                "• Read a betting-slip screenshot")
+    except Exception as exc:
+        logger.exception("AI request routing failed")
+        await reply(update, f"⚠️ AI request could not be completed: {type(exc).__name__}: {str(exc)[:220]}")
+    return True
+
+
+async def ai_slip_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Read a slip screenshot, then pass extracted legs through live SportyBet validation."""
+    if not ai_is_configured():
+        await reply(update, "Screenshot reading needs OPENAI_API_KEY. Add it privately in Railway Variables, then redeploy.")
+        return
+    photo = update.effective_message.photo
+    if not photo:
+        return
+    await reply(update, "🖼️ Reading the slip image. I will not trust the screenshot's odds; current SportyBet prices will be checked separately.")
+    try:
+        telegram_file = await photo[-1].get_file()
+        image_bytes = bytes(await telegram_file.download_as_bytearray())
+        lines = await asyncio.to_thread(read_slip_image, image_bytes, "image/jpeg")
+        context.user_data["ai_ocr_lines"] = lines
+        context.user_data["slip_flow"] = "sportybet_build"
+        preview = ["🧾 EXTRACTED FOOTBALL SELECTIONS — PLEASE CHECK", ""]
+        preview.extend(f"{i}. {line}" for i, line in enumerate(lines, 1))
+        preview.extend([
+            "", "Check the teams, markets and selections above.",
+            "Reply VALIDATE to check every leg against live SportyBet Kenya markets and prices.",
+            "Or reply /cancel. No booking code has been created yet."
+        ])
+        await reply(update, "\n".join(preview))
+    except Exception as exc:
+        logger.exception("Slip screenshot reading failed")
+        await reply(update, f"⚠️ I could not reliably read that screenshot: {type(exc).__name__}: {str(exc)[:220]}")
+
+
 async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle home-menu navigation before treating text as slip input."""
     choice = (update.effective_message.text or "").strip()
@@ -1733,6 +1826,8 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await my_slips_command(update, context)
     elif choice == "🎟️ My slips":
         await my_slips_command(update, context)
+    else:
+        await ai_natural_language_handler(update, context)
 
 
 
@@ -3776,6 +3871,7 @@ async def deepdive_command(update, context):
         f"Available meetings: {len(d['h2h'])}",
         "",
         "6. MODEL FORECAST"]
+    decision_text = "No betting decision: the statistical forecast is unavailable."
     if pred.get("available"):
         try:
             await asyncio.to_thread(save_prediction_record, raw, item, pred)
@@ -3787,6 +3883,88 @@ async def deepdive_command(update, context):
             f"Most likely score: {pred['score'][0]}-{pred['score'][1]}",
             f"1X2: Home {pred['home_win']:.1%} | Draw {pred['draw']:.1%} | Away {pred['away_win']:.1%}",
             f"Over 1.5: {pred['over_15']:.1%} | Over 2.5: {pred['over_25']:.1%}"])
+        # Check actual bookmaker feeds for this exact fixture before deciding.
+        try:
+            kickoff = parse_datetime(fixture.get("kickoff_at"))
+            if kickoff and kickoff.tzinfo is None:
+                kickoff = kickoff.replace(tzinfo=timezone.utc)
+            match_day = kickoff.astimezone(EAT).date() if kickoff else datetime.now(EAT).date()
+            odds_result = await asyncio.to_thread(fetch_bookmaker_odds, match_day)
+            priced_games = []
+            for provider in (odds_result.get("bookmakers") or {}).values():
+                priced_games.extend(provider.get("games") or [])
+            matched_games = await asyncio.to_thread(
+                find_bookmaker_event, priced_games,
+                fixture["home_team"], fixture["away_team"]
+            )
+            exact_games = [
+                game for game in matched_games
+                if " ".join(str(game.get("home") or "").casefold().split()) == " ".join(fixture["home_team"].casefold().split())
+                and " ".join(str(game.get("away") or "").casefold().split()) == " ".join(fixture["away_team"].casefold().split())
+            ]
+            matched_games = exact_games or matched_games
+            evaluated = []
+            unsupported_markets = set()
+            for game in matched_games:
+                for market_row in game.get("markets") or []:
+                    probability, reason = _market_probability_for_row(pred, market_row)
+                    if probability is None:
+                        if reason:
+                            unsupported_markets.add(str(market_row.get("market") or "Unknown"))
+                        continue
+                    price = market_row.get("odds")
+                    try:
+                        price = float(price)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if not (price > 1.0 and 0 < probability < 1):
+                        continue
+                    evaluated.append({
+                        "bookmaker": game.get("bookmaker") or "Bookmaker",
+                        "market": market_row.get("market") or "Market",
+                        "selection": market_row.get("selection") or "Selection",
+                        "odds": price, "probability": probability,
+                        "fair_odds": 1 / probability, "ev": probability * price - 1,
+                    })
+            evaluated.sort(key=lambda row: row["ev"], reverse=True)
+            if evaluated:
+                lines.extend(["", "7. LIVE BOOKMAKER MARKET CHECK",
+                    f"Matched bookmaker feeds: {len({row['bookmaker'] for row in evaluated})}",
+                    f"Model-supported priced outcomes evaluated: {len(evaluated)}"])
+                for row in evaluated[:8]:
+                    lines.append(
+                        f"{row['bookmaker']} | {row['market']}: {row['selection']} @ {row['odds']:.2f} "
+                        f"| Model {row['probability']:.1%} | Fair {row['fair_odds']:.2f} "
+                        f"| Raw estimated EV {row['ev']:+.1%}"
+                    )
+                best = evaluated[0]
+                decision_text = (
+                    f"Best provisional comparison: {best['market']} — {best['selection']} "
+                    f"at {best['odds']:.2f} ({best['bookmaker']}), raw estimated EV "
+                    f"{best['ev']:+.1%}. This is NOT a proven value bet: the model is "
+                    "uncalibrated and this calculation does not remove bookmaker margin."
+                )
+            elif matched_games:
+                decision_text = (
+                    "Bookmaker fixtures were found, but none of their returned outcomes "
+                    "could be responsibly evaluated by the current statistical model. "
+                    "Unsupported markets are not assigned invented probabilities."
+                )
+            else:
+                feed_errors = "; ".join(
+                    f"{name}: {str(error)[:100]}"
+                    for name, error in (odds_result.get("errors") or {}).items()
+                )
+                decision_text = (
+                    "No matching live bookmaker fixture was returned for this match. "
+                    "No price comparison or value verdict is possible."
+                    + (f" Feed diagnostics: {feed_errors}" if feed_errors else "")
+                )
+            if unsupported_markets:
+                lines.append("Markets retrieved but not model-supported: " + ", ".join(sorted(unsupported_markets)[:12]))
+        except Exception as exc:
+            logger.warning("Deepdive bookmaker check failed: %s", exc)
+            decision_text = f"Bookmaker comparison failed ({type(exc).__name__}). No value verdict is available."
     else:
         lines.append("Forecast withheld: " + pred.get("reason", "insufficient data"))
     lines.extend(["", "7. PLAIN-ENGLISH SUMMARY",
@@ -3794,7 +3972,7 @@ async def deepdive_command(update, context):
         ("The data shows a measurable difference, but it is not enough on its own to justify a bet." if edge != "No clear" else "Recent points rates are close; this matchup has no clear form leader."),
         "",
         "8. BETTING DECISION",
-        "NO BET — no verified bookmaker odds are connected, so value cannot be established.",
+        decision_text,
         "",
         "DATA QUALITY & LIMITATIONS",
         "Uses up to 10 recent completed results in this competition. No opponent-strength adjustment, xG, confirmed lineups, injuries, suspensions, half-time data or live events. The model is not yet historically calibrated. Estimates are not guarantees."])
@@ -5035,6 +5213,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(fullintel_callback, pattern=r"^fi:"))
     app.add_handler(CallbackQueryHandler(sportybet_build_callback, pattern=r"^sb:"))
+    app.add_handler(MessageHandler(filters.PHOTO, ai_slip_photo_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_text_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^/myslips$"), my_slips_command))
     
