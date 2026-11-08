@@ -23,6 +23,16 @@ def record_forecast(fixture_key, market, selection, probability, decimal_odds=No
     try:
         with connection.cursor() as cursor:
             cursor.execute("""
+                SELECT id FROM punter_forecast_results
+                WHERE fixture_key=%s AND market=%s AND selection=%s
+                  AND model_version=%s AND forecast_at >= UTC_DATE()
+                ORDER BY id DESC LIMIT 1
+            """, (str(fixture_key)[:500], str(market)[:120], str(selection)[:180],
+                  str(model_version)[:80]))
+            existing = cursor.fetchone()
+            if existing:
+                return int(existing["id"])
+            cursor.execute("""
                 INSERT INTO punter_forecast_results
                 (fixture_key,market,selection,probability,decimal_odds,model_version)
                 VALUES (%s,%s,%s,%s,%s,%s)
