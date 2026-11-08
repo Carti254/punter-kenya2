@@ -2074,7 +2074,7 @@ async def autobuild_sportybet_command(update, context):
             max_candidates=None,
         )
         chosen = build["selections"]
-        if len(chosen) != min_legs:
+        if len(chosen) < min_legs or (max_legs is not None and len(chosen) > max_legs):
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(update, f"NO SLIP: I could not find a qualifying combination with exactly {min_legs} legs near your {target:.2f} target. I will not silently change your requested leg count or fill it with negative-value picks.")
             return
