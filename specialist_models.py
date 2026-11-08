@@ -244,7 +244,7 @@ def player_prop_forecast(home, away, match_date, player_name, metric, line,
     mean = sum(observations) / len(observations)
     line_value = float(line)
     return {
-        "player": resolved_name, "metric": metric_key, "line": line_value,
+        "player": resolved_name, "player_id": player_id, "fixture_id": int((fixture.get("fixture") or {}).get("id")), "metric": metric_key, "line": line_value,
         "appearances": len(observations), "recent_values": observations,
         "expected_per_appearance": mean,
         "over_probability": _poisson_over(mean, line_value),
