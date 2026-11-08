@@ -68,8 +68,8 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.0) -> dict | None:
         "fair_odds": 1.0 / probability,
         "edge": edge,
         "ev": ev,
-        "value_tier": "A" if ev > 0 else "B",
-        "value_label": "Positive model-estimated value" if ev > 0 else "Break-even estimate; positive value not established",
+        "value_tier": "A" if ev > 0 else ("B" if abs(ev) < 1e-9 else "C"),
+        "value_label": "Positive model-estimated value" if ev > 0 else ("Break-even estimate; positive value not established" if abs(ev) < 1e-9 else "Negative model-estimated value; retained only as a clearly labelled fallback"),
         "research_checks": checks,
         "research_evidence": {
             "model_confidence": row.get("model_confidence"),
@@ -138,6 +138,7 @@ def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.0) -> 
         "eligible": len(pool),
         "tier_a": counts.get("A", 0),
         "tier_b": counts.get("B", 0),
+        "tier_c": counts.get("C", 0),
         "rejected": rejected,
         "marginal_ev_floor": marginal_ev_floor,
         "research_scope": "Current fixture match, current bookmaker price, supported model probability and price-value calculation",
@@ -159,7 +160,8 @@ def candidate_research_summary(pool: list[dict]) -> str:
     return (
         f"Research screening: {len(pool or [])} eligible candidates "
         f"(Tier A positive estimated value: {counts.get('A', 0)}; "
-        f"Tier B break-even: {counts.get('B', 0)}). "
+        f"Tier B break-even: {counts.get('B', 0)}; "
+        f"Tier C negative estimated value: {counts.get('C', 0)}). "
         f"Evidence coverage: recent form {form}; venue splits {venue}; H2H {h2h}."
     )
 
