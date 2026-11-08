@@ -1861,7 +1861,7 @@ async def accumulator_status_command(update, context):
     chosen, combined, used = [], 1.0, set()
     for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
         fixture_key = (item["home"], item["away"])
-        if fixture_key in used or item["probability"] < 0.62 or item["ev"] < 0.03:
+        if fixture_key in used:
             continue
         chosen.append(item)
         used.add(fixture_key)
@@ -1869,18 +1869,14 @@ async def accumulator_status_command(update, context):
         if combined >= target or len(chosen) >= 6:
             break
 
-    if not chosen or combined < target:
-        await reply(update,
-            f"🚫 NO ACCUMULATOR RECOMMENDED\n\n"
-            f"Could not reach {target:.2f} using selections that passed the minimum probability (62%) "
-            "and estimated expected-value (+3%) filters. PUNTER will not add weak legs just to reach a target. "
-            + ("Feed notes: " + "; ".join(diagnostics[:3]) if diagnostics else ""))
+    if not chosen:
+        await reply(update, "⚠️ NO USABLE ACCUMULATOR CANDIDATES\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No model-supported bookmaker prices were retrieved."))
         return
 
     probability_product = math.prod(item["probability"] for item in chosen)
     lines = [
         "🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR",
-        f"Target: {target:.2f} | Combined decimal odds: {combined:.2f}",
+        f"Target: {target:.2f} | Combined decimal odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"),
         "",
     ]
     for number, item in enumerate(chosen, 1):
@@ -3352,9 +3348,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                     if probability <= 0 or probability >= 1 or not odds or odds <= 1:
                         continue
                     ev = probability * odds - 1
-                    # Risk-aware screening is applied later by the builder; retain honest prices here.
-                    if ev < 0.03:
-                        continue
+                    # Keep every model-supported priced candidate; EV labels value but does not hide predictions.
                     candidates.append({
                         "home": fixture["home_team"], "away": fixture["away_team"],
                         "league": fixture.get("competition") or fixture.get("leagueName") or "Competition",
@@ -3402,21 +3396,21 @@ async def topvalue_command(update, context):
         rows.sort(key=lambda x: (x["probability"], x["ev"]), reverse=True)
     if not rows:
         await reply(update,
-            "🚫 NO QUALIFYING VALUE PICKS\n\n"
-            "No selection met the minimum probability and positive expected-value filters using the odds actually retrieved. "
-            "This is a NO BET result, not a reason to lower the filters.\n\n"
-            + ("Feed notes: " + "; ".join(diagnostics[:4]) if diagnostics else "No usable bookmaker prices were matched."))
+            "⚠️ NO MODEL-SUPPORTED, MATCHED PRICES FOUND\n\n"
+            "No responsible ranked pick is available because fixture, model or bookmaker data could not be matched.\n\n"
+            + ("Feed notes: " + "; ".join(diagnostics[:6]) if diagnostics else "No usable bookmaker prices were matched."))
         return
-    lines = ["🧠 PUNTER KENYA — VALUE SCANNER", f"Market: {market.upper()} | Dates: {', '.join(days)}",
-             "Filters: model probability ≥ 42% (1X2) / ≥ 60% (goals); estimated EV ≥ +3%", ""]
+    lines = ["🧠 PUNTER KENYA — RANKED PREDICTIONS", f"Market: {market.upper()} | Dates: {', '.join(days)}",
+             "Positive EV is a value indicator, not a condition for showing a prediction.", ""]
     for n, item in enumerate(rows[:12], 1):
         lines.append(f"{n}. {item['home']} vs {item['away']} — {item['league']}")
         lines.append(f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item['bookmaker']})")
-        lines.append(f"   Model: {item['probability']:.1%} | Fair odds: {item['fair_odds']:.2f} | Est. EV: {item['ev']:+.1%}")
+        value_label = "POSITIVE ESTIMATED VALUE" if item["ev"] > 0 else "NEGATIVE ESTIMATED VALUE"
+        lines.append(f"   Model: {item['probability']:.1%} | Fair odds: {item['fair_odds']:.2f} | Est. EV: {item['ev']:+.1%} ({value_label})")
         lines.append(f"   Kick-off: {item['kickoff'] or 'Not supplied'}")
         if item.get("url"): lines.append(f"   {item['url']}")
         lines.append("")
-    lines.append("Important: this is an experimental, uncalibrated Poisson model. Historical results are not xG or lineup-adjusted. Positive estimated EV is not proof of an edge. Verify price and market rules before betting. No BTTS or Under 2.5 picks are included.")
+    lines.append("Important: forecasts remain experimental and are not historically calibrated. Historical results are not xG or lineup-adjusted. Estimated EV is not proof of an edge. Verify prices and rules. No BTTS or Under 2.5 picks are included.")
     message = "\n".join(lines)
     for offset in range(0, len(message), 3600):
         await reply(update, message[offset:offset+3600])
