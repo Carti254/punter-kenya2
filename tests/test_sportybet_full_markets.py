@@ -9,7 +9,7 @@ from bookmaker_odds import EAT, fetch_sportybet
 def _index_payload():
     kickoff = datetime.now(EAT) + timedelta(hours=3)
     kickoff_ms = int(kickoff.astimezone(timezone.utc).timestamp() * 1000)
-    return {
+    payload = {
         "bizCode": 10000,
         "data": {
             "totalNum": 1,
@@ -30,11 +30,12 @@ def _index_payload():
             }],
         },
     }
+    return payload, kickoff.date()
 
 
 class SportyBetFullMarketsTests(unittest.TestCase):
     def test_fetches_event_detail_catalogue_and_uses_its_markets(self):
-        index = _index_payload()
+        index, target_day = _index_payload()
         detail = {
             "bizCode": 10000,
             "data": {
@@ -48,7 +49,7 @@ class SportyBetFullMarketsTests(unittest.TestCase):
             },
         }
         with patch("bookmaker_odds._get", side_effect=[index, detail]) as mocked:
-            games = fetch_sportybet(datetime.now(EAT).date())
+            games = fetch_sportybet(target_day)
         self.assertEqual(len(games), 1)
         self.assertEqual(games[0]["market_source"], "event_detail")
         self.assertEqual(games[0]["markets"][0]["market_id"], "18")
@@ -59,10 +60,10 @@ class SportyBetFullMarketsTests(unittest.TestCase):
         self.assertEqual(index_call.kwargs["params"]["option"], "2")
 
     def test_falls_back_to_index_markets_if_event_detail_has_no_prices(self):
-        index = _index_payload()
+        index, target_day = _index_payload()
         detail = {"bizCode": 10000, "data": {"markets": []}}
         with patch("bookmaker_odds._get", side_effect=[index, detail]):
-            games = fetch_sportybet(datetime.now(EAT).date())
+            games = fetch_sportybet(target_day)
         self.assertEqual(len(games), 1)
         self.assertEqual(games[0]["market_source"], "index_fallback")
         self.assertTrue(games[0]["detail_error"])
