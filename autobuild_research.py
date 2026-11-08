@@ -131,7 +131,9 @@ def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.0) -> 
                     key=lambda x: (x["ev"], x["probability"], x["odds"]), reverse=True)
     tier_b = sorted((x for x in assessed if x["value_tier"] == "B"),
                     key=lambda x: (x["ev"], x["probability"], x["odds"]), reverse=True)
-    pool = tier_a + tier_b
+    tier_c = sorted((x for x in assessed if x["value_tier"] == "C"),
+                    key=lambda x: (x["ev"], x["probability"], x["odds"]), reverse=True)
+    pool = tier_a + tier_b + tier_c
     counts = Counter(x["value_tier"] for x in pool)
     return pool, {
         "scanned": len(rows or []),
