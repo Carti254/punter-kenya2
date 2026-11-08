@@ -101,6 +101,7 @@ def settle_bet_with_market_evidence(user_id, bet_id, evidence, source="api-footb
     import json
     from decimal import Decimal
     from database import get_connection
+    from results_tracker import grade_selection
 
     fixture = evidence.get("fixture") or {}
     status = ((fixture.get("fixture") or {}).get("status") or {}).get("short")
@@ -124,7 +125,11 @@ def settle_bet_with_market_evidence(user_id, bet_id, evidence, source="api-footb
             row = cursor.fetchone()
             if not row:
                 raise ValueError("Pending bet record not found.")
-            result = grade_market_evidence(row["market"], row["selection"], evidence)
+            try:
+                result = grade_selection(row["market"], row["selection"], home_goals, away_goals,
+                                         row["home_team"], row["away_team"])
+            except ValueError:
+                result = grade_market_evidence(row["market"], row["selection"], evidence)
             stake = Decimal(str(row["stake"]))
             odds = Decimal(str(row["decimal_odds"]))
             pnl = stake * (odds - 1) if result == "WON" else Decimal("0") if result == "VOID" else -stake
