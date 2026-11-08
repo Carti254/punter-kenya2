@@ -187,7 +187,7 @@ def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None) 
     grouped = defaultdict(list)
     for row in output:
         home, away = str(row.get("home") or "").strip(), str(row.get("away") or "").strip()
-        raw_date = (row.get("match_date") or row.get("date") or row.get("kickoff") or
+        raw_date = (row.get("match_date") or row.get("date") or row.get("day") or row.get("kickoff") or
                     row.get("start_time") or row.get("commence_time") or row.get("commenceTime"))
         if not home or not away or not raw_date:
             continue
