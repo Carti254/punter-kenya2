@@ -372,9 +372,11 @@ def goal_request(endpoint, params=None):
         if cooldown_until and datetime.now(timezone.utc) >= cooldown_until:
             GOAL_API_COOLDOWN_UNTIL = None
 
-    if not GOAL_API_KEY:
+    if not GOAL_API_KEY or not GOAL_API_BASE:
+        missing = [name for name, value in (("GOAL_API_KEY", GOAL_API_KEY), ("GOAL_API_BASE", GOAL_API_BASE)) if not value]
         raise RuntimeError(
-            "GOAL_API_KEY is not configured in the environment."
+            "GOAL API is not configured; missing " + ", ".join(missing)
+            + ". Set these only if using the supplementary GOAL API source."
         )
 
     url = f"{GOAL_API_BASE}/{endpoint.lstrip('/')}"
