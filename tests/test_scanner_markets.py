@@ -1,4 +1,6 @@
 import unittest
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from unittest.mock import patch
 from bot import (
     _odds_market_key, _selection_probability_key, _market_probability,
@@ -33,12 +35,13 @@ class ScannerMarketTests(unittest.TestCase):
 
     def test_scanner_does_not_hide_btts_or_under_25(self):
         raw = {"id": "fixture-1"}
+        today_eat = datetime.now(timezone.utc).astimezone(ZoneInfo("Africa/Nairobi")).date().isoformat()
         fixture = {
             "home_team": "Brighton", "away_team": "Brentford",
-            "competition": "Premier League", "kickoffUtc": "2026-11-20T20:00:00Z",
+            "competition": "Premier League", "kickoffUtc": f"{today_eat}T20:00:00+03:00",
         }
         game = {
-            "bookmaker": "SportyBet", "kickoff_eat": "2026-11-20 23:00",
+            "bookmaker": "SportyBet", "kickoff_eat": f"{today_eat} 23:00",
             "event_id": "event-1",
             "markets": [
                 {"market": "Both Teams To Score", "selection": "Yes", "odds": 1.95,
