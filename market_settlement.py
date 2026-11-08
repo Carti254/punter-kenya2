@@ -98,8 +98,8 @@ def grade_market_evidence(market, selection, evidence):
                 stats_list = item.get("statistics") or []
                 if player.get("name") and stats_list:
                     candidates.append((str(player["name"]), stats_list[0]))
-        if "over" in pick or "under" in pick or re.search(r"\\b[ou]\\s*\\d", pick):
-            match = re.fullmatch(r"\\s*(.+?)\\s+(over|under|o|u)\\s*(\\d+(?:\\.\\d+)?)\\s*", str(selection), re.I)
+        if "over" in pick or "under" in pick or re.search(r"\b[ou]\s*\d", pick):
+            match = re.fullmatch(r"\s*(.+?)\s+(over|under|o|u)\s*(\d+(?:\.\d+)?)\s*", str(selection), re.I)
             if not match:
                 raise ValueError("Player selection must include an exact name and Over/Under line.")
             player_name, side_text, line_text = match.groups()
@@ -118,7 +118,7 @@ def grade_market_evidence(market, selection, evidence):
 
         if "goalscorer" not in key and "goal" not in key:
             raise ValueError("Player selection needs an explicit Over/Under line; left pending.")
-        player_name = re.sub(r"\\s+(to score|anytime|first goalscorer)$", "", str(selection).strip(), flags=re.I)
+        player_name = re.sub(r"\s+(to score|anytime|first goalscorer)$", "", str(selection).strip(), flags=re.I)
         matching = [row for row in candidates if re.sub(r"[^a-z0-9]", "", row[0].casefold()) == re.sub(r"[^a-z0-9]", "", player_name.casefold())]
         if len(matching) != 1:
             raise ValueError("Player name did not resolve to exactly one provider player; left pending.")
