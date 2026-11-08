@@ -1676,7 +1676,7 @@ async def ai_natural_language_handler(update: Update, context: ContextTypes.DEFA
     if not ai_is_configured():
         await reply(update,
             "🧠 AI assistant is not connected yet. The bot's existing commands still work. "
-            "To enable natural-language requests, add OPENAI_API_KEY to Railway Variables "
+            "To enable natural-language requests, add GEMINI_API_KEY to Railway Variables "
             "and redeploy. Never send the key in Telegram.")
         return True
     await reply(update, "🧠 Understanding your request and connecting it to PUNTER's live tools…")
@@ -1729,7 +1729,7 @@ async def ai_natural_language_handler(update: Update, context: ContextTypes.DEFA
 async def ai_slip_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Read a slip screenshot, then pass extracted legs through live SportyBet validation."""
     if not ai_is_configured():
-        await reply(update, "Screenshot reading needs OPENAI_API_KEY. Add it privately in Railway Variables, then redeploy.")
+        await reply(update, "Screenshot reading needs GEMINI_API_KEY. Add it privately in Railway Variables, then redeploy.")
         return
     photo = update.effective_message.photo
     if not photo:
