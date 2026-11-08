@@ -38,7 +38,7 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
                 "expected_return_factor": 0.0, "target_reached": False, "reason": "No valid candidates."}
 
     # A beam keeps this practical for Telegram requests with large fixture slates.
-    states = [([], 1.0, 1.0, frozenset())]
+    states = [([], 1.0, 1.0, frozenset(), 0)]
     completed = []
     for _depth in range(max_legs):
         expanded = []
@@ -51,7 +51,7 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
                 new_probability = probability_product * item["probability"]
                 new_picks = picks + [item]
                 factor = new_odds * new_probability
-                state = (new_picks, new_odds, new_probability, used | {fixture_key})
+                state = (new_picks, new_odds, new_probability, used | {fixture_key}, item_index + 1)
                 if new_odds >= target:
                     completed.append(state)
                 else:
@@ -76,9 +76,9 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
         # Return the best available partial construction, never pretend target was met.
         all_states = states
         if not all_states:
-            all_states = [([], 1.0, 1.0, frozenset())]
+            all_states = [([], 1.0, 1.0, frozenset(), 0)]
         best = max(all_states, key=lambda s: (s[1], s[2], -len(s[0])))
-    picks, odds_product, probability_product, _ = best
+    picks, odds_product, probability_product, _, _ = best
     selections = []
     for item in picks:
         selections.append({k: v for k, v in item.items() if not k.startswith("_")})
