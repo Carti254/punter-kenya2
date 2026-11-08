@@ -37,6 +37,7 @@ from premium_intelligence import market_probabilities, assess_price, rollover_pr
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
+from forecast_tracker import record_forecast, settle_forecast, forecast_performance
 
 # ============================================================
 # PUNTER KENYA — TELEGRAM DATA BOT
@@ -5144,7 +5145,14 @@ async def council_command(update, context):
             if not panel["available"]:
                 lines.append(f"{panel['role']}: unavailable — {panel['reason']}")
             else:
-                lines.append(f"{panel['role']}: expected total {panel['expected_total']:.2f}; Over {panel['default_line']} {panel['over_probability']:.1%}; Under {panel['default_line']} {panel['under_probability']:.1%}; samples {panel['home_sample']}+{panel['away_sample']}")
+                market_key = panel["market"]
+                selection = f"Over {panel['default_line']}"
+                forecast_id = await asyncio.to_thread(
+                    record_forecast, f"{home}|{away}|{match_date.isoformat()}",
+                    market_key, selection, panel["over_probability"], None,
+                    "specialist-poisson-v1",
+                )
+                lines.append(f"{panel['role']}: expected total {panel['expected_total']:.2f}; Over {panel['default_line']} {panel['over_probability']:.1%}; Under {panel['default_line']} {panel['under_probability']:.1%}; samples {panel['home_sample']}+{panel['away_sample']} | forecast #{forecast_id}")
         lines.extend(["", "Player props: " + report["player_props"]["reason"], report["warning"],
                       "No consensus bet is issued without comparing a real bookmaker price and market-specific calibration."])
         await reply(update, "\\n".join(lines))
@@ -5177,6 +5185,34 @@ async def playerprop_command(update, context):
             f"{report['warning']}")
     except Exception as exc:
         await reply(update, f"Player prop unavailable: {type(exc).__name__}: {str(exc)[:220]}")
+
+
+async def forecastsettle_command(update, context):
+    args = list(context.args or [])
+    if len(args) != 2:
+        await reply(update, "Usage: /forecastsettle FORECAST_ID WON|LOST. Only settle after checking the actual market result.")
+        return
+    try:
+        result = await asyncio.to_thread(settle_forecast, int(args[0]), args[1])
+        await reply(update, f"Forecast #{result['id']} recorded as {result['outcome']}.")
+    except Exception as exc:
+        await reply(update, f"Could not settle forecast: {type(exc).__name__}: {str(exc)[:180]}")
+
+
+async def forecaststats_command(update, context):
+    try:
+        report = await asyncio.to_thread(forecast_performance)
+        if not report["count"]:
+            await reply(update, "No settled specialist forecasts yet. Use /council, then /forecastsettle ID WON|LOST after checking results.")
+            return
+        lines = ["📊 FORECAST CALIBRATION", f"Settled forecasts: {report['count']}",
+                 f"Brier score: {report['brier']:.4f}", f"Log loss: {report['log_loss']:.4f}", ""]
+        for market, values in sorted(report["by_market"].items()):
+            lines.append(f"{market}: n={values['count']} | Brier {values['brier']:.4f}")
+        lines.append("Lower scores are better. This is retrospective scoring, not proof of future profitability.")
+        await reply(update, "\n".join(lines))
+    except Exception as exc:
+        await reply(update, f"Forecast statistics unavailable: {type(exc).__name__}: {str(exc)[:180]}")
 
 
 async def xresearch_command(update, context):
@@ -5403,6 +5439,8 @@ def main():
         ("rolloverday", rolloverday_command),
         ("clv", clv_command),
         ("council", council_command),
+        ("forecastsettle", forecastsettle_command),
+        ("forecaststats", forecaststats_command),
         ("xresearch", xresearch_command),
         ("playerprop", playerprop_command),
         ("marketsim", marketsim_command),
