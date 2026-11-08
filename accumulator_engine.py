@@ -49,8 +49,9 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
     completed = []
     for _depth in range(max_legs):
         expanded = []
-        for picks, odds_product, probability_product, used in states:
-            for item in clean:
+        for picks, odds_product, probability_product, used, start_index in states:
+            for item_index in range(start_index, len(clean)):
+                item = clean[item_index]
                 fixture_key = item["_fixture_key"]
                 if fixture_key in used:
                     continue
@@ -66,14 +67,18 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
         if not expanded:
             break
         # Keep states near target and with stronger expected payout factors.
-        expanded.sort(
-            key=lambda s: (
-                math.log(max(1e-15, s[1] * s[2]))
-                - 0.20 * abs(math.log(target / s[1])),
-                s[2], -len(s[0]),
-            ),
-            reverse=True,
-        )
+        def beam_score(state):
+            picks, odds_now, probability_now, _, _ = state
+            distance_bonus = -0.20 * abs(math.log(target / odds_now))
+            if ranking == "probability":
+                return (math.log(max(1e-15, probability_now)) + distance_bonus,
+                        odds_now * probability_now, -len(picks))
+            if ranking == "odds":
+                return (math.log(max(1e-15, odds_now)) + distance_bonus,
+                        odds_now * probability_now, -len(picks))
+            return (math.log(max(1e-15, odds_now * probability_now)) + distance_bonus,
+                    probability_now, -len(picks))
+        expanded.sort(key=beam_score, reverse=True)
         states = expanded[:beam_width]
 
     if completed:
