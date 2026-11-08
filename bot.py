@@ -4580,7 +4580,14 @@ def evaluate_historical_calibration():
             continue
         if hg < 0 or ag < 0 or not all(math.isfinite(p) and 0 <= p <= 1 for p in vector) or sum(vector) <= 0:
             continue
-        usable.append((match_date, vector, 0 if hg > ag else 1 if hg == ag else 2))
+        candidate_vector = [
+            float(row.get("candidate_home", 0)),
+            float(row.get("candidate_draw", 0)),
+            float(row.get("candidate_away", 0)),
+        ]
+        if not all(math.isfinite(p) and 0 <= p <= 1 for p in candidate_vector) or sum(candidate_vector) <= 0:
+            continue
+        usable.append((match_date, vector, 0 if hg > ag else 1 if hg == ag else 2, candidate_vector))
 
     count = len(usable)
     dates = sorted({row[0] for row in usable})
@@ -4601,14 +4608,7 @@ def evaluate_historical_calibration():
     fitted = fit_temperature(train_p, train_y, minimum_samples=50)
     calibrated = [apply_temperature(p, fitted["temperature"]) for p in test_p]
 
-    candidate_p = []
-    for row in holdout:
-        source_row = next((item for item in rows if item["match_date"] == row[0]
-                           and item.get("candidate_home") is not None), None)
-        if source_row:
-            candidate_p.append([float(source_row["candidate_home"]),
-                                float(source_row["candidate_draw"]),
-                                float(source_row["candidate_away"])])
+    candidate_p = [row[3] for row in holdout]
     if len(candidate_p) != len(test_y):
         candidate_brier = candidate_logloss = None
     else:
