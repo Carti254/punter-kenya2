@@ -5096,16 +5096,16 @@ async def stake_command(update, context):
         await reply(update, f"Stake calculation unavailable: {type(exc).__name__}: {str(exc)[:180]}")
 
 
-async async def council_command(update, context):
+async def council_command(update, context):
     args = list(context.args or [])
     if not args:
         await reply(update, "Usage: /council HOME TEAM vs AWAY TEAM [YYYY-MM-DD]\nRequires API_FOOTBALL_KEY. Example: /council Brighton vs Brentford 2026-11-08")
         return
     match_date = datetime.now(EAT).date()
-    if re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", args[-1]):
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", args[-1]):
         match_date = datetime.strptime(args.pop(), "%Y-%m-%d").date()
     raw = " ".join(args)
-    split = re.split(r"\\s+vs\\.?\\s+|\\s+v\\.?\\s+", raw, maxsplit=1, flags=re.I)
+    split = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", raw, maxsplit=1, flags=re.I)
     if len(split) != 2:
         await reply(update, "Enter the fixture as HOME vs AWAY.")
         return
