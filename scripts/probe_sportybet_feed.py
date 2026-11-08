@@ -28,18 +28,34 @@ BASE_PARAMS = {
     "_t": int(time.time() * 1000),
 }
 VARIANTS = {
-    "current_market_catalogue": "1,18,10,29,11,26,36,14,60100",
-    "match_result_only": "1",
-    "no_market_id_parameter": None,
+    "default_current_market_catalogue": {
+        "market_ids": "1,18,10,29,11,26,36,14,60100",
+        "option": None,
+    },
+    "full_list_option_2": {
+        "market_ids": "1,18,10,29,11,26,36,14,60100",
+        "option": "2",
+    },
+    "match_result_only_option_2": {
+        "market_ids": "1",
+        "option": "2",
+    },
+    "no_market_id_parameter": {
+        "market_ids": None,
+        "option": "2",
+    },
 }
 
 
 def main() -> None:
     output = {}
-    for name, market_ids in VARIANTS.items():
+    for name, variant in VARIANTS.items():
         params = dict(BASE_PARAMS)
+        market_ids = variant["market_ids"]
         if market_ids is not None:
             params["marketId"] = market_ids
+        if variant["option"] is not None:
+            params["option"] = variant["option"]
         try:
             response = requests.get(BASE, params=params, headers=HEADERS, timeout=(8, 20))
             response.raise_for_status()
@@ -90,7 +106,8 @@ def main() -> None:
     # Verify whether pageNum is honoured or whether the endpoint repeats page 1.
     try:
         params = dict(BASE_PARAMS, pageNum=2)
-        params["marketId"] = VARIANTS["current_market_catalogue"]
+        params["marketId"] = VARIANTS["full_list_option_2"]["market_ids"]
+        params["option"] = "2"
         response = requests.get(BASE, params=params, headers=HEADERS, timeout=(8, 20))
         response.raise_for_status()
         payload = response.json()
