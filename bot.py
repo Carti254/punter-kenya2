@@ -1951,7 +1951,17 @@ async def autobuild_sportybet_command(update, context):
         smaller_league_rows = [x for x in rows if not any(tag in str(x.get("league", "")).casefold() for tag in major_competitions)]
         # Keep realistic accumulator legs; high target odds must come from multiplying
         # several matches, not from a single 8x–20x outsider.
-        parlay_rows = [x for x in smaller_league_rows if 1.25 <= float(x.get("odds") or 0) <= 4.50]
+        parlay_rows = [
+            x for x in smaller_league_rows
+            if 1.25 <= float(x.get("odds") or 0) <= 4.50
+            and "btts" not in str(x.get("market", "")).casefold()
+            and "both teams" not in str(x.get("market", "")).casefold()
+            and not (
+                "under" in str(x.get("selection", "")).casefold()
+                and any(token in str(x.get("market", "")).casefold() for token in ("total goals", "over under", "total match"))
+                and "2.5" in (str(x.get("selection", "")) + " " + str(x.get("specifier", "")))
+            )
+        ]
         if rank_mode == "parlay":
             rows = parlay_rows
             rows.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
