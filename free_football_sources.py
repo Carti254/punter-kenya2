@@ -213,7 +213,7 @@ def _external_probability(prediction, market, selection):
             if selection_text in {"1", "home", "home win"}: return home / denominator
             if selection_text in {"2", "away", "away win"}: return away / denominator
     if any(term in market_text for term in ("total goals", "over under", "goals over", "goals under")):
-        line_match = re.search(r"(?<!\\d)(1\\.5|2\\.5|3\\.5)(?!\\d)", str(selection))
+        line_match = re.search(r"(1[.]5|2[.]5|3[.]5)", str(selection))
         if line_match:
             suffix = line_match.group(1).replace(".", "")
             totals = markets.get("over_under") or {}
