@@ -1,8 +1,9 @@
 name: Validate Python
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'fix/**']
   pull_request:
     branches: [main]
 
@@ -20,3 +21,91 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run unit and regression tests
         run: python -m unittest discover -s tests -v
+
+  mysql-migrations:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: punter_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: root
+      DB_NAME: punter_test
+      DB_SSL: "false"
+      DB_ALLOW_INSECURE_LOCAL: "true"
+      PUNTER_MYSQL_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Test migrations against disposable MySQL 8
+        run: python -m unittest discover -s tests -p 'test_results_tracker.py' -v
+
+  live-bookmaker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install HTTP client
+        run: python -m pip install requests==2.32.3
+      - name: Probe public Betika and SportyBet feeds (read-only)
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+          from bookmaker_odds import smoke_test_bookmakers
+          result = smoke_test_bookmakers()
+          print(json.dumps(result, indent=2))
+          if not all(item.get("request_ok") for item in result.values()):
+              sys.exit(1)
+          if result.get("Betika", {}).get("priced_events", 0) < 1:
+              raise SystemExit("Betika returned no priced football events; feed is not verified.")
+          if result.get("SportyBet", {}).get("priced_events", 0) < 1:
+              raise SystemExit("SportyBet returned no priced football events; feed is not verified.")
+          PY
+
+  historical-calibration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Evaluate models on real historical match results
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from bot import evaluate_historical_calibration
+
+          result = evaluate_historical_calibration()
+          print(json.dumps(result, default=str, indent=2))
+          if not result.get("ready"):
+              print("CALIBRATION NOT READY: insufficient historical training/holdout sample.")
+          else:
+              metrics = ("raw_brier", "calibrated_brier", "raw_logloss", "calibrated_logloss", "candidate_brier", "candidate_logloss", "baseline_brier", "baseline_logloss")
+              if not all(math.isfinite(float(result[key])) for key in metrics):
+                  raise SystemExit("Calibration returned non-finite metrics.")
+              print("MODEL VALIDATION VERIFIED: current model, venue-weighted candidate and training-only baseline compared on chronological holdout.")
+          PY
