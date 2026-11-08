@@ -1975,7 +1975,8 @@ async def autobuild_sportybet_command(update, context):
         return
 
     market_filter = ",".join(market_parts) if market_parts else "all"
-    await reply(update, f"🤖 SPORTYBET SCAN — TARGET {target:.2f}\nBuilding {min_legs}–{max_legs} different matches; scanning upcoming fixtures and supported markets…")
+    leg_plan = f"{min_legs} or more different matches" if not explicit_max_legs else f"{min_legs}–{max_legs} different matches"
+    await reply(update, f"🤖 SPORTYBET SCAN — TARGET {target:.2f}\nBuilding {leg_plan}; scanning upcoming fixtures and supported markets…")
     try:
         rows, diagnostics = await asyncio.to_thread(
             scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
@@ -1983,7 +1984,7 @@ async def autobuild_sportybet_command(update, context):
         rows = [
             x for x in rows
             if str(x.get("bookmaker", "")).casefold() == "sportybet"
-            and 1.25 <= float(x.get("odds") or 0) <= 4.50
+            and float(x.get("odds") or 0) > 1.0
             and "btts" not in str(x.get("market", "")).casefold()
             and "both teams" not in str(x.get("market", "")).casefold()
             and not (
