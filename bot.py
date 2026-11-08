@@ -4086,6 +4086,13 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         diagnostics.append(
             f"{day.isoformat()}: {len(day_fixtures)} fixtures; {len(day_games)} SportyBet events retrieved"
         )
+        for game in day_games:
+            if game.get("market_source") == "index_fallback":
+                diagnostics.append(
+                    f"{day.isoformat()}: full market detail failed for "
+                    f"{game.get('home')} vs {game.get('away')}; index-market fallback used "
+                    f"({game.get('detail_error') or 'no detail reason supplied'})"
+                )
         matched_events = 0
         unsupported = set()
         prediction_unavailable = 0
