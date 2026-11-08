@@ -1920,7 +1920,7 @@ async def aipicks_status_command(update, context):
 async def autobuild_sportybet_command(update, context):
     args = list(context.args or [])
     target = 2.0
-    if args and re.fullmatch(r"\\d+(?:\\.\\d+)?", str(args[0])):
+    if args and re.fullmatch(r"\d+(?:\.\d+)?", str(args[0])):
         target = float(args.pop(0))
         if not math.isfinite(target) or target <= 1.0:
             await reply(update, "Target odds must be greater than 1.00.")
@@ -1945,7 +1945,7 @@ async def autobuild_sportybet_command(update, context):
         return
 
     market_filter = ",".join(market_parts) if market_parts else "all"
-    await reply(update, f"🤖 SPORTYBET SCAN — TARGET {target:.2f}\\nScanning all upcoming matches and all available supported markets…")
+    await reply(update, f"🤖 SPORTYBET SCAN — TARGET {target:.2f}\nScanning all upcoming matches and all available supported markets…")
     try:
         rows, diagnostics = await asyncio.to_thread(
             scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
@@ -2013,7 +2013,7 @@ async def autobuild_sportybet_command(update, context):
             ]])
             if target_reached else None
         )
-        await update.effective_message.reply_text("\\n".join(lines), reply_markup=markup)
+        await update.effective_message.reply_text("\n".join(lines), reply_markup=markup)
     except Exception as exc:
         logger.exception("SportyBet auto-builder failed")
         context.user_data.pop("pending_sportybet_booking", None)
