@@ -31,8 +31,6 @@ SESSION.headers.update({
     "User-Agent": "Mozilla/5.0 (compatible; PunterKenya/1.0)",
 })
 
-BETIKA_BASE = "https://api.betika.com/v1/uo"
-
 
 def _get(url: str, *, params=None, headers=None, timeout=15):
     response = SESSION.get(url, params=params, headers=headers, timeout=timeout)
@@ -75,88 +73,6 @@ def _market(provider, market, selection, price, handicap=None):
         "handicap": handicap,
         "odds": odd,
     }
-
-
-def fetch_betika(day: date | None = None, max_pages=2):
-    """Fetch Betika football pre-match markets for one EAT calendar day."""
-    day = day or datetime.now(EAT).date()
-    today = datetime.now(EAT).date()
-    day_offset = (day - today).days
-    if day_offset < 0 or day_offset > 7:
-        return []
-    # Betika uses period_id=-1 for today, then 1..7 for future days.
-    period = -1 if day_offset == 0 else day_offset
-    headers = {
-        "origin": "https://www.betika.com",
-        "referer": "https://www.betika.com/",
-        "accept-language": "en-GB,en;q=0.9",
-    }
-    games, page = [], 1
-    while page <= max_pages:
-        payload = _get(
-            BETIKA_BASE + "/matches",
-            params={
-                "page": page, "limit": 50, "tab": "upcoming",
-                "sub_type_id": 1, "sport_id": "14,139", "sort_id": 2,
-                "period_id": period, "esports": "false",
-            },
-            headers=headers,
-        )
-        rows = payload.get("data") if isinstance(payload, dict) else None
-        if isinstance(rows, dict):
-            rows = rows.get("data")
-        if not isinstance(rows, list):
-            raise ValueError("Betika returned an unexpected matches response.")
-        if not rows:
-            break
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            start = _eat_time(row.get("start_time"))
-            if start and start[:10] != day.isoformat():
-                continue
-            match_id = row.get("parent_match_id")
-            if not match_id:
-                continue
-            try:
-                detail = _get(
-                    BETIKA_BASE + "/match",
-                    params={"parent_match_id": match_id},
-                    headers=headers,
-                )
-                meta = detail.get("meta") if isinstance(detail, dict) else {}
-                meta = meta if isinstance(meta, dict) else {}
-                odds_rows = detail.get("data") if isinstance(detail, dict) else []
-                if not isinstance(odds_rows, list):
-                    odds_rows = []
-                markets = []
-                for market in odds_rows:
-                    if not isinstance(market, dict):
-                        continue
-                    for selection in market.get("odds", []) or []:
-                        if not isinstance(selection, dict):
-                            continue
-                        special = (selection.get("parsed_special_bet_value") or {}).get("total")
-                        item = _market("Betika", market.get("name"), selection.get("display"),
-                                       selection.get("odd_value"), special)
-                        if item:
-                            markets.append(item)
-                games.append({
-                    "bookmaker": "Betika", "event_id": str(match_id),
-                    "home": meta.get("home_team") or row.get("home_team"),
-                    "away": meta.get("away_team") or row.get("away_team"),
-                    "competition": meta.get("competition_name") or row.get("competition_name"),
-                    "kickoff_eat": start, "markets": markets,
-                    "url": f"https://www.betika.com/en-ke/m/{match_id}",
-                    "fetched_at": datetime.now(timezone.utc).isoformat(),
-                })
-            except Exception as exc:
-                LOG.warning("Betika event %s detail failed: %s", match_id, exc)
-        if len(rows) < 50:
-            break
-        page += 1
-        time.sleep(0.08)
-    return games
 
 
 SPORTYBET_BASE = "https://www.sportybet.com/api/ke"
@@ -232,7 +148,7 @@ def fetch_all(day: date | None = None):
     """Fetch only providers with an implemented read-only adapter."""
     day = day or datetime.now(EAT).date()
     result = {"date": day.isoformat(), "bookmakers": {}, "errors": {}}
-    for name, fetcher in (("Betika", fetch_betika), ("SportyBet", fetch_sportybet)):
+    for name, fetcher in (("SportyBet", fetch_sportybet),):
         try:
             games = fetcher(day)
             result["bookmakers"][name] = {
@@ -243,7 +159,7 @@ def fetch_all(day: date | None = None):
         except Exception as exc:
             LOG.exception("%s odds fetch failed", name)
             result["errors"][name] = f"{type(exc).__name__}: {str(exc).split('?', 1)[0][:180]}"
-    result["supported_bookmakers"] = ["Betika", "SportyBet"]
+    result["supported_bookmakers"] = ["SportyBet"]
     return result
 
 
