@@ -17,6 +17,8 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
         raise ValueError("max_legs must be a positive integer or None.")
     if not isinstance(min_legs, int) or min_legs < 1:
         raise ValueError("min_legs must be a positive integer.")
+    if max_legs is not None and min_legs > max_legs:
+        raise ValueError("min_legs cannot exceed max_legs.")
     clean = []
     for row in candidates or []:
         try:
@@ -41,7 +43,8 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
     if ranking == "probability":
         clean.sort(key=lambda x: (x["probability"], x["_expected_factor"]), reverse=True)
     elif ranking == "odds":
-        clean.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
+        # Prefer robust price/probability combinations over isolated longshots.
+        clean.sort(key=lambda x: (x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
     else:
         clean.sort(key=lambda x: (x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
     # No arbitrary leg or candidate ceiling: each fixture can contribute at most one leg.
@@ -88,7 +91,7 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
                 # Continue adding distinct fixtures while target tolerance allows.
                 if len(new_picks) < max_legs and new_odds < target * 1.20:
                     expanded.append(state)
-                if len(new_picks) >= min_legs:
+                if len(new_picks) >= min_legs and new_odds <= target * 1.20:
                     eligible_partials.append(state)
         # Bound completed-state memory on large fixture slates.
         if len(completed) > beam_width * 4:
@@ -125,7 +128,7 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
         if ranking == "probability":
             best = max(all_states, key=lambda s: (s[2], s[1], -len(s[0])))
         elif ranking == "odds":
-            best = max(all_states, key=lambda s: (s[1], s[2], -len(s[0])))
+            best = max(all_states, key=lambda s: (s[1] * s[2], s[2], -len(s[0])))
         else:
             best = max(all_states, key=lambda s: (s[1] * s[2], s[2], -len(s[0])))
     picks, odds_product, probability_product, _, _ = best
