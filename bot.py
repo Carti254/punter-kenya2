@@ -2129,21 +2129,12 @@ async def autobuild_sportybet_command(update, context):
 
     market_filter = ",".join(market_parts) if market_parts else "all"
     leg_plan = f"exactly {min_legs} legs"
-    await reply(update, f"🔎 Scanning today and tomorrow fixtures, extended bookmaker event window, and every model-supported SportyBet market for target {target:.2f}, {leg_plan}…")
     try:
-        loop = asyncio.get_running_loop()
-        progress_lock = asyncio.Lock()
-        async def send_ordered_progress(message):
-            # Serialize Telegram sends: concurrent reply tasks otherwise arrive out of order.
-            async with progress_lock:
-                await reply(update, "⏳ " + str(message))
-        def report_scan_progress(message):
-            # Scanner runs in a worker thread; schedule ordered delivery on Telegram's event loop.
-            loop.call_soon_threadsafe(lambda: asyncio.create_task(send_ordered_progress(message)))
+        # Keep all feed scanning, matching and model research internal. Telegram receives
+        # only the resulting fixture shortlist and the completed slip.
         rows, diagnostics = await asyncio.to_thread(
-            scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet", report_scan_progress
+            scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
         )
-        await reply(update, f"📊 Fixture scan finished: {len(rows)} candidate rows survived model and market checks. " + " ".join(diagnostics[:5]))
         rows = [
             x for x in rows
             if str(x.get("bookmaker", "")).casefold() == "sportybet"
@@ -2152,21 +2143,58 @@ async def autobuild_sportybet_command(update, context):
         # Run optional API-Football specialist research (corners, cards, shots,
         # shots on target and first-half goals) against exact fixture/date/price matches.
         # If the provider key or a reliable exact match is absent, base candidates remain unchanged.
-        await reply(update, f"⏳ Specialist research: checking {len(rows)} candidate rows against optional stats sources…")
         rows, specialist_stats = await asyncio.to_thread(enrich_with_specialist_models, rows)
-        await reply(update, f"⏳ Specialist research finished: {specialist_stats.get('fixtures_checked', 0)} fixtures checked; {specialist_stats.get('matched_prices', 0)} prices enriched.")
         # Apply one auditable research/value gate. Keep non-negative-EV candidates;
         # never silently pad a requested slip with negative-EV selections.
         rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=-1.0)
-        await reply(update, f"⏳ Candidate assessment finished: {len(rows)} candidates remain after research/value checks.")
+
+        # Present a clean shortlist after the silent scan. Group alternative markets
+        # under their fixture so users can see the actual match coverage at a glance.
+        fixture_groups = {}
+        for item in rows:
+            fixture_key = (item.get("day"), item.get("home"), item.get("away"))
+            fixture_groups.setdefault(fixture_key, [])
+            fixture_groups[fixture_key].append(item)
+        fixture_lines = ["⚽ SPORTYBET FIXTURES FOUND", f"Fixtures with usable model-backed markets: {len(fixture_groups)}", ""]
+        for (day, home, away), items in sorted(fixture_groups.items()):
+            league = items[0].get("league") or "Competition"
+            fixture_lines.append(f"• {home} vs {away}")
+            fixture_lines.append(f"  {day} | {league} | {len(items)} eligible market selections")
+            seen_markets = set()
+            shown = 0
+            for item in items:
+                label = f"{item.get('market')}: {item.get('selection')} @ {float(item.get('odds') or 0):.2f}"
+                if label in seen_markets:
+                    continue
+                seen_markets.add(label)
+                fixture_lines.append(f"  – {label}")
+                shown += 1
+                if shown >= 4:
+                    break
+            if len(items) > shown:
+                fixture_lines.append(f"  – plus {len(items) - shown} other eligible selections")
+            fixture_lines.append("")
+        fixture_text = "\\n".join(fixture_lines).strip()
+        # Telegram message limit is 4096 characters; split only between fixture blocks.
+        chunks, current = [], ""
+        for block in fixture_text.split("\\n\\n"):
+            candidate = (current + "\\n\\n" + block).strip() if current else block
+            if len(candidate) > 3500 and current:
+                chunks.append(current)
+                current = block
+            else:
+                current = candidate
+        if current:
+            chunks.append(current)
+        for chunk in chunks:
+            await reply(update, chunk)
 
         if not rows:
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(
                 update,
                 "NO BET: no usable, correctly matched SportyBet market candidates were produced after fixture, market and price validation. "
-                "This is a fixture/data/matching failure, not proof that every selection has negative expected value. "
-                + " ".join(diagnostics[:4])
+                "No matched fixture produced a usable model-backed market. Please try again when more SportyBet fixtures are available."
             )
             return
 
@@ -2184,14 +2212,12 @@ async def autobuild_sportybet_command(update, context):
         if effective_max_legs < min_legs:
             await reply(update, f"Only {available_fixtures} distinct eligible fixtures are available; cannot satisfy minlegs={min_legs}.")
             return
-        await reply(update, f"⏳ Building accumulator: target {target:.2f}, exactly {min_legs} legs, from {len(rows)} eligible market candidates across {available_fixtures} fixtures…")
         build = build_accumulator(
             rows, target, min_legs=min_legs, max_legs=effective_max_legs,
             ranking=("value" if rank_mode == "parlay" else rank_mode),
             max_candidates=None,
         )
         chosen = build["selections"]
-        await reply(update, f"⏳ Accumulator search finished: {len(chosen)} selections found.")
         if len(chosen) < min_legs or (max_legs is not None and len(chosen) > max_legs):
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(update, f"NO SLIP: I could not find a qualifying combination with exactly {min_legs} legs near your {target:.2f} target. I will not silently change your requested leg count or fill it with negative-value picks.")
