@@ -87,6 +87,7 @@ def assess_candidate(row: dict, marginal_ev_floor: float = -0.03) -> dict | None
             "h2h_results": row.get("h2h_results") or [],
             "expected_home_goals": row.get("lambda_home"),
             "expected_away_goals": row.get("lambda_away"),
+            "specialist_evidence": row.get("specialist_evidence"),
         },
         "research_gaps": [
             name for name, present in (
