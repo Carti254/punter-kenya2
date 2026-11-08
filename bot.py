@@ -2770,7 +2770,7 @@ def build_pre_match_prediction(raw_fixture, fixture):
 
 
 
-def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None):
+def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None, model_variant="current"):
     """Forecast from competition results strictly before as_of_date when supplied."""
     folder = str(raw_fixture.get("leagueShortcut") or "").strip()
     if not folder:
@@ -2854,8 +2854,47 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
 
     home_scored, home_conceded = averages(home_results)
     away_scored, away_conceded = averages(away_results)
-    lambda_home = max(0.15, min(4.0, ((home_scored + away_conceded) / 2) * 1.08))
-    lambda_away = max(0.15, min(4.0, ((away_scored + home_conceded) / 2) * 0.92))
+
+    if model_variant == "venue_weighted":
+        # Candidate model: recent venue-specific rates, exponentially weighted,
+        # then shrunk towards the competition scoring baseline to reduce small-sample noise.
+        def weighted_rate(history, field):
+            selected = history[:8]
+            if len(selected) < 3:
+                selected = history[:8]
+            weights = [0.82 ** index for index in range(len(selected))]
+            return (sum(row[field] * weight for row, weight in zip(selected, weights)) / sum(weights)
+                    if selected else None)
+
+        home_venue = [row for row in home_results if row["venue"] == "H"][:8]
+        away_venue = [row for row in away_results if row["venue"] == "A"][:8]
+        if len(home_venue) < 3:
+            home_venue = home_results[:8]
+        if len(away_venue) < 3:
+            away_venue = away_results[:8]
+
+        league_totals = []
+        for result_row in rows:
+            try:
+                league_totals.append((int(result_row.get("ft_home")) + int(result_row.get("ft_away"))) / 2)
+            except (TypeError, ValueError):
+                continue
+        league_rate = sum(league_totals) / len(league_totals) if league_totals else 1.25
+        league_rate = max(0.35, min(2.5, league_rate))
+
+        def shrink(value, sample_size):
+            weight = sample_size / (sample_size + 4.0)
+            return weight * value + (1.0 - weight) * league_rate
+
+        home_attack = shrink(weighted_rate(home_venue, "gf"), len(home_venue))
+        home_defence = shrink(weighted_rate(home_venue, "ga"), len(home_venue))
+        away_attack = shrink(weighted_rate(away_venue, "gf"), len(away_venue))
+        away_defence = shrink(weighted_rate(away_venue, "ga"), len(away_venue))
+        lambda_home = max(0.15, min(4.0, (home_attack * away_defence / league_rate) * 1.05))
+        lambda_away = max(0.15, min(4.0, (away_attack * home_defence / league_rate) * 0.95))
+    else:
+        lambda_home = max(0.15, min(4.0, ((home_scored + away_conceded) / 2) * 1.08))
+        lambda_away = max(0.15, min(4.0, ((away_scored + home_conceded) / 2) * 0.92))
 
     grid = []
     for home_goals in range(9):
@@ -4494,13 +4533,23 @@ def collect_walk_forward_forecasts(max_matches=2000):
                 historical_rows=rows,
                 as_of_date=match_date,
             )
-            if not prediction.get("available"):
+            candidate = build_openmatchday_prediction(
+                {"leagueShortcut": folder},
+                {"home_team": home, "away_team": away},
+                historical_rows=rows,
+                as_of_date=match_date,
+                model_variant="venue_weighted",
+            )
+            if not prediction.get("available") or not candidate.get("available"):
                 continue
             samples.append({
                 "match_date": match_date,
                 "p_home": prediction["home_win"],
                 "p_draw": prediction["draw"],
                 "p_away": prediction["away_win"],
+                "candidate_home": candidate["home_win"],
+                "candidate_draw": candidate["draw"],
+                "candidate_away": candidate["away_win"],
                 "actual_home_goals": hg,
                 "actual_away_goals": ag,
             })
@@ -4551,6 +4600,24 @@ def evaluate_historical_calibration():
     test_y = [row[2] for row in holdout]
     fitted = fit_temperature(train_p, train_y, minimum_samples=50)
     calibrated = [apply_temperature(p, fitted["temperature"]) for p in test_p]
+
+    candidate_p = []
+    for row in holdout:
+        source_row = next((item for item in rows if item["match_date"] == row[0]
+                           and item.get("candidate_home") is not None), None)
+        if source_row:
+            candidate_p.append([float(source_row["candidate_home"]),
+                                float(source_row["candidate_draw"]),
+                                float(source_row["candidate_away"])])
+    if len(candidate_p) != len(test_y):
+        candidate_brier = candidate_logloss = None
+    else:
+        candidate_brier = brier_score(candidate_p, test_y)
+        candidate_logloss = log_loss(candidate_p, test_y)
+
+    # A training-only prevalence baseline is a minimum reference, not a deployable model.
+    baseline = [sum(1 for y in train_y if y == outcome) / len(train_y) for outcome in range(3)]
+    baseline_p = [baseline for _ in test_y]
     return {
         "ready": True, "count": count, "train": len(train),
         "holdout": len(holdout), "source": source,
@@ -4559,6 +4626,10 @@ def evaluate_historical_calibration():
         "calibrated_brier": brier_score(calibrated, test_y),
         "raw_logloss": log_loss(test_p, test_y),
         "calibrated_logloss": log_loss(calibrated, test_y),
+        "candidate_brier": candidate_brier,
+        "candidate_logloss": candidate_logloss,
+        "baseline_brier": brier_score(baseline_p, test_y),
+        "baseline_logloss": log_loss(baseline_p, test_y),
     }
 
 
