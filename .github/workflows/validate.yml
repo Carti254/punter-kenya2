@@ -58,7 +58,6 @@ jobs:
 
   live-bookmaker-smoke:
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
@@ -77,6 +76,10 @@ jobs:
           print(json.dumps(result, indent=2))
           if not all(item.get("request_ok") for item in result.values()):
               sys.exit(1)
+          if result.get("Betika", {}).get("priced_events", 0) < 1:
+              raise SystemExit("Betika returned no priced football events; feed is not verified.")
+          if result.get("SportyBet", {}).get("priced_events", 0) < 1:
+              raise SystemExit("SportyBet returned no priced football events; feed is not verified.")
           PY
 
   historical-calibration:
