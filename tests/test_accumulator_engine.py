@@ -64,6 +64,23 @@ class AccumulatorEngineTests(unittest.TestCase):
         self.assertNotIn(10.0, [x["odds"] for x in result["selections"]])
         self.assertNotIn(5.0, [x["odds"] for x in result["selections"]])
 
+    def test_minimum_leg_count_is_respected_even_when_three_legs_reach_target(self):
+        candidates = [
+            {"home": f"Club {i}", "away": f"Rival {i}", "odds": 2.20, "probability": 0.45, "market": "1X2"}
+            for i in range(1, 9)
+        ]
+        result = build_accumulator(candidates, 50.0, max_legs=8, ranking="odds", min_legs=5)
+        self.assertTrue(result["target_reached"])
+        self.assertGreaterEqual(len(result["selections"]), 5)
+        self.assertAlmostEqual(
+            result["combined_probability"],
+            __import__("math").prod(x["probability"] for x in result["selections"]),
+        )
+
+    def test_minimum_legs_cannot_exceed_maximum(self):
+        with self.assertRaises(ValueError):
+            build_accumulator(self.candidates, 2.0, max_legs=3, min_legs=4)
+
     def test_ranking_is_validated(self):
         with self.assertRaises(ValueError):
             build_accumulator(self.candidates, 2.0, ranking="random")
