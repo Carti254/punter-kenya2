@@ -11,7 +11,7 @@ def _number(value):
         return None
     if isinstance(value, (int, float)):
         return float(value)
-    match = re.fullmatch(r"\\s*(\\d+(?:\\.\\d+)?)\\s*", str(value))
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*", str(value))
     return float(match.group(1)) if match else None
 
 
@@ -31,7 +31,7 @@ def _stat_rows(rows):
 
 
 def _line_pick(selection):
-    match = re.fullmatch(r"\\s*(over|under|o|u)\\s*(\\d+(?:\\.\\d+)?)\\s*", str(selection), re.I)
+    match = re.fullmatch(r"\s*(over|under|o|u)\s*(\d+(?:\.\d+)?)\s*", str(selection), re.I)
     if not match:
         raise ValueError("Use a standard Over/Under selection such as Over 8.5.")
     side = "over" if match.group(1).casefold() in {"over", "o"} else "under"
