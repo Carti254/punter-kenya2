@@ -68,7 +68,7 @@ def _value(values, aliases):
 def _recent_team_observations(team_id, before_date, api_key, session, last=5):
     rows = _get("fixtures", {
         "team": int(team_id), "last": int(last), "to": (before_date - timedelta(days=1)).isoformat(),
-        "timezone": "UTC",
+        "timezone": "Africa/Nairobi",
     }, api_key, session)
     observations = []
     for fixture_row in rows:
@@ -105,7 +105,7 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
     if not key:
         raise FootballStatsError("Set API_FOOTBALL_KEY privately to enable specialist market research.")
     target = date.fromisoformat(str(match_date)[:10])
-    fixtures = _get("fixtures", {"date": target.isoformat(), "timezone": "UTC"}, key, session)
+    fixtures = _get("fixtures", {"date": target.isoformat(), "timezone": "Africa/Nairobi"}, key, session)
     exact = []
     for row in fixtures:
         teams = row.get("teams") or {}
@@ -236,7 +236,7 @@ def player_prop_forecast(home, away, match_date, player_name, metric, line,
     if metric_key not in PLAYER_METRICS:
         raise ValueError("Metric must be shots, shots_on_target, goals, assists, yellow_cards or red_cards.")
     target = date.fromisoformat(str(match_date)[:10])
-    fixtures = _get("fixtures", {"date": target.isoformat(), "timezone": "UTC"}, key, session)
+    fixtures = _get("fixtures", {"date": target.isoformat(), "timezone": "Africa/Nairobi"}, key, session)
     exact = []
     for row in fixtures:
         teams = row.get("teams") or {}
@@ -268,7 +268,7 @@ def player_prop_forecast(home, away, match_date, player_name, metric, line,
     player_id, team_id, resolved_name = next(iter(unique))
     recent = _get("fixtures", {
         "team": team_id, "last": int(last),
-        "to": (target - timedelta(days=1)).isoformat(), "timezone": "UTC",
+        "to": (target - timedelta(days=1)).isoformat(), "timezone": "Africa/Nairobi",
     }, key, session)
     category, field = PLAYER_METRICS[metric_key]
     observations = []
