@@ -1704,7 +1704,7 @@ async def my_slips_command(update, context):
             total = math.prod(float(x["odds"]) for x in row["selections"])
             lines.append(f"#{row['slip_id']} · {len(row['selections'])} legs · {total:.2f} odds · {row['bookmaker']}")
         lines.append("\nUse the Edit, Merge or Split menu actions with these slip IDs.")
-    await reply(update, "\n".join(lines))
+        await reply(update, "\n".join(lines))
     except Exception as exc:
         logger.exception("Could not list slips")
         await reply(update, f"Could not load slips: {type(exc).__name__}: {str(exc)[:200]}")
@@ -5581,7 +5581,7 @@ async def marketdata_command(update, context):
         lines.append("Half-time statistics: " + (", ".join(f"{k}={v}" for k, v in half_stats.items()) if half_stats else "not supplied by this competition/fixture"))
         lines.append(f"Player-stat response groups: {len(data['players'])} | Match events: {len(data['events'])}")
         lines.extend(["", "Provider data retrieval verified for this fixture only. Market-specific settlement is not enabled until the market's exact bookmaker rules are mapped and tested."])
-    await reply(update, "\n".join(lines))
+        await reply(update, "\n".join(lines))
     except Exception as exc:
         await reply(update, f"⚠️ Match-statistics provider unavailable: {type(exc).__name__}: {str(exc)[:250]}")
 
@@ -5833,7 +5833,7 @@ async def council_command(update, context):
             lines.append("PUBLIC X RESEARCH: not configured; set X_BEARER_TOKEN privately to include recent posts.")
         lines.extend(["", report["warning"],
                       "These specialist prices are experimental estimates, not calibrated picks; verify market rules and current prices before use."])
-    await reply(update, "\n".join(lines))
+        await reply(update, "\n".join(lines))
     except Exception as exc:
         await reply(update, f"Specialist research unavailable: {type(exc).__name__}: {str(exc)[:220]}")
 
@@ -5900,7 +5900,7 @@ async def forecaststats_command(update, context):
         for market, values in sorted(report["by_market"].items()):
             lines.append(f"{market}: n={values['count']} | Brier {values['brier']:.4f}")
         lines.append("Lower scores are better. This is retrospective scoring, not proof of future profitability.")
-    await reply(update, "\n".join(lines))
+        await reply(update, "\n".join(lines))
     except Exception as exc:
         await reply(update, f"Forecast statistics unavailable: {type(exc).__name__}: {str(exc)[:180]}")
 
@@ -5924,7 +5924,7 @@ async def xresearch_command(update, context):
             verified = "✓ " if post.get("verified") else ""
             lines.append(f"{verified}@{post.get('username') or 'unknown'} | {stamp} | ♥{post['likes']} ↻{post['reposts']}\n{post['text'][:500]}\n{post.get('url') or ''}")
         lines.extend(["", report["warning"], "Social posts are not independently verified and must not be treated as confirmed injuries or line-ups."])
-    await reply(update, "\n".join(lines))
+        await reply(update, "\n".join(lines))
     except Exception as exc:
         await reply(update, f"X research unavailable: {type(exc).__name__}: {str(exc)[:220]}")
 
@@ -5940,7 +5940,7 @@ async def clv_command(update, context):
                  f"Average CLV: {report['average_clv']:+.2%}",
                  f"Positive: {report['positive']} | Negative: {report['negative']}", "",
                  "Positive CLV means your taken price beat the latest captured price. This measures price quality, not profit."]
-    await reply(update, "\n".join(lines))
+        await reply(update, "\n".join(lines))
     except Exception as exc:
         await reply(update, f"CLV report unavailable: {type(exc).__name__}: {str(exc)[:180]}")
 
@@ -5956,7 +5956,7 @@ async def rolloverstatus_command(update, context):
                  f"Target odds/day: {report['target']:.2f}", f"Remaining: {report['remaining']}",
                  f"Wins: {report['wins']} | Losses: {report['losses']}", "",
                  "Record honestly with /rolloverday WON|LOST|MISSED [ACTUAL_ODDS]. A loss breaks the sequence."]
-    await reply(update, "\n".join(lines))
+        await reply(update, "\n".join(lines))
     except Exception as exc:
         await reply(update, f"Rollover progress unavailable: {type(exc).__name__}: {str(exc)[:180]}")
 
