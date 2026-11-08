@@ -161,3 +161,11 @@ python -m unittest discover -s tests -v
 ```
 
 GitHub Actions runs Python validation and unit tests on pushes and pull requests to `main`.
+
+
+### Operational commands added
+- `/preferences`, `/preferences key=value ...`, and `/preferences clear` inspect, save and clear explicit non-secret user preferences.
+- `/forecaststats` reports settled specialist forecast Brier score and log loss by market; `/forecastsettle ID WON|LOST` remains available for a manually verified outcome.
+- Specialist council over/under forecasts are stored against their API-Football fixture IDs. A background job checks completed fixtures every six hours and settles supported totals only when final match statistics are present. Integer-line pushes and unsupported markets are left unsettled.
+- Rollover status automatically marks prior unreported days as MISSED; the current day remains open until the user records its result.
+- Automatic bookmaker snapshots cover today and tomorrow every 30 minutes while the bot is online. CLV uses the latest same-bookmaker matching quote captured before the recorded Nairobi kickoff time.
