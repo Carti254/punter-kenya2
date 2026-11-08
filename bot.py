@@ -14,6 +14,7 @@ import time
 import copy
 import uuid
 from convat_client import ConvatError, preview_betika_code, convert_betika_to_sportybet
+from sportybet_client import SportyBetError, prepare_slip as prepare_sportybet_slip, create_booking as create_sportybet_booking
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -1146,7 +1147,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━━\n"
         "Research matches, compare available bookmaker prices and review potential value.\n\n"
         "🎟️ SLIP MANAGEMENT\n"
-        "Booking-code conversion: Betika → SportyBet Kenya (Convat API; evaluation key required).\n\n"
+        "🎟️ Generate genuine SportyBet Kenya booking codes from live fixtures and markets.\n"
+        "No bookmaker account, API key or stake is used to prepare a code.\n\n"
         "🧠 INTELLIGENCE\n"
         "/fullintel — all research and analysis commands\n"
         "/deepdive HOME vs AWAY — full match report\n"
@@ -1229,6 +1231,36 @@ async def process_slip_flow(update, context):
         return True
 
     try:
+        if state == "sportybet_build":
+            raw_lines = [line.strip() for line in message.splitlines() if line.strip()]
+            resolved = await asyncio.to_thread(prepare_sportybet_slip, raw_lines)
+            context.user_data.pop("slip_flow", None)
+            context.user_data["pending_sportybet_booking"] = resolved
+            combined = math.prod(float(item["odds"]) for item in resolved)
+            preview_lines = [
+                "🎟️ SPORTYBET KENYA — SLIP PREVIEW",
+                "━━━━━━━━━━━━━━━━━━━━",
+                f"Selections: {len(resolved)}",
+                f"Current combined odds: {combined:.2f}",
+                "",
+            ]
+            for index, item in enumerate(resolved, 1):
+                preview_lines.append(
+                    f"{index}. {item['fixture']}\\n"
+                    f"   {item['market']}: {item['selection']} @ {item['odds']:.2f}"
+                )
+            preview_lines.extend([
+                "",
+                "Confirm to ask SportyBet Kenya to generate a genuine booking code.",
+                "This only prepares a shareable slip. It does NOT place a bet.",
+            ])
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"),
+                InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel"),
+            ]])
+            await update.effective_message.reply_text("\\n".join(preview_lines), reply_markup=keyboard)
+            return True
+
         if state == "convat_code":
             clean_code = "".join(message.split())
             if not 3 <= len(clean_code) <= 40 or not clean_code.isalnum():
@@ -1436,6 +1468,61 @@ async def convat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"⚠️ Conversion could not be verified ({type(exc).__name__}). No code will be displayed unless the provider returns one.")
 
 
+
+async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    action = (query.data or "").split(":", 1)[-1]
+    pending = context.user_data.get("pending_sportybet_booking")
+    if action == "cancel":
+        context.user_data.pop("pending_sportybet_booking", None)
+        await query.edit_message_text("Slip generation cancelled. No booking code was created.")
+        return
+    if action != "confirm" or not pending:
+        await query.edit_message_text("This slip preview has expired. Start again from 🤖 Build a slip.")
+        return
+
+    # Never retry a booking POST automatically: a timeout may happen after the
+    # bookmaker has already created the share code.
+    await query.edit_message_text("⏳ Generating your genuine SportyBet Kenya booking code…")
+    try:
+        result = await asyncio.to_thread(create_sportybet_booking, pending)
+        code = result.get("bookingCode")
+        if not code:
+            raise SportyBetError("SportyBet did not return a booking code.")
+        actual_legs = result.get("legs") or []
+        lines = [
+            "✅ SPORTYBET KENYA BOOKING CODE CREATED",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"🎟️ CODE: {code}",
+            f"Selections in response: {len(actual_legs) if actual_legs else len(pending)}/{len(pending)}",
+            "",
+            "Open SportyBet Kenya, load this code and verify every selection and the current odds.",
+            "No wager has been placed.",
+        ]
+        if result.get("shareURL"):
+            lines.extend(["", f"Slip link: {result['shareURL']}"])
+        if result.get("unavailable"):
+            lines.extend(["", f"⚠️ SportyBet reported {len(result['unavailable'])} unavailable selection(s). Check the loaded code carefully."])
+        await query.edit_message_text("\\n".join(lines))
+        context.user_data.pop("pending_sportybet_booking", None)
+    except SportyBetError as exc:
+        logger.warning("SportyBet booking creation failed: %s", exc)
+        await query.edit_message_text(
+            "⚠️ SPORTYBET DID NOT CONFIRM A BOOKING CODE\\n\\n"
+            + str(exc)[:450]
+            + "\\n\\nThe request was not automatically repeated. Refresh fixtures and rebuild if no code appears."
+        )
+        context.user_data.pop("pending_sportybet_booking", None)
+    except Exception as exc:
+        logger.exception("Unexpected SportyBet booking error")
+        await query.edit_message_text(
+            f"⚠️ Could not verify the booking response ({type(exc).__name__}). "
+            "The request was not automatically repeated. Check SportyBet before trying again."
+        )
+        context.user_data.pop("pending_sportybet_booking", None)
+
+
 async def cancel_slip_command(update, context):
     context.user_data.pop("slip_flow", None)
     await reply(update, "Cancelled. Your existing slips have not been changed.")
@@ -1488,12 +1575,23 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif choice in prompts:
         context.user_data["slip_flow"] = prompts[choice][0]
         await reply(update, prompts[choice][1] + "\n\nSend /cancel to stop.")
-    elif choice in ("🤖 Build a slip", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip"):
+    elif choice == "🤖 Build a slip":
+        context.user_data["slip_flow"] = "sportybet_build"
         await reply(update,
-            "🎟️ BOOKING-CODE TOOLS\n\n"
-            "The genuine Betika → SportyBet conversion workflow is being connected first. "
-            "Building, editing, merging and splitting bookmaker-issued codes are not yet "
-            "available through the current provider API. I won't present internal records as real bookmaker codes.")
+            "🎟️ BUILD A GENUINE SPORTYBET KENYA SLIP\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Send one selection per line in this format:\n"
+            "Fixture | Market | Selection\n\n"
+            "Examples:\n"
+            "Arsenal vs Chelsea | 1X2 | Arsenal\n"
+            "Liverpool vs Brighton | 1X2 | Draw\n"
+            "Use exact upcoming fixture names. Markets and selections are checked against SportyBet Kenya live data.\n\n"
+            "I'll show the resolved selections and current odds before asking you to generate the code. No bet is placed.\n"
+            "Send /cancel to stop.")
+    elif choice in ("✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip"):
+        await reply(update,
+            "These advanced bookmaker-code operations are not yet connected. "
+            "You can already generate a genuine SportyBet Kenya booking code using 🤖 Build a slip.")
     elif choice == "🔄 Convert bet code":
         context.user_data["slip_flow"] = "convat_code"
         await reply(update,
@@ -4161,6 +4259,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(fullintel_callback, pattern=r"^fi:"))
     app.add_handler(CallbackQueryHandler(convat_callback, pattern=r"^bc:"))
+    app.add_handler(CallbackQueryHandler(sportybet_build_callback, pattern=r"^sb:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_text_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^/myslips$"), my_slips_command))
     
