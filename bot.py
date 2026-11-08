@@ -1953,6 +1953,164 @@ async def aipicks_status_command(update, context):
     await topvalue_command(update, context)
 
 
+def enrich_with_specialist_models(rows):
+    """Enrich every candidate fixture with available specialist, social and bookmaker research.
+
+    External sources are optional. Missing credentials, provider failures and unavailable
+    markets are reported as gaps; they never become invented positive evidence.
+    """
+    rows = list(rows or [])
+    stats = {
+        "fixtures_checked": 0, "matched_prices": 0, "cross_bookmaker_matches": 0,
+        "x_posts": 0, "odds_snapshots_saved": 0, "specialist_panels": 0,
+        "reason": "",
+    }
+    if not rows:
+        stats["reason"] = "No candidate fixtures were available for enrichment."
+        return rows, stats
+
+    # Fetch cross-bookmaker prices once per date, then reuse exact fixture matches.
+    provider_games_by_day = {}
+    for day_text in sorted({str(row.get("day") or "")[:10] for row in rows if row.get("day")}):
+        try:
+            day_value = datetime.strptime(day_text, "%Y-%m-%d").date()
+            snapshot = fetch_bookmaker_odds(day_value)
+            games = []
+            for provider in (snapshot.get("bookmakers") or {}).values():
+                games.extend(provider.get("games") or [])
+            provider_games_by_day[day_text] = games
+            try:
+                stats["odds_snapshots_saved"] += save_price_observations(games)
+            except Exception as save_exc:
+                logger.warning("Autobuild odds snapshot storage unavailable: %s", save_exc)
+        except Exception as odds_exc:
+            logger.warning("Autobuild cross-bookmaker prices unavailable for %s: %s", day_text, odds_exc)
+            provider_games_by_day[day_text] = []
+
+    fixture_groups = {}
+    for row in rows:
+        key = (
+            str(row.get("day") or "")[:10],
+            str(row.get("home") or "").strip(),
+            str(row.get("away") or "").strip(),
+        )
+        fixture_groups.setdefault(key, []).append(row)
+
+    api_key = os.getenv("API_FOOTBALL_KEY")
+    x_token = os.getenv("X_BEARER_TOKEN")
+    try:
+        from bookmaker_odds import find_event as match_provider_event
+    except Exception:
+        match_provider_event = find_bookmaker_event
+
+    for (day_text, home, away), fixture_rows in fixture_groups.items():
+        if not home or not away:
+            continue
+        day_games = provider_games_by_day.get(day_text, [])
+        matched_games = []
+        for provider_game in day_games:
+            provider_name = str(provider_game.get("bookmaker") or "").casefold()
+            if provider_name != "sportybet":
+                continue
+            matched_games.extend(match_provider_event([provider_game], home, away))
+
+        # Compare each candidate's exact market/selection with other bookmakers.
+        for candidate in fixture_rows:
+            wanted_market = _normal_market_text(candidate.get("market"))
+            wanted_selection = _normal_market_text(candidate.get("selection"))
+            alternatives = []
+            for provider_game in day_games:
+                if str(provider_game.get("bookmaker") or "").casefold() == "sportybet":
+                    continue
+                if not match_provider_event([provider_game], home, away):
+                    continue
+                for market_row in provider_game.get("markets") or []:
+                    if (_normal_market_text(market_row.get("market")) == wanted_market
+                            and _normal_market_text(market_row.get("selection")) == wanted_selection):
+                        try:
+                            price = float(market_row.get("odds"))
+                        except (TypeError, ValueError):
+                            continue
+                        if math.isfinite(price) and price > 1:
+                            alternatives.append({
+                                "bookmaker": provider_game.get("bookmaker") or "Unknown",
+                                "odds": price,
+                            })
+            if alternatives:
+                best = max(alternatives, key=lambda item: item["odds"])
+                candidate["other_bookmaker_prices"] = alternatives
+                candidate["best_other_bookmaker"] = best
+                candidate["cross_bookmaker_edge"] = best["odds"] / float(candidate["odds"]) - 1.0
+                stats["cross_bookmaker_matches"] += 1
+
+        specialist_report = None
+        if api_key:
+            try:
+                from specialist_models import specialist_council, specialist_price_assessments
+                specialist_report = specialist_council(home, away, day_text, api_key=api_key)
+                priced = specialist_price_assessments(specialist_report, matched_games)
+                stats["matched_prices"] += len(priced)
+                stats["specialist_panels"] += sum(1 for panel in specialist_report.get("panels", []) if panel.get("available"))
+            except Exception as specialist_exc:
+                logger.info("Specialist research unavailable for %s vs %s: %s", home, away, specialist_exc)
+
+        x_report = None
+        if x_token:
+            try:
+                from x_research import search_match_posts
+                x_report = search_match_posts(home, away, limit=12, token=x_token)
+                stats["x_posts"] += int(x_report.get("result_count") or 0)
+            except Exception as x_exc:
+                logger.info("X research unavailable for %s vs %s: %s", home, away, x_exc)
+
+        panel_summary = []
+        if specialist_report:
+            for panel in specialist_report.get("panels") or []:
+                panel_summary.append({
+                    "market": panel.get("market"),
+                    "available": bool(panel.get("available")),
+                    "expected_total": panel.get("expected_total"),
+                    "home_sample": panel.get("home_sample"),
+                    "away_sample": panel.get("away_sample"),
+                    "reason": panel.get("reason"),
+                })
+        x_summary = []
+        if x_report:
+            for post in (x_report.get("posts") or [])[:8]:
+                x_summary.append({
+                    "username": post.get("username"),
+                    "created_at": post.get("created_at"),
+                    "verified_account": bool(post.get("verified")),
+                    "text": str(post.get("text") or "")[:350],
+                    "url": post.get("url"),
+                    "warning": "Unverified public-post lead; not confirmed team news.",
+                })
+
+        for candidate in fixture_rows:
+            if specialist_report:
+                candidate["specialist_evidence"] = bool(any(p.get("available") for p in specialist_report.get("panels", [])))
+                candidate["specialist_panels"] = panel_summary
+                candidate["specialist_warning"] = specialist_report.get("warning")
+            if x_report:
+                candidate["x_research_evidence"] = x_summary
+                # Public social posts are leads only; never mark injury/lineup evidence verified.
+                candidate["team_news_evidence"] = None
+                candidate["x_research_warning"] = x_report.get("warning")
+            if candidate.get("other_bookmaker_prices"):
+                candidate["other_bookmaker_evidence"] = True
+        stats["fixtures_checked"] += 1
+
+    missing = []
+    if not api_key:
+        missing.append("API_FOOTBALL_KEY not configured; specialist corners/cards/shots/first-half research skipped")
+    if not x_token:
+        missing.append("X_BEARER_TOKEN not configured; public-post research skipped")
+    if not any(row.get("other_bookmaker_prices") for row in rows):
+        missing.append("No exact cross-bookmaker market/selection comparisons were returned")
+    stats["reason"] = "; ".join(missing) if missing else "Available specialist, public-post and cross-bookmaker sources were checked; public posts remain unverified leads."
+    return rows, stats
+
+
 async def autobuild_sportybet_command(update, context):
     # Parse the actual Telegram message as well as context.args. This prevents
     # another handler/wrapper from silently dropping the user's requested odds.
