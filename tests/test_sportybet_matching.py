@@ -189,5 +189,18 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
 
 
 
+    def test_live_smoke_uses_bounded_read_only_feed_calls(self):
+        from bookmaker_odds import smoke_test_bookmakers
+        game = {"home": "Home", "away": "Away", "markets": [{"odds": 1.8}]}
+        with patch("bookmaker_odds.fetch_betika", return_value=[game]) as betika, \
+             patch("bookmaker_odds.fetch_sportybet", return_value=[game]) as sporty:
+            result = smoke_test_bookmakers()
+        self.assertTrue(result["Betika"]["request_ok"])
+        self.assertTrue(result["SportyBet"]["request_ok"])
+        betika.assert_called_once()
+        sporty.assert_called_once()
+
+
+
 if __name__ == "__main__":
     unittest.main()
