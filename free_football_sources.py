@@ -337,11 +337,6 @@ def enrich_candidates(rows: list[dict], max_fixtures: int = 30):
             p1x2 = _extract_prediction_1x2(prediction)
             if p1x2:
                 row["external_1x2_probabilities"] = p1x2
-                own_p = row.get("probability")
-                if own_p is not None:
-                    # Keep the original PUNTER probability. This is a disagreement
-                    # diagnostic, not an unvalidated model blend.
-                    row["external_model_disagreement"] = abs(float(own_p) - max(p1x2.values()))
             external_p = _external_probability(prediction, row.get("market"), row.get("selection"))
             if external_p is not None:
                 row["external_market_probability"] = external_p
