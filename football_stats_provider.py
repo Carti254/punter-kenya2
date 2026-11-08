@@ -56,7 +56,7 @@ def fetch_match_market_data(home, away, match_date, api_key=None, session=reques
     if not key:
         raise FootballStatsError("Set API_FOOTBALL_KEY in the deployment environment.")
     date_text = str(match_date)[:10]
-    if not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", date_text):
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_text):
         raise ValueError("match_date must be YYYY-MM-DD.")
     fixtures = _get("fixtures", {"date": date_text, "timezone": "UTC"}, key, session)
     home_key, away_key = _team_key(home), _team_key(away)
@@ -75,7 +75,7 @@ def fetch_match_market_data(home, away, match_date, api_key=None, session=reques
     fixture_id = int(matches[0]["fixture"]["id"])
     full_stats = _get("fixtures/statistics", {"fixture": fixture_id}, key, session)
     half_stats = _get("fixtures/statistics", {"fixture": fixture_id, "half": "true"}, key, session)
-    players = _get("fixtures/players", {"fixture": fixture_id}, key, session)
+    players = _get("players", {"fixture": fixture_id}, key, session)
     events = _get("fixtures/events", {"fixture": fixture_id}, key, session)
     return {
         "provider": "api-football",
