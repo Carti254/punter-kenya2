@@ -2347,7 +2347,6 @@ async def accumulator_status_command(update, context):
             await reply(update, "Usage: /accumulator [target decimal odds, 1.50–50]. Example: /accumulator 3.00")
             return
 
-    await reply(update, "🔎 Scanning today's and tomorrow's fixtures and retrieved bookmaker prices...")
     try:
         rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "safest")
     except Exception as exc:
@@ -4113,7 +4112,6 @@ async def topvalue_command(update, context):
     day_arg = next((x for x in args if x in ("today", "tomorrow")), "both")
     day = day_arg
     days = (day,) if day != "both" else ("today", "tomorrow")
-    await reply(update, "🔎 Scanning the available fixture catalogue and connected bookmaker prices. This may take a little while...")
     try:
         rows, diagnostics = await asyncio.to_thread(scan_value_candidates, days, market)
     except Exception as exc:
