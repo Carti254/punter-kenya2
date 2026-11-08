@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import date, datetime, time as dt_time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import requests
@@ -157,98 +157,6 @@ def fetch_betika(day: date | None = None, max_pages=2):
         page += 1
         time.sleep(0.08)
     return games
-
-
-def fetch_betpawa(day: date | None = None):
-    """Fetch BetPawa football pre-match markets for one EAT calendar day."""
-    day = day or datetime.now(EAT).date()
-    start = datetime.combine(day, dt_time.min, tzinfo=EAT).astimezone(timezone.utc)
-    end = datetime.combine(day + timedelta(days=1), dt_time.min, tzinfo=EAT).astimezone(timezone.utc)
-    query = {
-        "queries": [{
-            "query": {
-                "eventType": "UPCOMING", "categories": ["2"], "zones": {},
-                "hasOdds": True,
-                "startTime": {"gte": start.isoformat(), "lt": end.isoformat()},
-            },
-            "view": {"marketTypes": ["3743", "28000810", "28000850", "4693", "1096755", "3795"]},
-            "skip": 0, "take": 50,
-        }]
-    }
-    # BetPawa's web API is undocumented and is sensitive to the browser
-    # request profile. Mirror the headers used by the maintained OddsPro
-    # adapter rather than sending a generic Python-client request.
-    headers = {
-        "Accept": "application/json",
-        "devicetype": "web",
-        "dnt": "1",
-        "referer": "https://www.betpawa.co.ke/events?marketId=1X2&categoryId=2&day=tomorrow",
-        "sec-ch-ua": '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "traceid": "ff308908-c15d-4119-b6d3-60ed992a19e0",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "vuejs": "true",
-        "x-pawa-brand": "betpawa-kenya",
-        "x-pawa-language": "en",
-    }
-    # Keep BetPawa failures isolated from Betika and expose the underlying
-    # transport/status cause so diagnostics are actionable.
-    payload = _get(
-        BETPAWA_BASE + "/events/lists/by-queries",
-        params={"q": __import__("json").dumps(query, separators=(",", ":"))},
-        headers=headers,
-        timeout=(10, 30),
-    )
-    responses = payload.get("responses") if isinstance(payload, dict) else None
-    if not isinstance(responses, list):
-        # Some responses wrap the event list in a data object.
-        data = payload.get("data") if isinstance(payload, dict) else None
-        responses = data.get("responses") if isinstance(data, dict) else None
-    if not isinstance(responses, list):
-        raise ValueError("BetPawa returned an unexpected event-list response.")
-    games = []
-    for envelope in responses:
-        events = envelope.get("events", []) if isinstance(envelope, dict) else []
-        if not isinstance(events, list):
-            continue
-        for event in events:
-            if not isinstance(event, dict) or not event.get("id"):
-                continue
-            try:
-                detail = _get(
-                    BETPAWA_BASE + "/events/" + str(event["id"]),
-                    headers=headers,
-                )
-                participants = detail.get("participants") or []
-                if len(participants) != 2:
-                    continue
-                markets = []
-                for market in detail.get("markets", []) or []:
-                    if not isinstance(market, dict):
-                        continue
-                    market_name = (market.get("marketType") or {}).get("displayName")
-                    for row in market.get("row", []) or []:
-                        for selection in row.get("prices", []) or []:
-                            item = _market("BetPawa", market_name, selection.get("name"),
-                                           selection.get("odds"),
-                                           selection.get("handicap") or row.get("specifier"))
-                            if item:
-                                markets.append(item)
-                games.append({
-                    "bookmaker": "BetPawa", "event_id": str(detail["id"]),
-                    "home": participants[0].get("name"),
-                    "away": participants[1].get("name"),
-                    "competition": (detail.get("competition") or {}).get("name"),
-                    "kickoff_eat": _eat_time(detail.get("startTime")),
-                    "markets": markets,
-                    "url": f"https://www.betpawa.co.ke/event/{detail['id']}?filter=all",
-                    "fetched_at": datetime.now(timezone.utc).isoformat(),
-                })
-            except Exception as exc:
-                LOG.warning("BetPawa event %s detail failed: %s", event.get("id"), exc)
-    return games
-
 
 
 SPORTYBET_BASE = "https://www.sportybet.com/api/ke"
