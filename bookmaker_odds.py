@@ -128,69 +128,102 @@ def fetch_sportybet(day: date | None = None, max_pages=60):
     }
     events_by_id = {}
     seen = set()
-    for page in range(1, max_pages + 1):
-        payload = _get(
-            SPORTYBET_BASE + "/factsCenter/pcUpcomingEvents",
-            params={
-                "sportId": "sr:sport:1",
-                # marketId=1 is a lightweight event index. option=2 is the
-                # complete fixture list; option=1 is the highlights-only view.
-                # Full market catalogues are fetched from factsCenter/event below.
-                "marketId": "1",
-                "pageSize": 100,
-                "pageNum": page,
-                "option": "2",
-                "todayGames": "false",
-                "timeline": 720,
-                "_t": int(time.time() * 1000),
-            },
-            headers=headers,
-            timeout=(8, 20),
-        )
-        if not isinstance(payload, dict) or int(payload.get("bizCode", 0) or 0) != 10000:
-            code = payload.get("bizCode") if isinstance(payload, dict) else "invalid"
-            raise ValueError(f"SportyBet rejected the public feed (bizCode={code}).")
+    index_failures = []
+    pages_fetched = 0
+    reported_total = 0
 
-        data = payload.get("data") or {}
-        tournaments = data.get("tournaments", []) if isinstance(data, dict) else []
-        if not isinstance(tournaments, list):
-            raise ValueError("SportyBet returned an unexpected event catalogue.")
-
-        page_events = 0
-        for tournament in tournaments:
-            if not isinstance(tournament, dict):
+    # The public index can be served by replicas with different snapshots.
+    # Walk it more than once and union event IDs; stop only when a complete pass
+    # adds nothing. Two consecutive empty/failed pages end one pass.
+    for pass_number in range(1, 4):
+        before_pass = len(seen)
+        empty_pages = 0
+        for page in range(1, max_pages + 1):
+            try:
+                payload = _get(
+                    SPORTYBET_BASE + "/factsCenter/pcUpcomingEvents",
+                    params={
+                        "sportId": "sr:sport:1",
+                        # marketId=1 is a lightweight event index. option=2 is
+                        # the complete fixture list; option=1 is highlights-only.
+                        # Full markets are fetched from factsCenter/event below.
+                        "marketId": "1",
+                        "pageSize": 100,
+                        "pageNum": page,
+                        "option": "2",
+                        "todayGames": "false",
+                        "timeline": 720,
+                        "_t": int(time.time() * 1000),
+                    },
+                    headers=headers,
+                    timeout=(8, 20),
+                )
+                pages_fetched += 1
+                if not isinstance(payload, dict) or int(payload.get("bizCode", 0) or 0) != 10000:
+                    code = payload.get("bizCode") if isinstance(payload, dict) else "invalid"
+                    raise ValueError(f"SportyBet rejected the public feed (bizCode={code}).")
+                data = payload.get("data") or {}
+                tournaments = data.get("tournaments", []) if isinstance(data, dict) else []
+                if not isinstance(tournaments, list):
+                    raise ValueError("SportyBet returned an unexpected event catalogue.")
+                total = int(data.get("totalNum", 0) or 0) if isinstance(data, dict) else 0
+                reported_total = max(reported_total, total)
+            except Exception as exc:
+                index_failures.append(f"pass {pass_number}, page {page}: {type(exc).__name__}: {str(exc)[:160]}")
+                LOG.warning("SportyBet event-index page failed (%s/%s): %s", pass_number, page, exc)
+                empty_pages += 1
+                if empty_pages >= 2:
+                    break
                 continue
-            for event in tournament.get("events", []) or []:
-                if not isinstance(event, dict):
-                    continue
-                event_id = str(event.get("eventId") or "").strip()
-                if not event_id or event_id in seen:
-                    continue
-                seen.add(event_id)
-                page_events += 1
-                kickoff = _eat_time(event.get("estimateStartTime"))
-                if not kickoff or kickoff[:10] not in target_days:
-                    continue
-                try:
-                    kickoff_dt = datetime.strptime(kickoff, "%Y-%m-%d %H:%M").replace(tzinfo=EAT)
-                except ValueError:
-                    continue
-                if kickoff_dt <= datetime.now(EAT):
-                    continue
-                events_by_id[event_id] = {
-                    "event": event,
-                    "event_id": event_id,
-                    "home": event.get("homeTeamName"),
-                    "away": event.get("awayTeamName"),
-                    "competition": tournament.get("name") or tournament.get("categoryName"),
-                    "kickoff_eat": kickoff,
-                    "index_markets": event.get("markets") or [],
-                }
 
-        total = int(data.get("totalNum", 0) or 0) if isinstance(data, dict) else 0
-        if not tournaments or page_events == 0 or (total and len(seen) >= total):
+            page_events = 0
+            for tournament in tournaments:
+                if not isinstance(tournament, dict):
+                    continue
+                for event in tournament.get("events", []) or []:
+                    if not isinstance(event, dict):
+                        continue
+                    event_id = str(event.get("eventId") or "").strip()
+                    if not event_id or event_id in seen:
+                        continue
+                    seen.add(event_id)
+                    page_events += 1
+                    kickoff = _eat_time(event.get("estimateStartTime"))
+                    if not kickoff or kickoff[:10] not in target_days:
+                        continue
+                    try:
+                        kickoff_dt = datetime.strptime(kickoff, "%Y-%m-%d %H:%M").replace(tzinfo=EAT)
+                    except ValueError:
+                        continue
+                    if kickoff_dt <= datetime.now(EAT):
+                        continue
+                    events_by_id[event_id] = {
+                        "event": event,
+                        "event_id": event_id,
+                        "home": event.get("homeTeamName"),
+                        "away": event.get("awayTeamName"),
+                        "competition": tournament.get("name") or tournament.get("categoryName"),
+                        "kickoff_eat": kickoff,
+                        "index_markets": event.get("markets") or [],
+                    }
+
+            if not tournaments or page_events == 0:
+                empty_pages += 1
+                if empty_pages >= 2:
+                    break
+                continue
+            empty_pages = 0
+            time.sleep(0.15)
+
+        if len(seen) == before_pass:
             break
-        time.sleep(0.2)
+
+    if not events_by_id and index_failures:
+        raise RuntimeError("SportyBet fixture index failed: " + " | ".join(index_failures[:3]))
+    LOG.info(
+        "SportyBet index: %s unique events, %s target-date events, %s pages, %s passes, reported total %s, %s page failures.",
+        len(seen), len(events_by_id), pages_fetched, pass_number, reported_total, len(index_failures),
+    )
 
     def price_one(record):
         event_id = record["event_id"]
