@@ -46,6 +46,25 @@ class AccumulatorEngineTests(unittest.TestCase):
         self.assertEqual(len(result["selections"]), 2)
         self.assertNotIn(22.00, [x["odds"] for x in result["selections"]])
 
+    def test_negative_ev_candidates_are_excluded(self):
+        candidates = [
+            {"home": "Bad", "away": "Leg", "odds": 10.0, "probability": 0.034, "market": "Over 5"},
+            {"home": "Also", "away": "Bad", "odds": 1.06, "probability": 0.938, "market": "Over 0.5"},
+        ]
+        result = build_accumulator(candidates, 50.0, max_legs=4)
+        self.assertFalse(result["target_reached"])
+        self.assertEqual(result["selections"], [])
+        self.assertIn("No positive-EV candidates", result["reason"])
+
+    def test_positive_ev_leg_can_be_used(self):
+        candidates = [
+            {"home": "Good", "away": "Leg", "odds": 5.0, "probability": 0.256, "market": "Under 2"},
+        ]
+        result = build_accumulator(candidates, 50.0, max_legs=4)
+        self.assertFalse(result["target_reached"])
+        self.assertEqual(len(result["selections"]), 1)
+        self.assertAlmostEqual(result["expected_roi"], 0.28, places=6)
+
     def test_ranking_is_validated(self):
         with self.assertRaises(ValueError):
             build_accumulator(self.candidates, 2.0, ranking="random")
