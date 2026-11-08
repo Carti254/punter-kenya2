@@ -1,7 +1,8 @@
 import unittest
+from unittest.mock import patch
 from bot import (
     _odds_market_key, _selection_probability_key, _market_probability,
-    _market_probability_for_row,
+    _market_probability_for_row, scan_value_candidates,
 )
 
 
@@ -28,6 +29,39 @@ class ScannerMarketTests(unittest.TestCase):
 
     def test_legacy_model_probability_lookup(self):
         self.assertEqual(_market_probability(self.model, "over15"), .80)
+
+
+    def test_scanner_does_not_hide_btts_or_under_25(self):
+        raw = {"id": "fixture-1"}
+        fixture = {
+            "home_team": "Brighton", "away_team": "Brentford",
+            "competition": "Premier League", "kickoffUtc": "2026-11-20T20:00:00Z",
+        }
+        game = {
+            "bookmaker": "SportyBet", "kickoff_eat": "2026-11-20 23:00",
+            "event_id": "event-1",
+            "markets": [
+                {"market": "Both Teams To Score", "selection": "Yes", "odds": 1.95,
+                 "market_id": "btts", "outcome_id": "yes"},
+                {"market": "Total Goals Over/Under", "selection": "Under 2.5", "odds": 2.10,
+                 "market_id": "totals", "outcome_id": "under25", "specifier": "total=2.5"},
+            ],
+        }
+        prediction = {
+            "available": True, "lambda_home": 1.7, "lambda_away": 1.1,
+            "home_win": 0.50, "draw": 0.25, "away_win": 0.25,
+        }
+        with patch("bot.fetch_openmatchday_fixture_rows", return_value=[raw]), \
+             patch("bot.upcoming_fixtures", return_value=[(raw, fixture)]), \
+             patch("bot.build_openmatchday_prediction", return_value=prediction), \
+             patch("bot.fetch_bookmaker_odds", return_value={
+                 "bookmakers": {"SportyBet": {"games": [game]}}, "errors": {}
+             }), \
+             patch("bot.find_bookmaker_event", return_value=[game]):
+            rows, _ = scan_value_candidates(("today",), "BTTS,Under 2.5")
+        labels = {(row["market"], row["selection"]) for row in rows}
+        self.assertIn(("Both Teams To Score", "Yes"), labels)
+        self.assertIn(("Total Goals Over/Under", "Under 2.5"), labels)
 
     def test_scoreline_derived_markets(self):
         cases = [
