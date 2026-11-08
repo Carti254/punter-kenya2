@@ -1,7 +1,7 @@
 """Versioned, idempotent MySQL schema migrations for PUNTER KENYA."""
 from database import get_connection
 
-LATEST_VERSION = 4
+LATEST_VERSION = 5
 
 
 def _table_exists(cursor, table_name):
@@ -163,6 +163,26 @@ def run_migrations():
                 """)
                 cursor.execute("INSERT INTO punter_schema_migrations (version) VALUES (4)")
                 applied_now.append(4)
+
+            if 5 not in applied:
+                if not _column_exists(cursor, "punter_user_settings", "rollover_started_on"):
+                    cursor.execute("ALTER TABLE punter_user_settings ADD COLUMN rollover_started_on DATE NULL")
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS punter_rollover_progress (
+                        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        plan_started DATE NOT NULL,
+                        day_number INT NOT NULL,
+                        target_odds DECIMAL(10,3) NOT NULL,
+                        result VARCHAR(12) NOT NULL,
+                        actual_odds DECIMAL(10,3) NULL,
+                        recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE KEY uq_rollover_day (user_id, plan_started, day_number),
+                        INDEX idx_rollover_user (user_id, plan_started)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                cursor.execute("INSERT INTO punter_schema_migrations (version) VALUES (5)")
+                applied_now.append(5)
 
         return {"applied": applied_now, "latest_version": LATEST_VERSION}
     finally:
