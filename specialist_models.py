@@ -68,7 +68,7 @@ def _value(values, aliases):
 def _recent_team_observations(team_id, before_date, api_key, session, last=5):
     rows = _get("fixtures", {
         "team": int(team_id), "last": int(last), "to": (before_date - timedelta(days=1)).isoformat(),
-        "timezone": "UTC",
+        "timezone": "Africa/Nairobi",
     }, api_key, session)
     observations = []
     for fixture_row in rows:
@@ -105,7 +105,7 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
     if not key:
         raise FootballStatsError("Set API_FOOTBALL_KEY privately to enable specialist market research.")
     target = date.fromisoformat(str(match_date)[:10])
-    fixtures = _get("fixtures", {"date": target.isoformat(), "timezone": "UTC"}, key, session)
+    fixtures = _get("fixtures", {"date": target.isoformat(), "timezone": "Africa/Nairobi"}, key, session)
     exact = []
     for row in fixtures:
         teams = row.get("teams") or {}
@@ -163,6 +163,57 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
     }
 
 
+def specialist_price_assessments(report, bookmaker_games):
+    """Match specialist estimates to exact fixture prices and calculate transparent edge."""
+    import re
+    aliases = {
+        "corners": ("corner",),
+        "cards": ("yellow card",),
+        "shots": ("total shots", "shots"),
+        "shots_on_target": ("shots on target", "shots on goal"),
+        "half_time_goals": ("1st half", "first half", "half time", "half-time"),
+    }
+    panels = {p["market"]: p for p in report.get("panels", []) if p.get("available")}
+    output = []
+    for game in bookmaker_games or []:
+        if (_team_key(game.get("home")) != _team_key(report["fixture"].split(" vs ", 1)[0])
+                or _team_key(game.get("away")) != _team_key(report["fixture"].split(" vs ", 1)[-1])):
+            continue
+        for row in game.get("markets") or []:
+            name = str(row.get("market") or "").casefold()
+            selection = str(row.get("selection") or "").strip()
+            match = re.search(r"\b(over|under)\s+(\d+(?:\.\d+)?)", selection, re.I)
+            if not match:
+                continue
+            direction, line = match.group(1).casefold(), float(match.group(2))
+            for market_key, panel in panels.items():
+                if not any(alias in name for alias in aliases.get(market_key, ())):
+                    continue
+                if market_key == "shots" and any(x in name for x in ("shots on target", "shots on goal")):
+                    continue
+                if market_key == "half_time_goals" and not any(x in name for x in ("1st half", "first half", "half time", "half-time")):
+                    continue
+                probability = (_poisson_over if direction == "over" else _poisson_under)(
+                    float(panel["expected_total"]), line
+                )
+                try:
+                    odds = float(row.get("odds"))
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(odds) or odds <= 1:
+                    continue
+                output.append({
+                    "bookmaker": game.get("bookmaker") or "Unknown",
+                    "market": market_key, "market_name": row.get("market"),
+                    "selection": selection, "line": line, "odds": odds,
+                    "probability": probability, "implied_probability": 1 / odds,
+                    "edge": probability - (1 / odds),
+                    "expected_roi": probability * odds - 1,
+                })
+                break
+    return sorted(output, key=lambda x: (x["expected_roi"], x["edge"]), reverse=True)
+
+
 PLAYER_METRICS = {
     "shots": ("shots", "total"),
     "shots_on_target": ("shots", "on"),
@@ -185,7 +236,7 @@ def player_prop_forecast(home, away, match_date, player_name, metric, line,
     if metric_key not in PLAYER_METRICS:
         raise ValueError("Metric must be shots, shots_on_target, goals, assists, yellow_cards or red_cards.")
     target = date.fromisoformat(str(match_date)[:10])
-    fixtures = _get("fixtures", {"date": target.isoformat(), "timezone": "UTC"}, key, session)
+    fixtures = _get("fixtures", {"date": target.isoformat(), "timezone": "Africa/Nairobi"}, key, session)
     exact = []
     for row in fixtures:
         teams = row.get("teams") or {}
@@ -217,7 +268,7 @@ def player_prop_forecast(home, away, match_date, player_name, metric, line,
     player_id, team_id, resolved_name = next(iter(unique))
     recent = _get("fixtures", {
         "team": team_id, "last": int(last),
-        "to": (target - timedelta(days=1)).isoformat(), "timezone": "UTC",
+        "to": (target - timedelta(days=1)).isoformat(), "timezone": "Africa/Nairobi",
     }, key, session)
     category, field = PLAYER_METRICS[metric_key]
     observations = []
@@ -244,7 +295,7 @@ def player_prop_forecast(home, away, match_date, player_name, metric, line,
     mean = sum(observations) / len(observations)
     line_value = float(line)
     return {
-        "player": resolved_name, "metric": metric_key, "line": line_value,
+        "player": resolved_name, "player_id": player_id, "fixture_id": int((fixture.get("fixture") or {}).get("id")), "metric": metric_key, "line": line_value,
         "appearances": len(observations), "recent_values": observations,
         "expected_per_appearance": mean,
         "over_probability": _poisson_over(mean, line_value),
