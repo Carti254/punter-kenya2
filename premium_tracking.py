@@ -5,7 +5,7 @@ fixture/market/selection match exists; missing observations are reported, not gu
 """
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone\nfrom zoneinfo import ZoneInfo
 from database import get_connection
 
 
@@ -154,7 +154,7 @@ def rollover_status(user_id):
             "target": float(plan["rollover_target"]), "completed": completed,
             "remaining": max(0, int(plan["rollover_days"]) - completed),
             "wins": wins, "losses": losses, "entries": entries,
-            "status": "BROKEN" if losses else "COMPLETED" if completed >= int(plan["rollover_days"]) else "IN_PROGRESS",
+            "status": "BROKEN" if losses or any(r["result"] == "MISSED" for r in entries) else "COMPLETED" if completed >= int(plan["rollover_days"]) else "IN_PROGRESS",
         }
     finally:
         connection.close()
@@ -185,6 +185,6 @@ def record_rollover_day(user_id, result, actual_odds=None):
                 (user_id,plan_started,day_number,target_odds,result,actual_odds)
                 VALUES (%s,%s,%s,%s,%s,%s)
             """, (int(user_id), plan_started, day_number, status["target"], result, odds))
-        return {"day": day_number, "days": status["days"], "result": result, "status": "BROKEN" if result == "LOST" else "IN_PROGRESS"}
+        return {"day": day_number, "days": status["days"], "result": result, "status": "BROKEN" if result in {"LOST", "MISSED"} else "IN_PROGRESS"}
     finally:
         connection.close()
