@@ -7,9 +7,9 @@ Telegram-based football fixtures, match research, bookmaker-odds inspection and 
 - Browses football fixtures and competitions from the open-matchday dataset.
 - Displays fixture times in East Africa Time (Africa/Nairobi).
 - Provides form, goals, home/away, head-to-head, matchup, risk and match-intelligence reports where source data is available.
-- Reads the public, undocumented SportyBet Kenya football feed when that feed is accessible.
+- Reads public, undocumented Betika Kenya and SportyBet Kenya football odds feeds when those feeds are accessible.
 - Lets a user resolve selections against current SportyBet fixture/market IDs, review the selections and confirm creation of a genuine SportyBet share/booking code.
-- Includes manual slip management, calculator and experimental model-based analysis.
+- Includes manual and AI-assisted SportyBet slip management, calculator, bet logging, automatic results settlement and experimental model-based analysis.
 
 **Important limitations:** SportyBet endpoints are undocumented and can change, rate-limit or block requests. The bot does not log in to bookmaker accounts, deposit funds or place bets. A booking/share code is not a placed bet. Model probabilities are experimental and uncalibrated; they are not guarantees or financial advice. Unsupported or unavailable data must be shown as unavailable, not invented.
 
@@ -72,15 +72,15 @@ The database account needs permission to create and write the tables used by the
 - `/leaguefixtures COMPETITION [today|tomorrow]` — competition fixtures.
 - `/matchintel HOME vs AWAY` — match information.
 - `/form`, `/goals`, `/homeaway`, `/h2h`, `/strength`, `/matchup`, `/markets`, `/risk`, `/scenarios`, `/deepdive` — match research commands.
-- `/bookies` — check the SportyBet public feed.
+- `/bookies` — check both Betika and SportyBet public feeds.
 - `/odds HOME vs AWAY [today|tomorrow]` — inspect matched prices.
 - `/topvalue`, `/aipicks`, `/accumulator` — experimental scanner tools; may correctly return NO BET.
 - `/calculator ODDS STAKE` — calculate implied probability and potential return.
 - `/record`, `/oddshistory`, `/myslips` — prediction history, odds history and saved slips; require the optional database.
-- `/calibrate` — evaluate 1X2 forecast calibration on an earlier-training/later-holdout split; it refuses to fit with fewer than 50 training and 30 holdout forecasts and never changes live model settings automatically.
-- `/betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER]` — preserve the original odds and stake for a real bet you choose to log.
+- `/calibrate` — run a date-ordered walk-forward backtest from stored forecasts or reconstruct forecasts from historical competition results using only matches before each test date; fit on the first 70% of dates and evaluate on the final 30%. It requires at least 50 training and 30 holdout forecasts and never changes live model settings automatically.
+- `/betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER | YYYY-MM-DD]` — preserve original odds and stake; the fixture date is resolved from the fixture catalogue where uniquely possible.
 - `/betsettle BET_ID HOME_GOALS AWAY_GOALS` — settle a logged 1X2 or standard total-goals selection against the confirmed full-time score.
-- `/betstats` — report logged wins, losses, voids, profit/loss and ROI. This is separate from prediction accuracy.
+- `/betresults` — refresh completed match results and automatically settle pending logged bets only when home team, away team and match date match one unique result. A six-hour background job performs the same check when the database is enabled.\n- `/betstats` — report logged wins, losses, voids, profit/loss and ROI. This is separate from prediction accuracy.
 - `/fullintel` — full command directory.
 
 The Telegram menu also includes the SportyBet slip builder. It accepts one selection per line in this format:
@@ -96,8 +96,8 @@ The bot must show the resolved current selections and obtain confirmation before
 ## Data sources and bookmaker coverage
 
 - Fixtures and competition catalogue: [open-matchday](https://github.com/oladeeayo/open-matchday). This is a community-maintained dataset, not a real-time live-score service.
-- Bookmaker adapter: SportyBet Kenya only. Betika and BetPawa are not configured.
-- SportyBet's public endpoints are not a supported public API contract. Feed completeness and availability are not guaranteed.
+- Bookmaker adapters: Betika Kenya and SportyBet Kenya. BetPawa is not configured. Betika odds use the public `/v1/uo/matches` list and `/v1/uo/match?parent_match_id=` detail requests; these endpoints are undocumented.
+- SportyBet and Betika endpoints are not supported public API contracts. They may change, rate-limit or block requests. Malformed/incomplete feeds are surfaced as errors rather than silently treated as empty.
 
 ## Development and tests
 
