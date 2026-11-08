@@ -3942,15 +3942,42 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         )
         matched_events = 0
         unsupported = set()
+        prediction_unavailable = 0
+        market_rows_seen = 0
+        historical_cache = {}
         progress(f"Step 4/4: checking {len(day_fixtures)} fixtures against {len(day_games)} SportyBet events for {day.isoformat()}…")
-        for raw, fixture in day_fixtures:
-            prediction = build_openmatchday_prediction(raw, fixture)
-            if not prediction.get("available"):
+        for fixture_index, (raw, fixture) in enumerate(day_fixtures, 1):
+            home_name, away_name = fixture["home_team"], fixture["away_team"]
+            progress(f"{day.isoformat()}: fixture {fixture_index}/{len(day_fixtures)} — matching {home_name} vs {away_name}…")
+            # Match the live bookmaker event before downloading historical results.
+            # This avoids needless network calls for fixtures absent from SportyBet.
+            matches = find_bookmaker_event(day_games, home_name, away_name)
+            if not matches:
+                progress(f"{day.isoformat()}: no SportyBet match for {home_name} vs {away_name}.")
                 continue
-            matches = find_bookmaker_event(day_games, fixture["home_team"], fixture["away_team"])
+            matched_events += len(matches)
+            folder = str(raw.get("leagueShortcut") or "").strip()
+            if folder not in historical_cache:
+                try:
+                    historical_cache[folder] = fetch_openmatchday_csv(folder, "results") if folder else []
+                except Exception as exc:
+                    historical_cache[folder] = []
+                    logger.warning("Autobuild history fetch failed for %s: %s", folder, exc)
+            try:
+                prediction = build_openmatchday_prediction(raw, fixture, historical_rows=historical_cache[folder])
+            except Exception as exc:
+                prediction_unavailable += 1
+                logger.exception("Autobuild prediction failed for %s vs %s", home_name, away_name)
+                progress(f"{day.isoformat()}: prediction error for {home_name} vs {away_name} ({type(exc).__name__}).")
+                continue
+            if not prediction.get("available"):
+                prediction_unavailable += 1
+                progress(f"{day.isoformat()}: matched {home_name} vs {away_name}, but model data unavailable.")
+                continue
+            progress(f"{day.isoformat()}: matched {home_name} vs {away_name}; evaluating {sum(len(g.get('markets') or []) for g in matches)} market rows…")
             for game in matches:
-                matched_events += 1
                 for row in game.get("markets", []):
+                    market_rows_seen += 1
                     market_name = str(row.get("market") or "Unknown")
                     selection_name = str(row.get("selection") or "Unknown")
                     probability, reason = _market_probability_for_row(prediction, row)
@@ -4022,6 +4049,11 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         "outcome_id": row.get("outcome_id"),
                         "specifier": row.get("specifier") or row.get("handicap"),
                     })
+        diagnostics.append(
+            f"{day.isoformat()}: {matched_events} matched SportyBet events; "
+            f"{market_rows_seen} market rows inspected; {len(candidates)} total candidate rows accumulated; "
+            f"{prediction_unavailable} matched fixtures lacked usable model history"
+        )
         if not matched_events:
             diagnostics.append(f"{day.isoformat()}: no confidently matched SportyBet events")
         if unsupported:
