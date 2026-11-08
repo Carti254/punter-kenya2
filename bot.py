@@ -3519,7 +3519,9 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
 
     fixtures_by_day = {day: [] for day in target_dates}
     for raw, fixture in all_fixtures:
-        kickoff = fixture.get("kickoffUtc")
+        # upcoming_fixtures() returns normalise_fixture() records; their
+        # canonical timestamp field is kickoff_at (naive UTC), not kickoffUtc.
+        kickoff = fixture.get("kickoff_at") or fixture.get("kickoffUtc")
         try:
             parsed = datetime.fromisoformat(str(kickoff).replace("Z", "+00:00"))
             if parsed.tzinfo is None:
