@@ -2174,10 +2174,10 @@ async def autobuild_sportybet_command(update, context):
             if len(items) > shown:
                 fixture_lines.append(f"  – plus {len(items) - shown} other eligible selections")
             fixture_lines.append("")
-        fixture_text = "\\n".join(fixture_lines).strip()
+        fixture_text = "\n".join(fixture_lines).strip()
         # Telegram message limit is 4096 characters; split only between fixture blocks.
         chunks, current = [], ""
-        for block in fixture_text.split("\\n\\n"):
+        for block in fixture_text.split("\n\n"):
             candidate = (current + "\\n\\n" + block).strip() if current else block
             if len(candidate) > 3500 and current:
                 chunks.append(current)
