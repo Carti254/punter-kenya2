@@ -5971,6 +5971,29 @@ async def marketsim_command(update, context):
 
 
 
+async def sources_command(update, context):
+    """Show which optional research providers have keys configured in Railway."""
+    status = provider_key_status()
+    lines = [
+        "🔌 PUNTER KENYA — RESEARCH SOURCES",
+        "",
+        "BSD football API: " + ("KEY CONFIGURED" if status["BSD_API_KEY"] else "KEY MISSING"),
+        "PitchAPI: " + ("KEY CONFIGURED" if status["PITCHAPI_API_KEY"] else "KEY MISSING"),
+        "API-Football: " + ("KEY CONFIGURED" if status["API_FOOTBALL_KEY"] else "KEY MISSING"),
+        "Open-Meteo: no key required (not used to create betting probabilities).",
+        "",
+        "A configured key is not proof that the provider accepted it or covers a particular fixture. "
+        "Provider failures and missing statistics are logged internally; SportyBet remains the source "
+        "of the prices used in slip previews.",
+        "",
+        "Free key registration:",
+        "BSD: https://sports.bzzoiro.com/register/",
+        "PitchAPI: https://pitchapi.dev/",
+        "API-Football: https://www.api-football.com/",
+    ]
+    await reply(update, "\\n".join(lines))
+
+
 def main():
 
     if not BOT_TOKEN:
@@ -6026,6 +6049,7 @@ def main():
         ("leaguefixtures", leaguefixtures),
         ("matchintel", matchintel),
         ("fullintel", fullintel_command),
+        ("sources", sources_command),
         ("form", form_command),
         ("goals", goals_command),
         ("homeaway", homeaway_command),
