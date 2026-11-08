@@ -18,7 +18,13 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; PunterKenya/1.0)",
 }
 MARKET_IDS = "1,18,10,29,11,26,36,14,60100"
-SESSION = requests.Session()\n# Retry only idempotent reads. Never retry booking POSTs: a timeout may\n# occur after SportyBet has already minted a share code.\nSESSION.mount("https://", HTTPAdapter(max_retries=Retry(\n    total=2, connect=2, read=1, status=2, backoff_factor=0.4,\n    status_forcelist=(429, 500, 502, 503, 504),\n    allowed_methods=frozenset({"GET"}), respect_retry_after_header=True,\n)))
+SESSION = requests.Session()
+# Retry idempotent fixture reads only; a booking POST must never be retried.
+SESSION.mount("https://", HTTPAdapter(max_retries=Retry(
+    total=2, connect=2, read=1, status=2, backoff_factor=0.4,
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=frozenset({"GET"}), respect_retry_after_header=True,
+)))
 
 
 class SportyBetError(RuntimeError):
@@ -345,10 +351,12 @@ def create_booking(resolved):
         raise SportyBetError(f"SportyBet booking request failed: {type(exc).__name__}.") from None
     except ValueError:
         raise SportyBetError("SportyBet returned an unreadable booking response.") from None
-    if not isinstance(payload, dict) or payload.get("bizCode") not in (None, 10000):
+    if not isinstance(payload, dict) or payload.get("bizCode") != 10000:
         message = payload.get("message") if isinstance(payload, dict) else None
-        raise SportyBetError(str(message or "SportyBet did not accept these selections.")[:250])
+        raise SportyBetError(str(message or "SportyBet did not confirm the booking request.")[:250])
     data = payload.get("data") or {}
+    if not isinstance(data, dict):
+        raise SportyBetError("SportyBet returned an unexpected booking response.")
     code = data.get("shareCode")
     unavailable = data.get("unavailableOutcomes") or []
     accepted = data.get("outcomes") or []
