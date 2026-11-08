@@ -1445,9 +1445,9 @@ async def my_slips_command(update, context):
     try:
         rows = await asyncio.to_thread(list_slips, update.effective_user.id, 15)
         if not rows:
-            await reply(update, "🎟️ You have no saved slips yet. Choose 🤖 Build a slip from the menu.")
+            await reply(update, "🎟️ No internal slip records are saved yet. Use 🔄 Convert bet code for the supported Betika → SportyBet workflow.")
             return
-        lines = ["🎟️ YOUR SAVED SLIPS", ""]
+        lines = ["🎟️ YOUR INTERNAL SLIP RECORDS", ""]
         for row in rows:
             total = math.prod(float(x["odds"]) for x in row["selections"])
             lines.append(f"#{row['slip_id']} · {len(row['selections'])} legs · {total:.2f} odds · {row['bookmaker']}")
