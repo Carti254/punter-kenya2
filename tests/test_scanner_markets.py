@@ -58,7 +58,7 @@ class ScannerMarketTests(unittest.TestCase):
                  "bookmakers": {"SportyBet": {"games": [game]}}, "errors": {}
              }), \\
              patch("bot.find_bookmaker_event", return_value=[game]):
-            rows, _ = scan_value_candidates(("today",), "all")
+            rows, _ = scan_value_candidates(("today",), "BTTS,Under 2.5")
         labels = {(row["market"], row["selection"]) for row in rows}
         self.assertIn(("Both Teams To Score", "Yes"), labels)
         self.assertIn(("Total Goals Over/Under", "Under 2.5"), labels)
