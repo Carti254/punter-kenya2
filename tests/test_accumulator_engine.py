@@ -28,6 +28,11 @@ class AccumulatorEngineTests(unittest.TestCase):
         result = build_accumulator([{"home": "X", "away": "Y", "odds": 1.0, "probability": 0.8}], 2.0)
         self.assertEqual(result["selections"], [])
 
+    def test_single_longshot_does_not_satisfy_small_target(self):
+        result = build_accumulator([{"home": "Long", "away": "Shot", "odds": 22.0, "probability": 0.426}], 2.0)
+        self.assertFalse(result["target_reached"])
+        self.assertEqual(result["selections"], [])
+
     def test_ranking_is_validated(self):
         with self.assertRaises(ValueError):
             build_accumulator(self.candidates, 2.0, ranking="random")
