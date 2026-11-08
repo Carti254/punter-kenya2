@@ -198,3 +198,5 @@ def forecast_performance(limit=1000):
             ) / len(rows),
             "by_market": {k: {"count": len(v), "brier": sum(v)/len(v)} for k, v in groups.items()},
         }
+    finally:
+        connection.close()
