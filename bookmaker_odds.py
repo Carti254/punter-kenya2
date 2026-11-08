@@ -114,7 +114,7 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
                 "pageSize": 100,
                 "pageNum": page,
                 "todayGames": "false",
-                "timeline": 720,
+                "timeline": 10080,
                 "_t": int(time.time() * 1000),
             },
             headers=headers, timeout=(8, 20),
