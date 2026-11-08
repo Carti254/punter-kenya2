@@ -1232,7 +1232,7 @@ async def process_slip_flow(update, context):
                 await reply(update, "Please use: HOME TEAM vs AWAY TEAM. Example: Arsenal vs Chelsea.")
                 return True
             context.user_data.pop("slip_flow", None)
-            context.args = re.split(r"\\s+vs\\s+", message, maxsplit=1, flags=re.IGNORECASE)
+            context.args = re.split(r"\s+vs\s+", message, maxsplit=1, flags=re.IGNORECASE)
             await deepdive_command(update, context)
             return True
 
