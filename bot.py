@@ -5127,6 +5127,33 @@ async def council_command(update, context):
         await reply(update, f"Specialist research unavailable: {type(exc).__name__}: {str(exc)[:220]}")
 
 
+async def playerprop_command(update, context):
+    parts = [x.strip() for x in " ".join(context.args or []).split("|")]
+    if len(parts) not in (4, 5):
+        await reply(update, "Usage: /playerprop HOME vs AWAY | PLAYER NAME | METRIC | LINE [| YYYY-MM-DD]\nMetrics: shots, shots_on_target, goals, assists, yellow_cards, red_cards")
+        return
+    fixture = re.split(r"\\s+vs\\.?\\s+|\\s+v\\.?\\s+", parts[0], maxsplit=1, flags=re.I)
+    if len(fixture) != 2:
+        await reply(update, "Enter the fixture as HOME vs AWAY.")
+        return
+    match_date = parts[4] if len(parts) == 5 else datetime.now(EAT).date().isoformat()
+    try:
+        line = float(parts[3])
+        await reply(update, f"👤 PLAYER PROP RESEARCH\nChecking {parts[1]} recent appearances for {fixture[0]} vs {fixture[1]}...")
+        from specialist_models import player_prop_forecast
+        report = await asyncio.to_thread(player_prop_forecast, fixture[0].strip(), fixture[1].strip(),
+                                         match_date, parts[1], parts[2], line)
+        await reply(update,
+            f"👤 {report['player']} — {report['metric'].replace('_', ' ').title()}\n"
+            f"Recent appearances: {report['appearances']}\n"
+            f"Recent values: {', '.join(str(int(x) if x.is_integer() else x) for x in report['recent_values'])}\n"
+            f"Expected per appearance: {report['expected_per_appearance']:.2f}\n"
+            f"Over {line:g}: {report['over_probability']:.1%} | Under {line:g}: {report['under_probability']:.1%}\n"
+            f"{report['warning']}")
+    except Exception as exc:
+        await reply(update, f"Player prop unavailable: {type(exc).__name__}: {str(exc)[:220]}")
+
+
 async def xresearch_command(update, context):
     raw = " ".join(context.args or [])
     split = re.split(r"\\s+vs\\.?\\s+|\\s+v\\.?\\s+", raw, maxsplit=1, flags=re.I)
@@ -5297,7 +5324,7 @@ def main():
         ("performance", betstats_command),
         ("bankroll", bankroll_command),
         ("stake", stake_command),
-        ("rollover", rollover_command),\n        ("rolloverstatus", rolloverstatus_command),\n        ("rolloverday", rolloverday_command),\n        ("clv", clv_command),\n        ("council", council_command),\n        ("xresearch", xresearch_command),
+        ("rollover", rollover_command),\n        ("rolloverstatus", rolloverstatus_command),\n        ("rolloverday", rolloverday_command),\n        ("clv", clv_command),\n        ("council", council_command),\n        ("xresearch", xresearch_command),\n        ("playerprop", playerprop_command),
         ("marketsim", marketsim_command),
         ("betresults", betresults_command),
         ("marketdata", marketdata_command),
