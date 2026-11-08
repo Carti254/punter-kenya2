@@ -21,7 +21,7 @@ def grade_selection(market, selection, home_goals, away_goals):
 
     if market_key in {"overunder", "totalgoals", "goals"}:
         import re
-        match = re.fullmatch(r"(over|under|o|u)\\s*(\\d+(?:\\.\\d+)?)", pick)
+        match = re.fullmatch(r"(over|under|o|u)\s*(\d+(?:\.\d+)?)", pick)
         if not match:
             raise ValueError("Use a selection such as Over 2.5 or Under 3.5.")
         side = "over" if match.group(1) in {"over", "o"} else "under"
