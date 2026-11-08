@@ -47,6 +47,14 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
     # A beam keeps this practical for Telegram requests with large fixture slates.
     states = [([], 1.0, 1.0, frozenset(), 0)]
     completed = []
+
+    def completed_score(state):
+        if ranking == "probability":
+            return (state[2], state[1] * state[2], -len(state[0]))
+        if ranking == "odds":
+            return (state[1], state[1] * state[2], -len(state[0]))
+        return (state[1] * state[2], state[2], -len(state[0]))
+
     for _depth in range(max_legs):
         expanded = []
         for picks, odds_product, probability_product, used, start_index in states:
@@ -64,6 +72,9 @@ def build_accumulator(candidates, target_odds, max_legs=8, beam_width=1800, max_
                     completed.append(state)
                 else:
                     expanded.append(state)
+        # Bound completed-state memory on large fixture slates.
+        if len(completed) > beam_width * 4:
+            completed = sorted(completed, key=completed_score, reverse=True)[:beam_width * 2]
         if not expanded:
             break
         # Keep states near target and with stronger expected payout factors.
