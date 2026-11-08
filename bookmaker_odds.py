@@ -89,7 +89,12 @@ SPORTYBET_BASE = "https://www.sportybet.com/api/ke"
 
 def fetch_sportybet(day: date | None = None, max_pages=30):
     """Fetch all active SportyBet Kenya football markets and outcomes from its public JSON feed."""
-    day = day or datetime.now(EAT).date()
+    if day is None:
+        target_days = {datetime.now(EAT).date().isoformat()}
+    elif isinstance(day, (list, tuple, set, frozenset)):
+        target_days = {value.isoformat() if hasattr(value, 'isoformat') else str(value) for value in day}
+    else:
+        target_days = {day.isoformat() if hasattr(day, 'isoformat') else str(day)}
     headers = {
         "Accept": "application/json, text/plain, */*",
         "Current-Country": "KE",
@@ -134,7 +139,7 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
                 seen.add(str(event_id))
                 page_events += 1
                 kickoff = _eat_time(event.get("estimateStartTime"))
-                if not kickoff or kickoff[:10] != day.isoformat():
+                if not kickoff or kickoff[:10] not in target_days:
                     continue
                 markets = []
                 for market in event.get("markets", []) or []:
