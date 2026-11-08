@@ -4646,15 +4646,27 @@ async def calibrate_command(update, context):
                 "No calibration parameter has been fitted or applied. Keep the model labelled experimental.")
             return
         improved = result["calibrated_brier"] < result["raw_brier"] and result["calibrated_logloss"] < result["raw_logloss"]
+        candidate_improved = (
+            result.get("candidate_brier") is not None
+            and result.get("candidate_logloss") is not None
+            and result["candidate_brier"] < result["raw_brier"]
+            and result["candidate_logloss"] < result["raw_logloss"]
+            and result["candidate_brier"] < result["baseline_brier"]
+            and result["candidate_logloss"] < result["baseline_logloss"]
+        )
         await reply(update,
-            "📊 HISTORICAL CALIBRATION CHECK\n\n"
-            f"Forecast sample: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\n"
-            f"Data source: {result['source']}\n"
-            f"Fitted temperature: {result['temperature']:.2f}\n\n"
-            f"Holdout Brier: {result['raw_brier']:.4f} → {result['calibrated_brier']:.4f}\n"
-            f"Holdout log loss: {result['raw_logloss']:.4f} → {result['calibrated_logloss']:.4f}\n\n"
-            + ("Calibration improved both holdout metrics. It is a candidate for controlled deployment." if improved else "Calibration did not improve both holdout metrics. Keep the raw model; do not apply this temperature.")
-            + "\n\nThis is a diagnostic only: no live forecast settings are changed automatically.")
+            "📊 HISTORICAL MODEL VALIDATION\\n\\n"
+            f"Forecast sample: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\\n"
+            f"Data source: {result['source']}\\n"
+            f"Fitted temperature (not applied): {result['temperature']:.2f}\\n\\n"
+            f"Current model Brier: {result['raw_brier']:.4f} | calibrated: {result['calibrated_brier']:.4f}\\n"
+            f"Current model log loss: {result['raw_logloss']:.4f} | calibrated: {result['calibrated_logloss']:.4f}\\n"
+            f"Venue-weighted candidate: Brier {result['candidate_brier']:.4f} | log loss {result['candidate_logloss']:.4f}\\n"
+            f"Training-prevalence baseline: Brier {result['baseline_brier']:.4f} | log loss {result['baseline_logloss']:.4f}\\n\\n"
+            + ("Candidate beat both the current model and baseline on both metrics; it may proceed to further validation." if candidate_improved else "Candidate did not beat both the current model and baseline on both metrics. Do not promote it; keep the model experimental.")
+            + "\\n"
+            + ("Temperature calibration improved both holdout metrics." if improved else "Temperature calibration did not improve both holdout metrics and remains disabled.")
+            + "\\n\\nNo live prediction settings are changed automatically.")
     except Exception as exc:
         await reply(update, f"⚠️ Calibration evaluation failed: {type(exc).__name__}: {str(exc)[:250]}")
 
