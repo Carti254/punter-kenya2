@@ -4910,7 +4910,7 @@ async def matchintel(
                     f"• {item['home_team']} vs {item['away_team']}"
                     + (f" — {local_time:%d %b %H:%M EAT}" if local_time else "")
                 )
-    await reply(update, "\n".join(lines))
+            await reply(update, "\n".join(lines))
             return
 
         raw, item = candidates[0]
