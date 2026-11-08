@@ -19,8 +19,10 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; PunterKenya/1.0)",
 }
 MARKET_IDS = "1,18,10,29,11,26,36,14,60100"
-# Current PUNTER booking/share integration validation limit; do not silently exceed it.
-MAX_SELECTIONS = 20
+# SportyBet Kenya's published FAQ allows up to 50 selections on a normal
+# betslip (System bets are separately capped at 15). PUNTER creates normal
+# multiple slips, not System bets. Recheck the live endpoint response at booking.
+MAX_SELECTIONS = 50
 SESSION = requests.Session()
 # Retry idempotent fixture reads only; a booking POST must never be retried.
 SESSION.mount("https://", HTTPAdapter(max_retries=Retry(
