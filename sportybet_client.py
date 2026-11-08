@@ -61,7 +61,7 @@ def _get_fixtures():
 
 
 def _find_fixture(fixtures, fixture_text):
-    sides = re.split(r"\\s+vs\\.?\\s+|\\s+v\\.?\\s+", fixture_text.strip(), maxsplit=1, flags=re.I)
+    sides = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", fixture_text.strip(), maxsplit=1, flags=re.I)
     if len(sides) != 2 or not all(sides):
         raise SportyBetError(f'Fixture "{fixture_text}" must use HOME vs AWAY.')
     home_q, away_q = map(_norm, sides)
