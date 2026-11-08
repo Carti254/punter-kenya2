@@ -1814,23 +1814,23 @@ async def autobuild_sportybet_command(update, context):
         chosen, product, used = [], 1.0, set()
         for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
             key = (item["home"], item["away"])
-            if key in used or item["ev"] < 0.03:
+            if key in used:
                 continue
             chosen.append(item); used.add(key); product *= float(item["odds"])
             if product >= target or len(chosen) >= 20:
                 break
-        if not chosen or product < target:
-            await reply(update, f"🚫 NO SPORTYBET SLIP GENERATED\\nCould not reach {target:.2f} using SportyBet-priced selections passing the existing probability (62%) and estimated EV (+3%) filters. No weak legs were added.\\n" + ("Feed notes: " + "; ".join(diagnostics[:4]) if diagnostics else "No qualifying SportyBet prices were found."))
+        if not chosen:
+            await reply(update, "⚠️ NO USABLE SPORTYBET PICKS FOUND\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No SportyBet-priced, model-supported candidates were found."))
             return
         raw_lines = [f"{x['home']} vs {x['away']} | {x['market']} | {x['selection']}" for x in chosen]
         resolved = await asyncio.to_thread(prepare_sportybet_slip, raw_lines)
         context.user_data["pending_sportybet_booking"] = resolved
         combined = math.prod(float(x["odds"]) for x in resolved)
-        lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f}", f"Selections: {len(resolved)}", ""]
+        lines = ["🤖 SPORTYBET KENYA — AI-ASSISTED SLIP PREVIEW", f"Target: {target:.2f} | Actual current odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"), f"Selections: {len(resolved)}", ""]
         for i, leg in enumerate(resolved, 1):
             source = chosen[i-1]
             lines.append(f"{i}. {leg['fixture']}\\n   {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}\\n   Model probability: {source['probability']:.1%} | Estimated EV: {source['ev']:+.1%}")
-        lines.extend(["", "Model is experimental and uncalibrated. Only markets supported by available scoreline data are evaluated; corners, cards, player and half-time markets are not guessed. Odds are re-resolved from SportyBet before code creation. Confirm to request a genuine booking code; no bet is placed."])
+        lines.extend(["", "Model remains experimental and not historically calibrated. Negative-EV legs are shown transparently. Only scoreline-supported markets are evaluated. Odds are re-resolved before code creation. Confirming requests a share code only; no bet is placed."])
         await update.effective_message.reply_text("\\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel")]]))
     except Exception as exc:
         logger.exception("SportyBet auto-builder failed")
