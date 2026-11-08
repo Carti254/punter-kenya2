@@ -2090,6 +2090,11 @@ async def autobuild_sportybet_command(update, context):
         for live_leg, model_leg in zip(resolved, chosen):
             live_leg["probability"] = float(model_leg["probability"])
             live_leg["ev"] = model_leg.get("ev")
+            live_leg["edge"] = model_leg.get("edge")
+            live_leg["value_tier"] = model_leg.get("value_tier")
+            live_leg["research_evidence"] = model_leg.get("research_evidence") or {}
+            live_leg["research_checks"] = model_leg.get("research_checks") or []
+            live_leg["research_gaps"] = model_leg.get("research_gaps") or []
             live_leg["probability_source"] = model_leg.get("probability_source") or "PUNTER statistical model"
         combined = math.prod(float(x["odds"]) for x in resolved)
         combined_probability = math.prod(float(x["probability"]) for x in resolved)
@@ -2112,6 +2117,20 @@ async def autobuild_sportybet_command(update, context):
             )
             assessment = "Positive estimated value" if float(leg.get("ev") or 0) > 0 else "Break-even estimate; no positive edge established"
             lines.append(f"   Internal price assessment: {assessment}")
+            evidence = leg.get("research_evidence") or {}
+            lines.append(
+                f"   Form: {evidence.get('home_form') or 'n/a'} / {evidence.get('away_form') or 'n/a'} "
+                f"({evidence.get('home_sample') or 0}/{evidence.get('away_sample') or 0} matches)"
+            )
+            lines.append(
+                f"   Venue samples: home {evidence.get('home_home_sample') or 0}; "
+                f"away {evidence.get('away_away_sample') or 0}; H2H {evidence.get('h2h_count') or 0}"
+            )
+            if evidence.get("expected_home_goals") is not None and evidence.get("expected_away_goals") is not None:
+                lines.append(
+                    f"   Model goal rates: {float(evidence['expected_home_goals']):.2f}–"
+                    f"{float(evidence['expected_away_goals']):.2f}"
+                )
 
         lines.extend([
             "",
