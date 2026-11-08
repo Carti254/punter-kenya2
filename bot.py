@@ -5270,29 +5270,6 @@ async def xresearch_command(update, context):
         await reply(update, f"X research unavailable: {type(exc).__name__}: {str(exc)[:220]}")
 
 
-async def forecastperformance_command(update, context):
-    try:
-        from forecast_tracker import forecast_performance
-        result = await asyncio.to_thread(forecast_performance)
-        if not result["count"]:
-            await reply(update, "No settled specialist forecasts yet. Run /council on upcoming fixtures; completed results will be matched automatically.")
-            return
-        lines = [
-            "📈 SPECIALIST FORECAST PERFORMANCE",
-            f"Settled forecasts: {result['count']}",
-            f"Brier score: {result['brier']:.4f} (lower is better)",
-            f"Log loss: {result['log_loss']:.4f} (lower is better)",
-            "",
-            "By market:",
-        ]
-        for market, stats in sorted(result["by_market"].items()):
-            lines.append(f"{market}: n={stats['count']} | Brier {stats['brier']:.4f}")
-        lines.append("Experimental historic record; not proof of profitability.")
-        await reply(update, "\n".join(lines))
-    except Exception as exc:
-        await reply(update, f"Forecast performance unavailable: {type(exc).__name__}: {str(exc)[:180]}")
-
-
 async def clv_command(update, context):
     try:
         report = await asyncio.to_thread(closing_line_value, update.effective_user.id)
@@ -5496,7 +5473,8 @@ def main():
         ("rollover", rollover_command),
         ("rolloverstatus", rolloverstatus_command),
         ("rolloverday", rolloverday_command),
-        ("clv", clv_command),\n        ("forecastperformance", forecastperformance_command),
+        ("clv", clv_command),
+        ("forecaststats", forecaststats_command),
         ("council", council_command),
         ("forecastsettle", forecastsettle_command),
         ("forecaststats", forecaststats_command),
