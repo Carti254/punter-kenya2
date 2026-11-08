@@ -1918,7 +1918,12 @@ async def aipicks_status_command(update, context):
 
 
 async def autobuild_sportybet_command(update, context):
-    args = list(context.args or [])
+    # Parse the actual Telegram message as well as context.args. This prevents
+    # another handler/wrapper from silently dropping the user's requested odds.
+    message_text = str(getattr(update.effective_message, "text", "") or "").strip()
+    message_parts = message_text.split(maxsplit=1)
+    raw_tail = message_parts[1].strip() if len(message_parts) > 1 else ""
+    args = raw_tail.split() if raw_tail else list(context.args or [])
     target = 2.0
     # Accept decimal odds and shorthand such as /autobuild 50odds.
     if args and re.fullmatch(r"\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
