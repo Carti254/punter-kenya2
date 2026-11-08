@@ -88,46 +88,74 @@ def _market(provider, market, selection, price, handicap=None):
 SPORTYBET_BASE = "https://www.sportybet.com/api/ke"
 
 
-def fetch_sportybet(day: date | None = None, max_pages=30):
-    """Fetch all active SportyBet Kenya football markets and outcomes from its public JSON feed."""
+def _sportybet_parse_markets(markets):
+    parsed = []
+    for market in markets or []:
+        if not isinstance(market, dict):
+            continue
+        if int(market.get("status", 0) or 0) != 0 or market.get("banned") is True:
+            continue
+        market_name = market.get("desc") or market.get("name") or market.get("id") or "Unknown market"
+        market_id = str(market.get("id") or "")
+        specifier = market.get("specifier")
+        for outcome in market.get("outcomes", []) or []:
+            if not isinstance(outcome, dict) or int(outcome.get("isActive", 0) or 0) != 1:
+                continue
+            selection = outcome.get("desc") or outcome.get("name") or outcome.get("id")
+            item = _market("SportyBet", market_name, selection, outcome.get("odds"), handicap=specifier)
+            if item:
+                item["market_id"] = market_id
+                item["outcome_id"] = str(outcome.get("id") or "")
+                item["specifier"] = specifier
+                parsed.append(item)
+    return parsed
+
+
+def fetch_sportybet(day: date | None = None, max_pages=60):
+    """Fetch target-date SportyBet events, then retrieve each event's full market catalogue."""
     if day is None:
         target_days = {datetime.now(EAT).date().isoformat()}
     elif isinstance(day, (list, tuple, set, frozenset)):
-        target_days = {value.isoformat() if hasattr(value, 'isoformat') else str(value) for value in day}
+        target_days = {value.isoformat() if hasattr(value, "isoformat") else str(value) for value in day}
     else:
-        target_days = {day.isoformat() if hasattr(day, 'isoformat') else str(day)}
+        target_days = {day.isoformat() if hasattr(day, "isoformat") else str(day)}
+
     headers = {
         "Accept": "application/json, text/plain, */*",
         "Current-Country": "KE",
         "Referer": "https://www.sportybet.com/ke/sport/football",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/134.0.0.0 Safari/537.36",
     }
-    games, seen = [], set()
+    events_by_id = {}
+    seen = set()
     for page in range(1, max_pages + 1):
         payload = _get(
             SPORTYBET_BASE + "/factsCenter/pcUpcomingEvents",
             params={
                 "sportId": "sr:sport:1",
-                # SportyBet's web feed expects an explicit market catalogue.
-                # These IDs cover the common pre-match football markets; each
-                # event's returned markets are still parsed dynamically.
-                "marketId": "1,18,10,29,11,26,36,14,60100",
+                # marketId=1 is a lightweight event index. option=2 is the
+                # complete fixture list; option=1 is the highlights-only view.
+                # Full market catalogues are fetched from factsCenter/event below.
+                "marketId": "1",
                 "pageSize": 100,
                 "pageNum": page,
-                "option": "2",  # Full upcoming-event catalogue; option=1 is highlights-only.
+                "option": "2",
                 "todayGames": "false",
                 "timeline": 720,
                 "_t": int(time.time() * 1000),
             },
-            headers=headers, timeout=(8, 20),
+            headers=headers,
+            timeout=(8, 20),
         )
         if not isinstance(payload, dict) or int(payload.get("bizCode", 0) or 0) != 10000:
             code = payload.get("bizCode") if isinstance(payload, dict) else "invalid"
             raise ValueError(f"SportyBet rejected the public feed (bizCode={code}).")
+
         data = payload.get("data") or {}
         tournaments = data.get("tournaments", []) if isinstance(data, dict) else []
         if not isinstance(tournaments, list):
             raise ValueError("SportyBet returned an unexpected event catalogue.")
+
         page_events = 0
         for tournament in tournaments:
             if not isinstance(tournament, dict):
@@ -135,45 +163,98 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
             for event in tournament.get("events", []) or []:
                 if not isinstance(event, dict):
                     continue
-                event_id = event.get("eventId")
-                if not event_id or str(event_id) in seen:
+                event_id = str(event.get("eventId") or "").strip()
+                if not event_id or event_id in seen:
                     continue
-                seen.add(str(event_id))
+                seen.add(event_id)
                 page_events += 1
                 kickoff = _eat_time(event.get("estimateStartTime"))
                 if not kickoff or kickoff[:10] not in target_days:
                     continue
-                markets = []
-                for market in event.get("markets", []) or []:
-                    if not isinstance(market, dict):
-                        continue
-                    market_name = market.get("desc") or market.get("name") or market.get("id") or "Unknown market"
-                    market_id = str(market.get("id") or "")
-                    specifier = market.get("specifier")
-                    for outcome in market.get("outcomes", []) or []:
-                        if not isinstance(outcome, dict) or int(outcome.get("isActive", 0) or 0) != 1:
-                            continue
-                        selection = outcome.get("desc") or outcome.get("name") or outcome.get("id")
-                        item = _market("SportyBet", market_name, selection, outcome.get("odds"), handicap=specifier)
-                        if item:
-                            item["market_id"] = market_id
-                            item["outcome_id"] = str(outcome.get("id") or "")
-                            item["specifier"] = specifier
-                            markets.append(item)
-                if markets:
-                    games.append({
-                        "bookmaker": "SportyBet", "event_id": str(event_id),
-                        "home": event.get("homeTeamName"), "away": event.get("awayTeamName"),
-                        "competition": tournament.get("name") or tournament.get("categoryName"),
-                        "kickoff_eat": kickoff, "markets": markets,
-                        "url": "https://www.sportybet.com/ke/sport/football",
-                        "fetched_at": datetime.now(timezone.utc).isoformat(),
-                    })
+                try:
+                    kickoff_dt = datetime.strptime(kickoff, "%Y-%m-%d %H:%M").replace(tzinfo=EAT)
+                except ValueError:
+                    continue
+                if kickoff_dt <= datetime.now(EAT):
+                    continue
+                events_by_id[event_id] = {
+                    "event": event,
+                    "event_id": event_id,
+                    "home": event.get("homeTeamName"),
+                    "away": event.get("awayTeamName"),
+                    "competition": tournament.get("name") or tournament.get("categoryName"),
+                    "kickoff_eat": kickoff,
+                    "index_markets": event.get("markets") or [],
+                }
+
         total = int(data.get("totalNum", 0) or 0) if isinstance(data, dict) else 0
         if not tournaments or page_events == 0 or (total and len(seen) >= total):
             break
-        time.sleep(0.25)
-    return games
+        time.sleep(0.2)
+
+    def price_one(record):
+        event_id = record["event_id"]
+        detail_error = None
+        markets = []
+        market_source = "event_detail"
+        try:
+            detail_payload = _get(
+                SPORTYBET_BASE + "/factsCenter/event",
+                params={
+                    "eventId": event_id,
+                    "productId": "3",
+                    "_t": int(time.time() * 1000),
+                },
+                headers=headers,
+                timeout=(8, 20),
+            )
+            if not isinstance(detail_payload, dict) or int(detail_payload.get("bizCode", 0) or 0) != 10000:
+                code = detail_payload.get("bizCode") if isinstance(detail_payload, dict) else "invalid"
+                raise ValueError(f"SportyBet event detail rejected (bizCode={code}).")
+            detail_data = detail_payload.get("data") or {}
+            if isinstance(detail_data, list):
+                detail_data = detail_data[0] if detail_data and isinstance(detail_data[0], dict) else {}
+            if isinstance(detail_data, dict) and isinstance(detail_data.get("event"), dict):
+                detail_data = detail_data["event"]
+            detail_markets = detail_data.get("markets") if isinstance(detail_data, dict) else None
+            if isinstance(detail_markets, list) and detail_markets:
+                markets = _sportybet_parse_markets(detail_markets)
+            else:
+                raise ValueError("SportyBet event detail contained no market catalogue.")
+        except Exception as exc:
+            detail_error = f"{type(exc).__name__}: {str(exc)[:180]}"
+            market_source = "index_fallback"
+            LOG.warning("SportyBet full market detail failed for %s: %s", event_id, detail_error)
+
+        if not markets:
+            markets = _sportybet_parse_markets(record.get("index_markets"))
+
+        if not markets:
+            return None
+
+        return {
+            "bookmaker": "SportyBet",
+            "event_id": event_id,
+            "home": record.get("home"),
+            "away": record.get("away"),
+            "competition": record.get("competition"),
+            "kickoff_eat": record.get("kickoff_eat"),
+            "markets": markets,
+            "market_source": market_source,
+            "market_count": len(markets),
+            "detail_error": detail_error,
+            "url": "https://www.sportybet.com/ke/sport/football",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    # Fetch full markets concurrently, but keep concurrency bounded because
+    # SportyBet's public web API is undocumented and has no published rate limit.
+    if not events_by_id:
+        return []
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        priced = list(executor.map(price_one, events_by_id.values()))
+    return [game for game in priced if game]
 
 
 BETIKA_BASE = "https://api.betika.com/v1/uo"
