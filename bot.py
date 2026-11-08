@@ -4687,7 +4687,9 @@ def main():
         .build()
     )
 
-    if database_enabled and app.job_queue is not None:\n        app.job_queue.run_repeating(automatic_bet_settlement_job, interval=6 * 60 * 60, first=60, name="automatic-bet-results")\n\n    handlers = [
+    if database_enabled and app.job_queue is not None:
+        app.job_queue.run_repeating(automatic_bet_settlement_job, interval=6 * 60 * 60, first=60, name="automatic-bet-results")
+
         ("start", start),
         ("help", help_command),
         ("about", about),
@@ -4713,7 +4715,8 @@ def main():
         ("calibrate", calibrate_command),
         ("betlog", betlog_command),
         ("betsettle", betsettle_command),
-        ("betstats", betstats_command),\n        ("betresults", betresults_command),
+        ("betstats", betstats_command),
+        ("betresults", betresults_command),
         ("fixtures", fixtures),
         ("syncfixtures", syncfixtures),
         ("live", live),
