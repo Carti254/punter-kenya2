@@ -15,6 +15,10 @@ class BookmakerOddsTests(unittest.TestCase):
         games = [{"home": "Brentford", "away": "Brighton", "markets": []}]
         self.assertEqual(find_event(games, "Brighton", "Brentford"), [])
 
+    def test_provider_name_with_extra_club_words_matches(self):
+        games = [{"home": "Brighton and Hove Albion", "away": "AFC Wimbledon", "markets": []}]
+        self.assertEqual(len(find_event(games, "Brighton", "Wimbledon")), 1)
+
     def test_ambiguous_fixture_is_rejected(self):
         games = [
             {"home": "Arsenal FC", "away": "Chelsea FC"},
