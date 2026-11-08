@@ -1818,20 +1818,19 @@ async def aipicks_status_command(update, context):
 async def autobuild_sportybet_command(update, context):
     args = list(context.args or [])
     target = 5.0
-    if args:
-        try:
-            target = float(args[0])
-            if not math.isfinite(target) or target <= 1.0:
-                raise ValueError
-            args = args[1:]
-        except ValueError:
-            pass
+    if args and re.fullmatch(r"\d+(?:\.\d+)?", str(args[0])):
+        target = float(args.pop(0))
+        if not math.isfinite(target) or target <= 1.0:
+            await reply(update, "Target odds must be a finite decimal number greater than 1.00.")
+            return
     rank_mode = "value"
     market_parts = []
     for token in args:
         lowered = token.casefold()
         if lowered.startswith("rank="):
             rank_mode = lowered.split("=", 1)[1]
+        elif lowered.startswith("market="):
+            market_parts.append(token.split("=", 1)[1])
         elif lowered in ("value", "odds", "probability"):
             rank_mode = lowered
         else:
@@ -1839,8 +1838,8 @@ async def autobuild_sportybet_command(update, context):
     if rank_mode not in ("value", "odds", "probability"):
         await reply(update, "Ranking must be value, odds or probability.")
         return
-    market_filter = " ".join(market_parts) if market_parts else "all"
-    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\nTarget combined odds: {target:.2f}\nMarket filter: {market_filter}\nRanking: {rank_mode}\nScanning available model-supported SportyBet markets…")
+    market_filter = ",".join(market_parts) if market_parts else "all"
+    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\nTarget combined odds: {target:.2f}\nMarket filter: {market_filter}\nRanking: {rank_mode}\nScanning available model-supported SportyBet markets…\n\nControls: /autobuild 5 BTTS rank=odds | /autobuild 20 Correct Score rank=odds | /autobuild 10 market=1X2,Under 2.5 rank=value")
     try:
         rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), market_filter)
         rows = [x for x in rows if str(x.get("bookmaker", "")).casefold() == "sportybet"]
@@ -3441,8 +3440,25 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                             unsupported.add(market_name)
                         continue
                     if market_filter not in ("all", "safest"):
-                        wanted = _normal_market_text(market_filter)
-                        if wanted not in _normal_market_text(market_name) and wanted not in _normal_market_text(selection_name):
+                        aliases = {
+                            "btts": "both teams to score",
+                            "goals": "total goals",
+                            "totals": "total goals",
+                            "dnb": "draw no bet",
+                            "dc": "double chance",
+                            "correctscore": "correct score",
+                            "ht": "half time",
+                        }
+                        wanted_filters = [
+                            aliases.get(_normal_market_text(value), _normal_market_text(value))
+                            for value in str(market_filter).split(",") if value.strip()
+                        ]
+                        market_text = _normal_market_text(market_name)
+                        selection_text = _normal_market_text(selection_name)
+                        if wanted_filters and not any(
+                            wanted in market_text or wanted in selection_text
+                            for wanted in wanted_filters
+                        ):
                             continue
                     odds = row.get("odds")
                     if probability <= 0 or probability >= 1 or not odds or odds <= 1:
