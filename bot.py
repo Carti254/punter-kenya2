@@ -1925,7 +1925,8 @@ async def autobuild_sportybet_command(update, context):
         if not math.isfinite(target) or target <= 1.0:
             await reply(update, "Target odds must be a finite decimal number greater than 1.00.")
             return
-    rank_mode = "value"
+    # High targets use an aggressive, odds-led profile by default; lower targets use value ranking.
+    rank_mode = "odds" if target >= 10.0 else "value"
     market_parts = []
     for token in args:
         lowered = token.casefold()
@@ -1941,7 +1942,7 @@ async def autobuild_sportybet_command(update, context):
         await reply(update, "Ranking must be value, odds or probability.")
         return
     market_filter = ",".join(market_parts) if market_parts else "all"
-    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\nTarget combined odds: {target:.2f}\nMarket filter: {market_filter}\nRanking: {rank_mode}\nScanning available model-supported SportyBet markets…\n\nControls: /autobuild 5 BTTS rank=odds | /autobuild 20 Correct Score rank=odds | /autobuild 10 market=1X2,Under 2.5 rank=value")
+    await reply(update, f"🤖 BUILDING A SPORTYBET SLIP\nTarget combined odds: {target:.2f}\nMarket filter: {market_filter}\nRisk profile: {("AGGRESSIVE / ODDS-LED" if rank_mode == "odds" else "VALUE-LED")}\nScanning available model-supported SportyBet markets…\n\nControls: /autobuild 5 BTTS rank=odds | /autobuild 20 Correct Score rank=odds | /autobuild 10 market=1X2,Under 2.5 rank=value")
     try:
         rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet")
         rows = [x for x in rows if str(x.get("bookmaker", "")).casefold() == "sportybet"]
@@ -1968,7 +1969,7 @@ async def autobuild_sportybet_command(update, context):
         for i, leg in enumerate(resolved, 1):
             source = chosen[i-1]
             lines.append(f"{i}. {leg['fixture']}\n   {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}\n   Model probability: {source['probability']:.1%} | Estimated EV: {source['ev']:+.1%}")
-        lines.extend(["", "Model remains experimental and not historically calibrated. Negative-EV legs are shown transparently. Only scoreline-supported markets are evaluated. Odds are re-resolved before code creation. Confirming requests a share code only; no bet is placed."])
+        lines.extend(["", "AGGRESSIVE target-building may include high-variance and negative-EV legs. Model estimates are experimental and not historically calibrated; review each leg and its risk. Only scoreline-supported markets are evaluated. Odds are re-resolved before code creation. Confirming requests a share code only; no bet is placed."])
         if not within_target_band:
             lines.append(f"Requested target band: {target:.2f}–{target * 1.20:.2f}. No booking code will be offered.")
         markup = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Generate SportyBet code", callback_data="sb:confirm"), InlineKeyboardButton("✖️ Cancel", callback_data="sb:cancel")]]) if within_target_band else None
