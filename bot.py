@@ -2863,7 +2863,7 @@ async def leaguefixtures(
             selected,
             f"⚽ PUNTER KENYA  ·  {league_name.upper()}\n🏟 {len(selected)} matches · {day_label}",
         )
-    await reply(update, "\n".join(lines))
+        await reply(update, "\n".join(lines))
 
     except Exception as exc:
         logger.exception("League fixture retrieval failed")
@@ -2999,7 +2999,7 @@ async def fixtures(
             lines.extend(["", f"➡️ NEXT PAGE  /fixtures {day_filter + ' ' if day_filter else ''}{page + 1}"])
         if page > 1:
             lines.append(f"⬅️ PREVIOUS PAGE  /fixtures {day_filter + ' ' if day_filter else ''}{page - 1}")
-    await reply(update, "\n".join(lines))
+        await reply(update, "\n".join(lines))
 
     except Exception as exc:
         logger.exception("Fixture retrieval failed")
