@@ -168,7 +168,7 @@ def specialist_price_assessments(report, bookmaker_games):
     import re
     aliases = {
         "corners": ("corner",),
-        "cards": ("yellow card", "total cards"),
+        "cards": ("yellow card",),
         "shots": ("total shots", "shots"),
         "shots_on_target": ("shots on target", "shots on goal"),
         "half_time_goals": ("1st half", "first half", "half time", "half-time"),
@@ -182,12 +182,14 @@ def specialist_price_assessments(report, bookmaker_games):
         for row in game.get("markets") or []:
             name = str(row.get("market") or "").casefold()
             selection = str(row.get("selection") or "").strip()
-            match = re.search(r"\\b(over|under)\\s+(\\d+(?:\\.\\d+)?)", selection, re.I)
+            match = re.search(r"\b(over|under)\s+(\d+(?:\.\d+)?)", selection, re.I)
             if not match:
                 continue
             direction, line = match.group(1).casefold(), float(match.group(2))
             for market_key, panel in panels.items():
                 if not any(alias in name for alias in aliases.get(market_key, ())):
+                    continue
+                if market_key == "shots" and any(x in name for x in ("shots on target", "shots on goal")):
                     continue
                 if market_key == "half_time_goals" and not any(x in name for x in ("1st half", "first half", "half time", "half-time")):
                     continue
