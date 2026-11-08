@@ -3041,6 +3041,14 @@ def build_pre_match_prediction(raw_fixture, fixture):
         "away_form": "".join(x["result"] for x in reversed(away_results)),
         "home_recent_matches": home_results,
         "away_recent_matches": away_results,
+        "home_home_sample": len(home_venue_results),
+        "away_away_sample": len(away_venue_results),
+        "home_home_gf": (sum(x["gf"] for x in home_venue_results) / len(home_venue_results)) if home_venue_results else None,
+        "home_home_ga": (sum(x["ga"] for x in home_venue_results) / len(home_venue_results)) if home_venue_results else None,
+        "away_away_gf": (sum(x["gf"] for x in away_venue_results) / len(away_venue_results)) if away_venue_results else None,
+        "away_away_ga": (sum(x["ga"] for x in away_venue_results) / len(away_venue_results)) if away_venue_results else None,
+        "h2h_count": len(h2h_results),
+        "h2h_results": h2h_results,
         "lambda_home": lambda_home,
         "lambda_away": lambda_away,
         "home_win": home_win,
@@ -3199,6 +3207,37 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
     probabilities = {"1": home_win, "X": draw, "2": away_win}
     top_outcome = max(probabilities, key=probabilities.get)
     confidence = "LOW" if len(home_results) + len(away_results) < 14 else "MODERATE"
+
+    # Same-competition head-to-head sample, restricted to completed results
+    # already available before this fixture's forecast cutoff.
+    h2h_results = []
+    home_name, away_name = fixture["home_team"], fixture["away_team"]
+    for result_row in rows:
+        rh = str(result_row.get("home") or "").strip()
+        ra = str(result_row.get("away") or "").strip()
+        if not rh or not ra:
+            continue
+        direct = team_name_matches_query(home_name, rh) and team_name_matches_query(away_name, ra)
+        reverse = team_name_matches_query(home_name, ra) and team_name_matches_query(away_name, rh)
+        if not (direct or reverse):
+            continue
+        try:
+            rhg, rag = int(result_row.get("ft_home")), int(result_row.get("ft_away"))
+        except (TypeError, ValueError):
+            continue
+        try:
+            rdate = datetime.strptime(str(result_row.get("date") or ""), "%Y-%m-%d")
+        except ValueError:
+            rdate = None
+        h2h_results.append({
+            "date": rdate,
+            "home_goals": rhg if direct else rag,
+            "away_goals": rag if direct else rhg,
+        })
+    h2h_results.sort(key=lambda item: item["date"] or datetime.min, reverse=True)
+    h2h_results = h2h_results[:5]
+    home_venue_results = [match for match in home_results if match["venue"] == "H"]
+    away_venue_results = [match for match in away_results if match["venue"] == "A"]
 
     return {
         "available": True,
@@ -3783,6 +3822,25 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         "market_key": _normal_market_text(market_name) + "|" + _normal_market_text(selection_name),
                         "odds": odds, "probability": probability, "ev": ev,
                         "fair_odds": 1 / probability,
+                        "model_confidence": prediction.get("confidence"),
+                        "home_form": prediction.get("home_form"),
+                        "away_form": prediction.get("away_form"),
+                        "home_sample": prediction.get("home_results"),
+                        "away_sample": prediction.get("away_results"),
+                        "home_scored_avg": prediction.get("home_scored"),
+                        "home_conceded_avg": prediction.get("home_conceded"),
+                        "away_scored_avg": prediction.get("away_scored"),
+                        "away_conceded_avg": prediction.get("away_conceded"),
+                        "home_home_sample": prediction.get("home_home_sample"),
+                        "away_away_sample": prediction.get("away_away_sample"),
+                        "home_home_gf": prediction.get("home_home_gf"),
+                        "home_home_ga": prediction.get("home_home_ga"),
+                        "away_away_gf": prediction.get("away_away_gf"),
+                        "away_away_ga": prediction.get("away_away_ga"),
+                        "h2h_count": prediction.get("h2h_count", 0),
+                        "h2h_results": prediction.get("h2h_results", []),
+                        "lambda_home": prediction.get("lambda_home"),
+                        "lambda_away": prediction.get("lambda_away"),
                         "kickoff": game.get("kickoff_eat") or fixture.get("kickoffUtc"),
                         "url": game.get("url"),
                         "event_id": game.get("event_id"),
