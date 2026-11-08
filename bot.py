@@ -5157,20 +5157,6 @@ async def council_command(update, context):
     try:
         from specialist_models import specialist_council
         report = await asyncio.to_thread(specialist_council, home, away, match_date)
-        forecasts_saved = 0
-        fixture_id = int(report.get("fixture_id") or 0)
-        if fixture_id:
-            from forecast_tracker import record_forecast
-            for panel in report["panels"]:
-                if not panel.get("available"):
-                    continue
-                line = float(panel["default_line"])
-                for direction, probability in (("Over", panel["over_probability"]), ("Under", panel["under_probability"])):
-                    await asyncio.to_thread(
-                        record_forecast, f"api-football:{fixture_id}", panel["market"],
-                        f"{direction} {line:g}", probability,
-                    )
-                    forecasts_saved += 1
         lines = [f"🧠 SPECIALIST COUNCIL — {report['fixture']}", f"Date: {report['date']}", ""]
         for panel in report["panels"]:
             if not panel["available"]:
@@ -5183,10 +5169,15 @@ async def council_command(update, context):
                     market_key, selection, panel["over_probability"], None,
                     "specialist-poisson-v1",
                 )
+                await asyncio.to_thread(
+                    record_forecast, f"api-football:{report['fixture_id']}",
+                    market_key, f"Under {panel['default_line']}",
+                    panel["under_probability"], None, "specialist-poisson-v1",
+                )
                 lines.append(f"{panel['role']}: expected total {panel['expected_total']:.2f}; Over {panel['default_line']} {panel['over_probability']:.1%}; Under {panel['default_line']} {panel['under_probability']:.1%}; samples {panel['home_sample']}+{panel['away_sample']} | forecast #{forecast_id}")
         lines.extend(["", "Player props: " + report["player_props"]["reason"], report["warning"],
                       "No consensus bet is issued without comparing a real bookmaker price and market-specific calibration."])
-        await reply(update, "\\n".join(lines))
+        await reply(update, "\n".join(lines))
     except Exception as exc:
         await reply(update, f"Specialist research unavailable: {type(exc).__name__}: {str(exc)[:220]}")
 
@@ -5474,7 +5465,6 @@ def main():
         ("rolloverstatus", rolloverstatus_command),
         ("rolloverday", rolloverday_command),
         ("clv", clv_command),
-        ("forecaststats", forecaststats_command),
         ("council", council_command),
         ("forecastsettle", forecastsettle_command),
         ("forecaststats", forecaststats_command),
