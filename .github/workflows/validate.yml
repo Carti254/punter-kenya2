@@ -3,7 +3,7 @@ name: Validate Python
 on:
   workflow_dispatch:
   push:
-    branches: [main, 'fix/**']
+    branches: [main, 'fix/**', 'feature/sportyclaw-premium-parity']
   pull_request:
     branches: [main]
 
