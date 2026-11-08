@@ -190,9 +190,23 @@ def _betika_items(payload):
 
 
 def _betika_detail(match_id):
+    # Match the browser headers used by Betika's own web client. The list
+    # endpoint was returning data, but detail calls without Origin/Referer
+    # were being served an incomplete envelope (no data.meta/data arrays).
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "DNT": "1",
+        "Origin": "https://www.betika.com",
+        "Pragma": "no-cache",
+        "Referer": "https://www.betika.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    }
     payload = _get(
         BETIKA_BASE + "/match",
         params={"parent_match_id": match_id},
+        headers=headers,
         timeout=(8, 20),
     )
     if not isinstance(payload, dict):
