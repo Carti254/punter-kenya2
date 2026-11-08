@@ -46,6 +46,21 @@ class MarketEvidenceSettlementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             grade_market_evidence("Total Corners", "Over 10", self.evidence)
 
+    def test_player_shots_and_anytime_scorer(self):
+        evidence = dict(self.evidence)
+        evidence["players"] = [{
+            "players": [{
+                "player": {"name": "John Doe"},
+                "statistics": [{
+                    "shots": {"total": 3, "on": 2},
+                    "goals": {"total": 1, "assists": 0},
+                    "cards": {"yellow": 1, "red": 0},
+                }],
+            }]
+        }]
+        self.assertEqual(grade_market_evidence("Player Total Shots", "John Doe Over 2.5", evidence), "WON")
+        self.assertEqual(grade_market_evidence("Anytime Goalscorer", "John Doe", evidence), "WON")
+
     def test_player_market_not_guessed(self):
         with self.assertRaises(ValueError):
             grade_market_evidence("Player Shots", "Player X Over 0.5", self.evidence)
