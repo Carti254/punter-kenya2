@@ -77,6 +77,17 @@ class AccumulatorEngineTests(unittest.TestCase):
             __import__("math").prod(x["probability"] for x in result["selections"]),
         )
 
+    def test_engine_can_build_more_than_20_legs_up_to_50(self):
+        candidates = [
+            {"home": f"Home {i}", "away": f"Away {i}", "odds": 1.25,
+             "probability": 0.85, "market": "1X2"}
+            for i in range(1, 22)
+        ]
+        result = build_accumulator(candidates, 50.0, max_legs=50, ranking="value")
+        self.assertTrue(result["target_reached"])
+        self.assertGreater(len(result["selections"]), 20)
+        self.assertLessEqual(len(result["selections"]), 50)
+
     def test_minimum_legs_cannot_exceed_maximum(self):
         with self.assertRaises(ValueError):
             build_accumulator(self.candidates, 2.0, max_legs=3, min_legs=4)
