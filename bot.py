@@ -2128,10 +2128,28 @@ async def autobuild_sportybet_command(update, context):
         "goals, H2H, Elo, model probability, specialist evidence and live SportyBet prices…"
     )
     try:
+        # Stream scan progress to Telegram while the synchronous provider work runs
+        # in a worker thread. Throttle fixture-level updates to avoid flooding chat.
+        loop = asyncio.get_running_loop()
+        progress_lock = threading.Lock()
+        last_progress_at = [0.0]
+        def scan_progress(message):
+            now = time.monotonic()
+            with progress_lock:
+                if now - last_progress_at[0] < 5.0:
+                    return
+                last_progress_at[0] = now
+            safe_message = str(message)[:700]
+            def send_progress():
+                asyncio.create_task(reply(update, "🔎 " + safe_message))
+            loop.call_soon_threadsafe(send_progress)
+
         rows, diagnostics = await asyncio.to_thread(
-            scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
+            scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet",
+            progress_callback=scan_progress,
         )
         scanned_count = len(rows)
+        await reply(update, f"✅ Fixture and odds scan complete: {scanned_count} priced/modelled market rows. Applying research filters…")
 
         # User preference: exclude the Big-Five domestic top divisions.
         # Cup competitions remain eligible; the filter is country + competition aware.
@@ -2164,35 +2182,41 @@ async def autobuild_sportybet_command(update, context):
         rows = [row for row in rows if not is_big_five_top_flight(row)]
         big_five_excluded = before_big_five_filter - len(rows)
 
-        # Run the complete research wrapper, not just the API-Football specialist
-        # adapter. This includes exact Betika cross-bookmaker comparisons, optional
-        # X public-post leads (never treated as confirmed team news), exact stored
-        # odds-history enrichment, and API-Football lineups/injuries/xG/tactical/
-        # standings/early-goal panels where the configured provider covers a fixture.
-        specialist_stats = {"reason": "Full research enrichment was not run."}
-        price_history_stats = {"matched": 0, "reason": "Stored price history not available."}
+        # Keep the live builder's critical path short: run the capped specialist
+        # match panels, but do not launch secondary X searches or a second full
+        # bookmaker-feed download for every build. Those optional sources must not
+        # prevent the primary SportyBet research scan from returning.
+        await reply(update, "🧠 Primary scan complete. Checking specialist match evidence (maximum 3 fixtures)…")
+        specialist_stats = {"reason": "Specialist research not configured or unavailable."}
+        price_history_stats = {"matched": 0, "reason": "Stored odds history not checked."}
         try:
             rows, specialist_stats = await asyncio.to_thread(
-                enrich_with_specialist_models, rows
+                enrich_specialist_candidates, rows, max_fixtures=3
             )
-            price_history_stats = specialist_stats.get("price_history") or {
-                "matched": 0,
-                "reason": "The research wrapper returned no exact price-history matches.",
-            }
         except Exception as enrichment_error:
-            logger.warning("Autobuild full research enrichment failed: %s", enrichment_error)
+            logger.warning("Autobuild specialist enrichment failed: %s", enrichment_error)
             specialist_stats = {
-                "reason": f"Full research enrichment unavailable: {type(enrichment_error).__name__}: {str(enrichment_error)[:120]}"
+                "reason": f"Specialist enrichment unavailable: {type(enrichment_error).__name__}: {str(enrichment_error)[:120]}"
             }
-        # Apply temperature calibration only if the chronological holdout has
-        # enough settled forecasts and beats raw Brier score AND log loss.
-        calibration_stats = {"applied": False, "reason": "Walk-forward validation not run."}
+        # Odds-history lookup is supplementary; failure must not block a live scan.
         try:
-            validation = await asyncio.to_thread(evaluate_historical_calibration)
-            rows, calibration_stats = apply_walk_forward_calibration(rows, validation)
-        except Exception as calibration_error:
-            logger.warning("Autobuild walk-forward calibration unavailable: %s", calibration_error)
-            calibration_stats = {"applied": False, "reason": f"Calibration unavailable: {type(calibration_error).__name__}"}
+            rows, price_history_stats = await asyncio.to_thread(
+                enrich_candidates_with_price_history, rows[:100]
+            )
+            rows = rows + rows[100:] if len(rows) < 100 else rows + []
+        except Exception as history_error:
+            logger.warning("Autobuild price-history enrichment unavailable: %s", history_error)
+            price_history_stats = {"matched": 0, "reason": f"Stored odds history unavailable: {type(history_error).__name__}"}
+
+        # Never reconstruct the entire historical dataset during a live slip request.
+        # Use only a recent, already-computed walk-forward result; otherwise leave
+        # probabilities uncalibrated and label them experimental in the report.
+        calibration_stats = {"applied": False, "reason": "No recent cached walk-forward validation; live scan skipped expensive recalculation."}
+        cached_validation = globals().get("_WALK_FORWARD_CALIBRATION_CACHE", {}).get("result")
+        cached_at = globals().get("_WALK_FORWARD_CALIBRATION_CACHE", {}).get("timestamp", 0)
+        if cached_validation and time.time() - cached_at < 21600:
+            rows, calibration_stats = apply_walk_forward_calibration(rows, cached_validation)
+        await reply(update, "📊 Research enrichment complete. Applying evidence, probability and value filters…")
 
         # Same evidence/value gate as /accumulator: minimum recent and venue samples,
         # LOW confidence rejected, BTTS/Under 2.5/2UP excluded, and at least 3% EV.
