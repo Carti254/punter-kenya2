@@ -4537,7 +4537,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     # evidence. External probabilities are cross-checks; exact BSD-supported
     # result, goal-total and corner markets may supply missing probabilities.
     # SportyBet prices remain the executable prices used by the accumulator.
-        candidates, free_source_stats = enrich_free_football_sources(candidates, max_fixtures=20)
+        candidates, free_source_stats = enrich_free_football_sources(candidates, max_fixtures=48)
         logger.info("Free football source enrichment: %s", free_source_stats)
         diagnostics.append(
             "Free-source coverage: "
