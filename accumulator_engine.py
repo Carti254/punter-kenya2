@@ -23,6 +23,7 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
             "target_reached": False, "independence_assumption": True,
             "reason": "An accumulator requires at least two distinct fixtures. No single-selection substitute was generated.",
         }
+    upper_target = min(target * 1.20, 5.0)
     if not isinstance(min_legs, int) or not 1 <= min_legs <= max_legs:
         raise ValueError("min_legs must be an integer from 1 to max_legs.")
     clean = []
@@ -125,11 +126,11 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
                 new_picks = picks + [item]
                 factor = new_odds * new_probability
                 state = (new_picks, new_odds, new_probability, used | {fixture_key}, item_index + 1)
-                if len(new_picks) >= min_legs and target <= new_odds <= target * 1.20:
+                if len(new_picks) >= min_legs and target <= new_odds <= upper_target:
                     completed.append(state)
                 # Continue past the target until the requested number of legs is met.
                 # Stop extending once the permitted 20% overshoot would be exceeded.
-                if len(new_picks) < max_legs and new_odds < target * 1.20:
+                if len(new_picks) < max_legs and new_odds < upper_target:
                     expanded.append(state)
                 if len(new_picks) >= min_legs:
                     eligible_partials.append(state)
@@ -194,7 +195,7 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
         "correlation_adjustment_factor": correlation_factor,
         "expected_return_factor": odds_product * adjusted_probability,
         "expected_roi": odds_product * adjusted_probability - 1,
-        "target_reached": target <= odds_product <= target * 1.20 and len(selections) >= min_legs,
+        "target_reached": target <= odds_product <= upper_target and len(selections) >= min_legs,
         "independence_assumption": True,
         "reason": None,
     }
