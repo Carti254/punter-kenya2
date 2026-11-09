@@ -3204,6 +3204,19 @@ def build_pre_match_prediction(raw_fixture, fixture):
         "score": (most_likely[1], most_likely[2]),
         "top_outcome": top_outcome,
         "confidence": confidence,
+        "home_home_sample": len(home_venue_results),
+        "away_away_sample": len(away_venue_results),
+        "home_home_gf": (sum(match["gf"] for match in home_venue_results) / len(home_venue_results)) if home_venue_results else None,
+        "home_home_ga": (sum(match["ga"] for match in home_venue_results) / len(home_venue_results)) if home_venue_results else None,
+        "away_away_gf": (sum(match["gf"] for match in away_venue_results) / len(away_venue_results)) if away_venue_results else None,
+        "away_away_ga": (sum(match["ga"] for match in away_venue_results) / len(away_venue_results)) if away_venue_results else None,
+        "h2h_count": len(h2h_results),
+        "h2h_results": h2h_results,
+        "elo_home_rating": elo_home_rating,
+        "elo_away_rating": elo_away_rating,
+        "elo_matches_used": len(elo_rows),
+        "monte_carlo": monte_carlo,
+        "model_version": "venue-weighted-poisson-elo-mc-v1",
     }
 
 
@@ -3769,6 +3782,14 @@ def _market_probability_for_row(prediction, row):
     raw_selection = str(row.get("selection") or "").casefold()
     if any(token in raw_market for token in ("&", " + ", "combo", "combined")) or " & " in raw_selection or " and " in raw_selection:
         return None, "combined market requires a joint probability model"
+    # These markets have settlement rules or time horizons different from a
+    # standard full-time scoreline. Never reuse an ordinary 1X2 probability.
+    special_market_text = f"{raw_market} {raw_selection}".casefold()
+    if any(token in special_market_text for token in (
+        "2up", "two up", "early payout", "first half", "1st half",
+        "second half", "2nd half", "half time", "half-time",
+    )):
+        return None, "special or period-specific market has no dedicated PUNTER probability model"
     market = _normal_market_text(row.get("market"))
     selection = _normal_market_text(row.get("selection"))
     specifier = _normal_market_text(row.get("specifier") or row.get("handicap"))
@@ -3986,7 +4007,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             matched_events += len(matches)
             folder = str(raw.get("leagueShortcut") or "").strip()
             try:
-                prediction = build_openmatchday_prediction(raw, fixture, historical_rows=historical_cache[folder])
+                prediction = build_openmatchday_prediction(raw, fixture, historical_rows=historical_cache[folder], model_variant="venue_weighted")
             except Exception as exc:
                 prediction_unavailable += 1
                 logger.exception("Autobuild prediction failed for %s vs %s", home_name, away_name)
@@ -4053,8 +4074,12 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         "odds": odds, "probability": probability, "ev": ev,
                         "fair_odds": (1 / probability) if probability is not None else None,
                         "model_confidence": prediction.get("confidence"),
+                        "model_version": prediction.get("model_version") or "venue-weighted-poisson-elo-mc-v1",
+                        "probability_source": "PUNTER venue-weighted Poisson scoreline model" if probability is not None else None,
                         "home_form": prediction.get("home_form"),
                         "away_form": prediction.get("away_form"),
+                        "home_recent_matches": prediction.get("home_recent_matches") or [],
+                        "away_recent_matches": prediction.get("away_recent_matches") or [],
                         "home_sample": prediction.get("home_results"),
                         "away_sample": prediction.get("away_results"),
                         "home_scored_avg": prediction.get("home_scored"),
