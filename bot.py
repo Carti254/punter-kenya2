@@ -2202,9 +2202,9 @@ async def autobuild_sportybet_command(update, context):
             reason = build.get("reason") or "No permitted combination reached the requested odds range."
             await reply(
                 update,
-                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\\n\\n"
-                f"PUNTER checked {available_fixtures} fixtures and {len(rows)} eligible selections internally.\\n"
-                f"{reason}\\n\\n"
+                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\n\n"
+                f"PUNTER checked {available_fixtures} fixtures and {len(rows)} eligible selections internally.\n"
+                f"{reason}\n\n"
                 "No lower-odds substitute or booking code was created."
             )
             return
