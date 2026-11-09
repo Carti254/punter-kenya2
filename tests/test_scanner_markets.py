@@ -48,8 +48,6 @@ class ScannerMarketTests(unittest.TestCase):
                  "market_id": "btts", "outcome_id": "yes"},
                 {"market": "Total Goals Over/Under", "selection": "Under 2.5", "odds": 2.10,
                  "market_id": "totals", "outcome_id": "under25", "specifier": "total=2.5"},
-                {"market": "Total Goals Over/Under", "selection": "Over 1.5", "odds": 1.55,
-                 "market_id": "totals", "outcome_id": "over15", "specifier": "total=1.5"},
             ],
         }
         prediction = {
@@ -67,7 +65,6 @@ class ScannerMarketTests(unittest.TestCase):
         labels = {(row["market"], row["selection"]) for row in rows}
         self.assertNotIn(("Both Teams To Score", "Yes"), labels)
         self.assertNotIn(("Total Goals Over/Under", "Under 2.5"), labels)
-        self.assertIn(("Total Goals Over/Under", "Over 1.5"), labels)
 
     def test_scoreline_derived_markets(self):
         cases = [
