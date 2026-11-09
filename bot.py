@@ -2287,6 +2287,10 @@ async def autobuild_sportybet_command(update, context):
         for i, leg in enumerate(resolved, 1):
             lines.append(f"{i}. {leg['fixture']} — {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}")
             lines.append(
+                f"   Competition: {leg.get('league') or 'N/A'}"
+                + (f" | {leg.get('country')}" if leg.get("country") else "")
+            )
+            lines.append(
                 f"   PUNTER model estimate: {leg['probability']:.1%} | "
                 f"Fair odds: {leg.get('fair_odds', 1 / leg['probability']):.2f} | "
                 f"Estimated EV: {leg.get('ev', 0):+.1%}"
@@ -2352,9 +2356,11 @@ async def autobuild_sportybet_command(update, context):
                 early = leg["early_goal_evidence"]
                 home_early, away_early = early.get("home") or {}, early.get("away") or {}
                 lines.append(
-                    "   First goal ≤10 min — "
-                    f"home team: {home_early.get('team_scored_first_before_10_rate', 0):.0%} "
-                    f"(n={home_early.get('sample', 0)}); away team: "
+                    "   Team scores first within 5/10 min — "
+                    f"home: {home_early.get('team_scored_first_before_5_rate', 0):.0%}/"
+                    f"{home_early.get('team_scored_first_before_10_rate', 0):.0%} "
+                    f"(n={home_early.get('sample', 0)}); away: "
+                    f"{away_early.get('team_scored_first_before_5_rate', 0):.0%}/"
                     f"{away_early.get('team_scored_first_before_10_rate', 0):.0%} "
                     f"(n={away_early.get('sample', 0)})."
                 )
