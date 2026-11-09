@@ -2063,7 +2063,8 @@ def enrich_with_specialist_models(rows):
                 for candidate in candidates:
                     candidate["x_research_evidence"] = posts
                     candidate["x_research_warning"] = report.get("warning")
-                    candidate["team_news_evidence"] = None
+                    # Keep API-Football injury/suspension evidence intact.
+                    # Public X posts are leads only and must never overwrite verified provider data.
             except Exception as exc:
                 logger.info("X research unavailable for %s vs %s: %s", home, away, exc)
 
