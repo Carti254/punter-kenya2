@@ -1730,7 +1730,7 @@ async def ai_natural_language_handler(update: Update, context: ContextTypes.DEFA
     # A target-odds reply must never be sent to Gemini. This also recovers
     # gracefully if Telegram user_data lost the guided slip state between
     # the menu prompt and the user's numeric reply.
-    target_match = re.fullmatch(r"\\s*(\\d+(?:\\.\\d+)?)\\s*(?:odds?)?\\s*", message, re.I)
+    target_match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(?:odds?)?\s*", message, re.I)
     if target_match:
         target = float(target_match.group(1))
         if math.isfinite(target) and target > 1.0:
