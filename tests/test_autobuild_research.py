@@ -42,6 +42,18 @@ class AutobuildResearchTests(unittest.TestCase):
         self.assertFalse(row["dixon_coles_adjusted"] if "dixon_coles_adjusted" in row else False)
         self.assertEqual(row["probability"], 0.52)
 
+    def test_low_confidence_forecast_is_rejected_even_when_ev_is_positive(self):
+        row = self.candidate(model_confidence="LOW", home_sample=10, away_sample=10)
+        self.assertIsNone(assess_candidate(row))
+
+    def test_moderate_confidence_with_minimum_team_samples_is_eligible(self):
+        row = self.candidate(model_confidence="MODERATE", home_sample=5, away_sample=5)
+        self.assertIsNotNone(assess_candidate(row))
+
+    def test_insufficient_verified_team_sample_is_rejected(self):
+        row = self.candidate(model_confidence="MODERATE", home_sample=4, away_sample=10)
+        self.assertIsNone(assess_candidate(row))
+
     def test_negative_ev_is_rejected_by_zero_floor(self):
         self.assertIsNone(assess_candidate(self.candidate(odds=2.0, probability=0.49)))
 
