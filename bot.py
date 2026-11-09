@@ -2131,6 +2131,38 @@ async def autobuild_sportybet_command(update, context):
             scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
         )
         scanned_count = len(rows)
+
+        # User preference: exclude the Big-Five domestic top divisions.
+        # Cup competitions remain eligible; the filter is country + competition aware.
+        big_five_top_flights = {
+            "england": ("premier league",),
+            "spain": ("laliga", "la liga", "primera division"),
+            "germany": ("bundesliga",),
+            "italy": ("serie a",),
+            "france": ("ligue 1", "ligue1"),
+        }
+        country_aliases = {
+            "united kingdom": "england", "england": "england",
+            "españa": "spain", "spain": "spain",
+            "deutschland": "germany", "germany": "germany",
+            "italia": "italy", "italy": "italy", "france": "france",
+        }
+        def is_big_five_top_flight(row):
+            country = country_aliases.get(str(row.get("country") or "").casefold(),
+                                          str(row.get("country") or "").casefold())
+            league = str(row.get("league") or "").casefold()
+            terms = big_five_top_flights.get(country)
+            if terms:
+                return any(term in league for term in terms)
+            # Country-less records: exclude only unmistakable labels.
+            return any(term in league for term in (
+                "english premier league", "la liga", "laliga", "bundesliga",
+                "italian serie a", "ligue 1",
+            ))
+        before_big_five_filter = len(rows)
+        rows = [row for row in rows if not is_big_five_top_flight(row)]
+        big_five_excluded = before_big_five_filter - len(rows)
+
         # Add exact-match timestamped odds movement and cross-bookmaker checks
         # from stored PUNTER snapshots. If history is unavailable, keep the gap visible.
         price_history_stats = {"reason": "Stored price history not available."}
@@ -4212,6 +4244,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                     candidates.append({
                         "home": fixture["home_team"], "away": fixture["away_team"],
                         "league": fixture.get("competition") or fixture.get("leagueName") or "Competition",
+                        "country": fixture.get("country") or fixture.get("countryName") or "",
                         "day": day.isoformat(), "bookmaker": game.get("bookmaker"),
                         "market": market_name, "selection": selection_name,
                         "market_key": _normal_market_text(market_name) + "|" + _normal_market_text(selection_name),
