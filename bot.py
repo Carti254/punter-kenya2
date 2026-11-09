@@ -35,7 +35,7 @@ from market_settlement import settle_bet_with_market_evidence
 from ai_assistant import ai_is_configured, interpret_request, read_slip_image, review_fixture_evidence, _plain_fixture_request
 from premium_intelligence import market_probabilities, assess_price, rollover_projection
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
-from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
+from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day, enrich_candidates_with_price_history
 from accumulator_engine import build_accumulator
 from advanced_models import build_elo_ratings, monte_carlo_scoreline
 from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models as enrich_specialist_candidates
@@ -2134,6 +2134,18 @@ async def autobuild_sportybet_command(update, context):
             if str(x.get("bookmaker", "")).casefold() == "sportybet"
             and float(x.get("odds") or 0) > 1.0
         ]
+        # Attach historical SportyBet price movement only from exact, persisted snapshots.
+        try:
+            rows, odds_history_stats = await asyncio.wait_for(
+                asyncio.to_thread(enrich_candidates_with_price_history, rows),
+                timeout=12,
+            )
+        except asyncio.TimeoutError:
+            odds_history_stats = {"matched": 0, "reason": "Odds-history lookup timed out; no movement claim made."}
+        except Exception as exc:
+            odds_history_stats = {"matched": 0, "reason": f"Odds-history lookup unavailable: {type(exc).__name__}"}
+        logger.info("Autobuild odds history: %s", odds_history_stats)
+
         # Run optional API-Football specialist research (corners, cards, shots,
         # shots on target and first-half goals) against exact fixture/date/price matches.
         # If the provider key or a reliable exact match is absent, base candidates remain unchanged.
