@@ -3979,7 +3979,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                 # fixture stays unmodelled until a team-ID-backed history source exists.
                 if not prediction.get("available"):
                     history_fallback_attempted += 1
-                    history_failure_reasons[str(prediction.get("reason") or "insufficient same-competition history")[:100]] += 1
+                    history_failure_reasons[str(prediction.get("reason") or "insufficient same-competition history")[:240]] += 1
             except Exception as exc:
                 prediction_unavailable += 1
                 logger.exception("Autobuild prediction failed for %s vs %s", home_name, away_name)
