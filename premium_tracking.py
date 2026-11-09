@@ -212,15 +212,15 @@ def record_rollover_day(user_id, result, actual_odds=None):
     if result not in {"WON", "LOST", "MISSED"}:
         raise ValueError("Result must be WON, LOST or MISSED.")
     odds = None if actual_odds is None else float(actual_odds)
-    if odds is not None and (odds <= 1 or odds >= 10000):
-        raise ValueError("Actual odds must be greater than 1.00.")
+    if odds is not None and (odds < 2.0 or odds > 5.0):
+        raise ValueError("Actual rollover odds must be between 2.00 and 5.00.")
     status = rollover_status(user_id)
     if not status["configured"]:
         raise ValueError("Set a rollover plan first with /rollover DAYS TARGET_ODDS.")
     if status["status"] != "IN_PROGRESS":
         raise ValueError("This rollover is already broken or completed. Start a new plan.")
-    if result == "WON" and (odds is None or odds < status["target"]):
-        raise ValueError(f"A WON day requires actual combined odds of at least {status['target']:.2f}.")
+    if result == "WON" and (odds is None or not status["target"] <= odds <= 5.0):
+        raise ValueError(f"A WON day requires actual combined odds between {status['target']:.2f} and 5.00.")
     day_number = status["completed"] + 1
     if day_number > status["days"]:
         raise ValueError("All rollover days are already recorded.")
