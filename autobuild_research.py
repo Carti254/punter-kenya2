@@ -32,6 +32,19 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     if not (math.isfinite(odds) and odds > 1 and math.isfinite(probability) and 0 < probability < 1):
         return None
 
+    # The live scanner labels forecasts LOW when the combined verified
+    # recent-form sample is too small. Do not let a high quoted price turn
+    # that weak forecast into an accumulator leg.
+    if str(row.get("model_confidence") or "").strip().upper() == "LOW":
+        return None
+    for sample_key in ("home_sample", "away_sample"):
+        if row.get(sample_key) is not None:
+            try:
+                if int(row[sample_key]) < 5:
+                    return None
+            except (TypeError, ValueError, OverflowError):
+                return None
+
     market = str(row.get("market") or "")
     selection = str(row.get("selection") or "")
     combined_text = f"{market} {selection} {row.get('specifier') or ''}".casefold()
