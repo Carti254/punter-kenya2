@@ -3468,12 +3468,12 @@ def build_pre_match_prediction(raw_fixture, fixture):
 
 
 
-def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None, model_variant="current", include_monte_carlo=True, team_history_rows=None):
-    """Forecast from competition results strictly before as_of_date when supplied."""
+def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None, model_variant="current", include_monte_carlo=False, team_history_rows=None):
+    """Fit and apply the single competition-specific Dixon-Coles model."""
+    from dixon_coles_engine import fit_dixon_coles, predict_fixture
     folder = str(raw_fixture.get("leagueShortcut") or "").strip()
     if not folder:
-        return {"available": False, "reason": "The fixture has no competition reference for retrieving its results."}
-
+        return {"available": False, "reason": "Competition reference is missing."}
     if historical_rows is not None:
         rows = list(historical_rows)
     else:
@@ -3481,246 +3481,82 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
             rows = fetch_openmatchday_csv(folder, "results")
         except Exception as exc:
             logger.warning("Could not load historical results for %s: %s", folder, exc)
-            return {"available": False, "reason": "Historical results could not be retrieved for this competition."}
-
-    team_rows = list(team_history_rows) if team_history_rows is not None else list(rows)
-
-    if as_of_date is not None:
-        cutoff_date = as_of_date.date() if isinstance(as_of_date, datetime) else datetime.strptime(str(as_of_date)[:10], "%Y-%m-%d").date()
-        def before_cutoff(source_rows):
-            prior = []
-            for row in source_rows:
-                try:
-                    row_date = datetime.strptime(str(row.get("date") or ""), "%Y-%m-%d").date()
-                except ValueError:
-                    continue
-                if row_date < cutoff_date:
-                    prior.append(row)
-            return prior
-        rows = before_cutoff(rows)
-        team_rows = before_cutoff(team_rows)
-
-    def parse_team_history(team_name):
+            return {"available": False, "reason": "Historical competition results could not be retrieved."}
+    fit = fit_dixon_coles(rows, before_date=as_of_date, min_matches=60, min_team_matches=4)
+    if not fit.get("available"):
+        return {"available": False, "reason": fit.get("reason"), "training_sample": fit.get("sample_size", 0)}
+    forecast = predict_fixture(fit, fixture.get("home_team"), fixture.get("away_team"))
+    if not forecast.get("available"):
+        return forecast
+    cutoff = as_of_date.date() if isinstance(as_of_date, datetime) else (
+        datetime.strptime(str(as_of_date)[:10], "%Y-%m-%d").date() if as_of_date else date.today()
+    )
+    team_rows = list(team_history_rows) if team_history_rows is not None else rows
+    histories = {}
+    for team in (fixture.get("home_team"), fixture.get("away_team")):
         parsed = []
-        for row in team_rows:
-            home = str(row.get("home") or "").strip()
-            away = str(row.get("away") or "").strip()
+        for item in team_rows:
             try:
-                home_goals = int(row.get("ft_home"))
-                away_goals = int(row.get("ft_away"))
+                d = datetime.strptime(str(item.get("date") or "")[:10], "%Y-%m-%d").date()
+                hg, ag = int(item.get("ft_home")), int(item.get("ft_away"))
             except (TypeError, ValueError):
                 continue
-
-            if team_name_matches_query(team_name, home):
-                is_home = True
-            elif team_name_matches_query(team_name, away):
-                is_home = False
+            if d >= cutoff:
+                continue
+            hname, aname = str(item.get("home") or "").strip(), str(item.get("away") or "").strip()
+            if team_name_matches_query(team, hname):
+                gf, ga, venue, opponent = hg, ag, "H", aname
+            elif team_name_matches_query(team, aname):
+                gf, ga, venue, opponent = ag, hg, "A", hname
             else:
                 continue
-
-            gf, ga = (home_goals, away_goals) if is_home else (away_goals, home_goals)
-            result = "W" if gf > ga else "D" if gf == ga else "L"
-            try:
-                match_date = datetime.strptime(str(row.get("date", "")), "%Y-%m-%d")
-            except ValueError:
-                match_date = None
-            parsed.append({
-                "date": match_date,
-                "opponent": away if is_home else home,
-                "venue": "H" if is_home else "A",
-                "score": f"{home_goals}-{away_goals}",
-                "gf": gf,
-                "ga": ga,
-                "result": result,
-            })
-
-        parsed.sort(key=lambda item: item["date"] or datetime.min, reverse=True)
-        return parsed[:10]
-
-    home_results = parse_team_history(fixture["home_team"])
-    away_results = parse_team_history(fixture["away_team"])
-    if len(home_results) < 5 or len(away_results) < 5:
-        return {
-            "available": False,
-            "reason": (
-                f"Insufficient recent results in this competition "
-                f"(home: {len(home_results)}, away: {len(away_results)}; "
-                "at least 5 each required)."
-            ),
-        }
-
-    def averages(history):
-        return (
-            sum(match["gf"] for match in history) / len(history),
-            sum(match["ga"] for match in history) / len(history),
-        )
-
-    home_scored, home_conceded = averages(home_results)
-    away_scored, away_conceded = averages(away_results)
-
-    if model_variant == "venue_weighted":
-        # Candidate model: recent venue-specific rates, exponentially weighted,
-        # then shrunk towards the competition scoring baseline to reduce small-sample noise.
-        def weighted_rate(history, field):
-            selected = history[:8]
-            if len(selected) < 3:
-                selected = history[:8]
-            weights = [0.82 ** index for index in range(len(selected))]
-            return (sum(row[field] * weight for row, weight in zip(selected, weights)) / sum(weights)
-                    if selected else None)
-
-        home_venue = [row for row in home_results if row["venue"] == "H"][:8]
-        away_venue = [row for row in away_results if row["venue"] == "A"][:8]
-        if len(home_venue) < 3:
-            home_venue = home_results[:8]
-        if len(away_venue) < 3:
-            away_venue = away_results[:8]
-
-        league_totals = []
-        for result_row in rows:
-            try:
-                league_totals.append((int(result_row.get("ft_home")) + int(result_row.get("ft_away"))) / 2)
-            except (TypeError, ValueError):
-                continue
-        league_rate = sum(league_totals) / len(league_totals) if league_totals else 1.25
-        league_rate = max(0.35, min(2.5, league_rate))
-
-        def shrink(value, sample_size):
-            weight = sample_size / (sample_size + 4.0)
-            return weight * value + (1.0 - weight) * league_rate
-
-        home_attack = shrink(weighted_rate(home_venue, "gf"), len(home_venue))
-        home_defence = shrink(weighted_rate(home_venue, "ga"), len(home_venue))
-        away_attack = shrink(weighted_rate(away_venue, "gf"), len(away_venue))
-        away_defence = shrink(weighted_rate(away_venue, "ga"), len(away_venue))
-        lambda_home = max(0.15, min(4.0, (home_attack * away_defence / league_rate) * 1.05))
-        lambda_away = max(0.15, min(4.0, (away_attack * home_defence / league_rate) * 0.95))
-    else:
-        lambda_home = max(0.15, min(4.0, ((home_scored + away_conceded) / 2) * 1.08))
-        lambda_away = max(0.15, min(4.0, ((away_scored + home_conceded) / 2) * 0.92))
-
-    # Chronological competition Elo, strictly excluding the forecast date.
-    elo_rows = []
-    for result_row in rows:
-        try:
-            elo_rows.append({
-                "date": result_row.get("date"), "home": result_row.get("home"),
-                "away": result_row.get("away"), "home_goals": result_row.get("ft_home"),
-                "away_goals": result_row.get("ft_away"),
-            })
-        except Exception:
-            continue
-    elo_ratings = build_elo_ratings(
-        elo_rows, before_date=(as_of_date.date().isoformat() if isinstance(as_of_date, datetime)
-                               else str(as_of_date)[:10] if as_of_date else None)
-    )
-    elo_home_rating = elo_ratings.get(fixture["home_team"])
-    elo_away_rating = elo_ratings.get(fixture["away_team"])
-    # Reproducible Monte Carlo cross-check from the same transparent goal-rate inputs.
-    monte_carlo = monte_carlo_scoreline(lambda_home, lambda_away, simulations=10000) if include_monte_carlo else None
-
-    grid = []
-    for home_goals in range(9):
-        for away_goals in range(9):
-            probability = (
-                poisson_probability(home_goals, lambda_home)
-                * poisson_probability(away_goals, lambda_away)
-            )
-            grid.append((probability, home_goals, away_goals))
-
-    home_win = sum(p for p, hg, ag in grid if hg > ag)
-    draw = sum(p for p, hg, ag in grid if hg == ag)
-    away_win = sum(p for p, hg, ag in grid if hg < ag)
-    over_15 = sum(p for p, hg, ag in grid if hg + ag >= 2)
-    over_25 = sum(p for p, hg, ag in grid if hg + ag >= 3)
-    most_likely = max(grid, key=lambda item: item[0])
-    probabilities = {"1": home_win, "X": draw, "2": away_win}
-    top_outcome = max(probabilities, key=probabilities.get)
-    # The research gate already requires at least five verified matches
-    # for EACH team. Do not then label a valid 5+5 sample LOW merely because
-    # the combined total is below 14; that made the confidence gate stricter
-    # than the documented minimum and discarded otherwise assessable fixtures.
-    # Confidence reflects sample depth only, not certainty of the outcome.
-    combined_sample = len(home_results) + len(away_results)
-    # Sample size alone cannot establish HIGH confidence. That requires
-    # validated out-of-sample calibration, which this raw Poisson layer does
-    # not possess. Keep an otherwise eligible forecast MODERATE at most.
-    confidence = "LOW" if min(len(home_results), len(away_results)) < 5 else "MODERATE"
-
-    # Same-competition head-to-head sample, restricted to completed results
-    # already available before this fixture's forecast cutoff.
-    h2h_results = []
-    home_name, away_name = fixture["home_team"], fixture["away_team"]
-    for result_row in rows:
-        rh = str(result_row.get("home") or "").strip()
-        ra = str(result_row.get("away") or "").strip()
-        if not rh or not ra:
-            continue
-        direct = team_name_matches_query(home_name, rh) and team_name_matches_query(away_name, ra)
-        reverse = team_name_matches_query(home_name, ra) and team_name_matches_query(away_name, rh)
+            parsed.append({"date": d, "opponent": opponent, "venue": venue,
+                           "score": f"{hg}-{ag}", "gf": gf, "ga": ga,
+                           "result": "W" if gf > ga else "D" if gf == ga else "L"})
+        parsed.sort(key=lambda x: x["date"], reverse=True)
+        histories[team] = parsed[:10]
+    home_results = histories.get(fixture.get("home_team"), [])
+    away_results = histories.get(fixture.get("away_team"), [])
+    def avg(items, key):
+        return sum(x[key] for x in items) / len(items) if items else None
+    home_venue = [x for x in home_results if x["venue"] == "H"]
+    away_venue = [x for x in away_results if x["venue"] == "A"]
+    h2h = []
+    home_name, away_name = fixture.get("home_team"), fixture.get("away_team")
+    for item in rows:
+        hname, aname = str(item.get("home") or "").strip(), str(item.get("away") or "").strip()
+        direct = team_name_matches_query(home_name, hname) and team_name_matches_query(away_name, aname)
+        reverse = team_name_matches_query(home_name, aname) and team_name_matches_query(away_name, hname)
         if not (direct or reverse):
             continue
         try:
-            rhg, rag = int(result_row.get("ft_home")), int(result_row.get("ft_away"))
+            d = datetime.strptime(str(item.get("date") or "")[:10], "%Y-%m-%d").date()
+            hg, ag = int(item.get("ft_home")), int(item.get("ft_away"))
         except (TypeError, ValueError):
             continue
-        try:
-            rdate = datetime.strptime(str(result_row.get("date") or ""), "%Y-%m-%d")
-        except ValueError:
-            rdate = None
-        h2h_results.append({
-            "date": rdate,
-            "home_goals": rhg if direct else rag,
-            "away_goals": rag if direct else rhg,
-        })
-    h2h_results.sort(key=lambda item: item["date"] or datetime.min, reverse=True)
-    h2h_results = h2h_results[:5]
-    home_venue_results = [match for match in home_results if match["venue"] == "H"]
-    away_venue_results = [match for match in away_results if match["venue"] == "A"]
-    home_home_gf, home_home_ga = averages(home_venue_results) if home_venue_results else (None, None)
-    away_away_gf, away_away_ga = averages(away_venue_results) if away_venue_results else (None, None)
-
-    # Return observed evidence fields required by the accumulator research gate.
+        if d >= cutoff:
+            continue
+        h2h.append({"date": d.isoformat(), "home_goals": hg if direct else ag,
+                    "away_goals": ag if direct else hg})
+    h2h.sort(key=lambda x: x["date"], reverse=True)
     return {
-        "available": True,
-        "home_results": len(home_results),
-        "away_results": len(away_results),
-        "home_scored": home_scored,
-        "home_conceded": home_conceded,
-        "away_scored": away_scored,
-        "away_conceded": away_conceded,
-        "home_form": "".join(match["result"] for match in reversed(home_results)),
-        "away_form": "".join(match["result"] for match in reversed(away_results)),
-        "home_recent_matches": home_results,
-        "away_recent_matches": away_results,
-        "home_home_sample": len(home_venue_results),
-        "away_away_sample": len(away_venue_results),
-        "home_home_gf": home_home_gf,
-        "home_home_ga": home_home_ga,
-        "away_away_gf": away_away_gf,
-        "away_away_ga": away_away_ga,
-        "h2h_count": len(h2h_results),
-        "h2h_results": [
-            {"date": item["date"].date().isoformat() if item.get("date") else None,
-             "home_goals": item["home_goals"], "away_goals": item["away_goals"]}
-            for item in h2h_results
-        ],
-        "elo_home_rating": elo_home_rating,
-        "elo_away_rating": elo_away_rating,
-        "elo_matches_used": len(elo_rows),
-        "monte_carlo": monte_carlo,
-        "lambda_home": lambda_home,
-        "lambda_away": lambda_away,
-        "home_win": home_win,
-        "draw": draw,
-        "away_win": away_win,
-        "over_15": over_15,
-        "over_25": over_25,
-        "score": (most_likely[1], most_likely[2]),
-        "top_outcome": top_outcome,
-        "confidence": confidence,
+        **forecast, "home_results": len(home_results), "away_results": len(away_results),
+        "home_sample": len(home_results), "away_sample": len(away_results),
+        "home_scored": avg(home_results, "gf"), "home_conceded": avg(home_results, "ga"),
+        "away_scored": avg(away_results, "gf"), "away_conceded": avg(away_results, "ga"),
+        "home_form": "".join(x["result"] for x in reversed(home_results)),
+        "away_form": "".join(x["result"] for x in reversed(away_results)),
+        "home_recent_matches": home_results, "away_recent_matches": away_results,
+        "home_home_sample": len(home_venue), "away_away_sample": len(away_venue),
+        "home_home_gf": avg(home_venue, "gf"), "home_home_ga": avg(home_venue, "ga"),
+        "away_away_gf": avg(away_venue, "gf"), "away_away_ga": avg(away_venue, "ga"),
+        "h2h_count": len(h2h), "h2h_results": h2h[:5],
+        "confidence": "MODERATE", "model_confidence": "MODERATE",
+        "training_sample": fit["sample_size"], "training_teams": fit["team_count"],
+        "rho": fit["rho"], "model_version": "dixon-coles-fitted-v1",
+        "probability_source": "Fitted time-decayed Dixon-Coles",
+        "monte_carlo": None, "elo_home_rating": None, "elo_away_rating": None,
     }
-
 
 
 # ============================================================
