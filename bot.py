@@ -2199,8 +2199,7 @@ async def autobuild_sportybet_command(update, context):
                 f"Target: {target:.2f}\nMarkets scanned: {scanned_count}\n"
                 f"Research/value-qualified selections: 0\n"
                 f"Big-Five top-flight fixtures excluded: {big_five_excluded}\n"
-                f"Big-Five top-flight fixtures excluded: {big_five_excluded}\n"
-                f"Rejected by research/value screen: {research_stats.get('rejected', 0)}\n
+                f"Rejected by research/value screen: {research_stats.get('rejected', 0)}\n"
                 "PUNTER will not pad the slip with weak, unmodelled or negative-value selections.\n"
                 f"Specialist research: {specialist_stats.get('reason', 'not available')}\n"
                 + (f"Feed notes: {note}" if note else "")
