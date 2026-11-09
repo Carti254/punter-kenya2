@@ -2313,7 +2313,9 @@ async def autobuild_sportybet_command(update, context):
                 f"Rejected rows: {research_stats.get('rejected', 0)}. "
                 f"Rejection breakdown: {rejection_text}.\n"
                 "At least two different matches are required. Multiple markets from one match "
-                "cannot count as separate accumulator legs. No weak selections were added."
+                "cannot count as separate accumulator legs. No weak selections were added.\n"
+                + ("Scanner diagnostics: " + " | ".join(str(x)[:220] for x in diagnostics[:4])
+                   if diagnostics else "Scanner diagnostics: unavailable.")
             )
             return
 
@@ -4468,6 +4470,16 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     # SportyBet prices remain the executable prices used by the accumulator.
         candidates, free_source_stats = enrich_free_football_sources(candidates, max_fixtures=20)
         logger.info("Free football source enrichment: %s", free_source_stats)
+        diagnostics.append(
+            "Free-source coverage: "
+            f"BSD={'on' if free_source_stats.get('bsd_enabled') else 'off'}, "
+            f"PitchAPI={'on' if free_source_stats.get('pitchapi_enabled') else 'off'}, "
+            f"fixtures_enriched={free_source_stats.get('fixtures_enriched', 0)}, "
+            f"BSD_matches={free_source_stats.get('bsd_matches', 0)}, "
+            f"PitchAPI_matches={free_source_stats.get('pitchapi_matches', 0)}, "
+            f"external_probabilities_added={free_source_stats.get('external_probabilities_added', 0)}"
+            + (f"; {free_source_stats.get('reason')}" if free_source_stats.get('reason') else "")
+        )
         if free_source_stats.get("errors"):
             diagnostics.extend("Free source: " + str(x)[:160] for x in free_source_stats["errors"][:5])
     except Exception as source_error:
