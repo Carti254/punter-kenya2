@@ -24,6 +24,16 @@ class AccumulatorEngineTests(unittest.TestCase):
         self.assertFalse(result["target_reached"])
         self.assertLess(result["combined_odds"], 5.0)
 
+    def test_best_available_prefers_closest_safe_odds_to_target(self):
+        candidates = [
+            {"home": "Safe", "away": "Choice", "odds": 1.50, "probability": 0.99, "market": "1X2"},
+            {"home": "Closer", "away": "Choice", "odds": 2.20, "probability": 0.60, "market": "1X2"},
+        ]
+        result = build_accumulator(candidates, 2.00, max_legs=2)
+        self.assertFalse(result["target_reached"])
+        self.assertEqual(len(result["selections"]), 1)
+        self.assertAlmostEqual(result["combined_odds"], 2.20)
+
     def test_invalid_candidates_are_ignored(self):
         result = build_accumulator([{"home": "X", "away": "Y", "odds": 1.0, "probability": 0.8}], 2.0)
         self.assertEqual(result["selections"], [])
