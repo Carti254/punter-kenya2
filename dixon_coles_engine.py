@@ -70,19 +70,33 @@ def _tau(hg, ag, lh, la, rho):
     return 1.0
 
 
+def safe_rho(lambda_home, lambda_away, rho):
+    """Keep Dixon-Coles low-score correction positive for this fixture."""
+    lh, la, requested = float(lambda_home), float(lambda_away), float(rho)
+    if not all(math.isfinite(x) for x in (lh, la, requested)):
+        raise ValueError("Non-finite Dixon-Coles parameter.")
+    if not (0.05 <= lh <= 6 and 0.05 <= la <= 6 and -0.20 <= requested <= 0.20):
+        raise ValueError("Invalid expected-goal rates or Dixon-Coles rho.")
+    lower = max(-0.20, -0.99 / lh, -0.99 / la)
+    upper = min(0.20, 0.99 / (lh * la))
+    return min(upper, max(lower, requested))
+
+
 def score_matrix(lambda_home, lambda_away, max_goals=10, rho=0.0):
     lh, la = float(lambda_home), float(lambda_away)
-    if not (math.isfinite(lh) and math.isfinite(la) and 0.05 <= lh <= 6 and 0.05 <= la <= 6):
-        raise ValueError("Invalid expected-goal rates.")
-    if not -0.20 <= float(rho) <= 0.20:
-        raise ValueError("Invalid Dixon-Coles rho.")
+    if not isinstance(max_goals, int) or not 4 <= max_goals <= 20:
+        raise ValueError("max_goals must be an integer from 4 to 20.")
+    rho_used = safe_rho(lh, la, rho)
     home = [poisson_pmf(lh, i) for i in range(max_goals + 1)]
     away = [poisson_pmf(la, j) for j in range(max_goals + 1)]
     matrix = []
     for i in range(max_goals + 1):
         line = []
         for j in range(max_goals + 1):
-            line.append(home[i] * away[j] * _tau(i, j, lh, la, float(rho)))
+            value = home[i] * away[j] * _tau(i, j, lh, la, rho_used)
+            if value < 0 or not math.isfinite(value):
+                raise ArithmeticError("Dixon-Coles generated an invalid score probability.")
+            line.append(value)
         matrix.append(line)
     total = sum(map(sum, matrix))
     if total <= 0 or not math.isfinite(total):
@@ -221,7 +235,7 @@ def predict_fixture(fit, home, away):
     markets = matrix_markets(matrix)
     return {
         "available": True, "lambda_home": lh, "lambda_away": la,
-        "rho": fit["rho"], "score_matrix": matrix,
+        "rho": safe_rho(lh, la, fit["rho"]), "fitted_rho": fit["rho"], "score_matrix": matrix,
         "home_win": markets["1"], "draw": markets["X"], "away_win": markets["2"],
         "over_15": markets["over_15"], "over_25": markets["over_25"],
         "score": max(((matrix[i][j], i, j) for i in range(len(matrix)) for j in range(len(matrix))), key=lambda x:x[0])[1:],
