@@ -2262,29 +2262,9 @@ async def autobuild_sportybet_command(update, context):
         # Keep each accumulator strictly within the current EAT calendar day.
         # Search today's fixtures only; never mix tomorrow's matches into this slip.
         scan_days = ("today",)
-        # The scanner runs in a worker thread. Forward its progress safely
-        # to Telegram so a slow provider request never looks like a dead bot.
-        telegram_loop = asyncio.get_running_loop()
-        def report_scan_progress(status):
-            try:
-                future = asyncio.run_coroutine_threadsafe(
-                    update.effective_message.reply_text(f"⏳ {status}"),
-                    telegram_loop,
-                )
-                # Do not block the scanner on Telegram delivery.
-                future.add_done_callback(
-                    lambda done: logger.debug(
-                        "Autobuild progress delivery failed: %s",
-                        done.exception() if not done.cancelled() else "cancelled",
-                    ) if done.exception() else None
-                )
-            except Exception:
-                logger.debug("Could not queue autobuild progress update.", exc_info=True)
-
         rows, diagnostics = await asyncio.wait_for(
             asyncio.to_thread(
                 scan_value_candidates, scan_days, market_filter, "SportyBet",
-                progress_callback=report_scan_progress,
             ),
             timeout=180,
         )
