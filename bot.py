@@ -2198,6 +2198,14 @@ def _format_autobuild_research_report(legs):
             f"Venue splits: home sample {evidence.get('home_home_sample') or 0} (GF {evidence.get('home_home_gf') if evidence.get('home_home_gf') is not None else 'N/A'}, GA {evidence.get('home_home_ga') if evidence.get('home_home_ga') is not None else 'N/A'}); away sample {evidence.get('away_away_sample') or 0} (GF {evidence.get('away_away_gf') if evidence.get('away_away_gf') is not None else 'N/A'}, GA {evidence.get('away_away_ga') if evidence.get('away_away_ga') is not None else 'N/A'})",
             f"H2H: {evidence.get('h2h_count') or 0} same-competition meetings",
             f"Expected goals: home {evidence.get('expected_home_goals') if evidence.get('expected_home_goals') is not None else 'N/A'}; away {evidence.get('expected_away_goals') if evidence.get('expected_away_goals') is not None else 'N/A'}",
+            f"Elo ratings: home {evidence.get('elo_home_rating') if evidence.get('elo_home_rating') is not None else 'N/A'}; away {evidence.get('elo_away_rating') if evidence.get('elo_away_rating') is not None else 'N/A'}; matches used {evidence.get('elo_matches_used') or 'N/A'}",
+            f"Monte Carlo cross-check: {evidence.get('monte_carlo_selected_probability') if evidence.get('monte_carlo_selected_probability') is not None else 'Not available'}",
+            f"Standings evidence: {evidence.get('standings_evidence') or 'Not available'}",
+            f"Early-goal evidence: {evidence.get('early_goal_evidence') or 'Not available'}",
+            f"Specialist market evidence: {evidence.get('specialist_evidence') or 'Not available'}",
+            f"Team news / lineup evidence: {leg.get('team_news_evidence') or leg.get('lineup_evidence') or 'Not available'}",
+            f"Evidence providers recorded: {', '.join(leg.get('external_evidence_sources') or []) or 'No external provider recorded'}",
+            f"Fixture/source link: {leg.get('url') or 'Not supplied'}",
         ])
         if checks:
             lines.append("Checks actually completed: " + "; ".join(str(x) for x in checks))
