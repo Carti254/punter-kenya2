@@ -2200,13 +2200,9 @@ async def autobuild_sportybet_command(update, context):
     market_filter = "all"
     await reply(update, f"🔎 Finding matches for target odds {target:.2f}…")
     try:
-        # Keep research and diagnostics internal; Telegram receives only the final slip.
-        # Search a full rolling week so the builder has a wider pool of
-        # independently researched fixtures instead of forcing today's small slate.
-        scan_days = tuple(
-            (datetime.now(EAT).date() + timedelta(days=offset)).isoformat()
-            for offset in range(7)
-        )
+        # Keep each accumulator strictly within the current EAT calendar day.
+        # Search today's fixtures only; never mix tomorrow's matches into this slip.
+        scan_days = ("today",)
         rows, diagnostics = await asyncio.wait_for(
             asyncio.to_thread(
                 scan_value_candidates, scan_days, market_filter, "SportyBet",
@@ -4150,11 +4146,8 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             target_dates.add(today)
         elif day == "tomorrow":
             target_dates.add(today + timedelta(days=1))
-        else:
-            try:
-                target_dates.add(date.fromisoformat(str(day)))
-            except (TypeError, ValueError):
-                continue
+        # The accumulator builder intentionally accepts today's fixtures only.
+        # Ignore other date strings rather than silently widening the scan window.
     if not target_dates:
         return [], ["No scan dates were requested."]
 
@@ -4162,7 +4155,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     # Those sources still enrich matched candidates later, but cannot block
     # primary fixture retrieval and SportyBet price matching.
     try:
-        raw_fixtures = fetch_openmatchday_fixture_rows(max(1, (max(target_dates) - today).days + 1), None, None)
+        raw_fixtures = fetch_openmatchday_fixture_rows(1, None, "today")
         all_fixtures = upcoming_fixtures(raw_fixtures)
         progress(f"Step 2/4: fixture catalogue ready ({len(all_fixtures)} upcoming fixtures). Fetching SportyBet prices…")
     except Exception as exc:
