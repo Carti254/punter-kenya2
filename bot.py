@@ -2142,7 +2142,7 @@ async def autobuild_sportybet_command(update, context):
         )
         # Apply one auditable research/value gate. Keep non-negative-EV candidates;
         # never silently pad a requested slip with negative-EV selections.
-        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.0)
+        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.03)
 
         # Present a clean shortlist after the silent scan. Group alternative markets
         # under their fixture so users can see the actual match coverage at a glance.
