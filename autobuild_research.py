@@ -129,6 +129,27 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     home_venue_n = int(row.get("home_home_sample") or 0)
     away_venue_n = int(row.get("away_away_sample") or 0)
     h2h_n = int(row.get("h2h_count") or 0)
+    standings = row.get("standings_evidence") or {}
+    standings_available = bool(standings.get("home") and standings.get("away"))
+    early_goals = row.get("early_goal_evidence") or {}
+    early_home, early_away = early_goals.get("home") or {}, early_goals.get("away") or {}
+    early_goals_available = (
+        int(early_home.get("sample") or 0) >= 3
+        and int(early_away.get("sample") or 0) >= 3
+    )
+    lineup_sides = (row.get("lineup_evidence") or {}).get("sides") or []
+    lineups_available = len(lineup_sides) >= 2
+    odds_history = row.get("odds_history_evidence") or {}
+    odds_history_available = (
+        odds_history.get("status") == "observed"
+        and int(odds_history.get("observations") or 0) >= 2
+    )
+    tactical = row.get("tactical_evidence") or {}
+    tactical_available = bool(tactical.get("home") and tactical.get("away"))
+    other_bookmaker_available = bool(
+        row.get("best_other_bookmaker") or row.get("other_bookmaker_prices")
+    )
+
     checks = [
         "fixture matched to bookmaker event",
         "current bookmaker price retrieved",
@@ -141,9 +162,9 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         checks.append(f"home/away venue splits reviewed ({home_venue_n} home; {away_venue_n} away)")
     if h2h_n:
         checks.append(f"same-competition head-to-head reviewed ({h2h_n} meetings)")
-    if row.get("standings_evidence"):
+    if standings_available:
         checks.append("current league table positions and points checked (API-Football)")
-    if row.get("early_goal_evidence"):
+    if early_goals_available:
         checks.append("first-goal-before-10-minute rates checked from recent match events (API-Football)")
     if probability_source.startswith("Dixon-Coles"):
         checks.append("Dixon-Coles low-score correction applied to the 1X2 probability")
@@ -202,23 +223,20 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
                 ("minimum recent-form sample", home_n >= 5 and away_n >= 5),
                 ("minimum home/away venue sample", home_venue_n >= 3 and away_venue_n >= 3),
                 ("head-to-head history", h2h_n > 0),
-                ("current league table position and points", bool(row.get("standings_evidence"))),
+                ("current league table position and points", standings_available),
                 ("cross-competition team-strength comparison", bool(row.get("league_strength_evidence"))),
-                ("early-goal timing statistics (first 5/10 minutes)", bool(row.get("early_goal_evidence"))),
+                ("early-goal timing statistics (first 5/10 minutes)", early_goals_available),
                 ("chronological Elo rating evidence", elo_probability is not None),
                 ("Monte Carlo scoreline cross-check", monte_carlo is not None),
-                ("verified starting lineups", bool(row.get("lineup_evidence"))),
+                ("verified starting lineups for both teams", lineups_available),
                 ("injury and suspension evidence", bool(row.get("team_news_evidence"))),
                 ("xG and shot-quality evidence", bool(row.get("xg_evidence"))),
-                ("live odds movement history", bool(row.get("odds_history_evidence"))),
+                ("live odds movement history", odds_history_available),
                 ("independent specialist market model", bool(row.get("specialist_evidence"))),
-                ("cross-bookmaker exact price comparison", bool(row.get("other_bookmaker_evidence"))),
-                ("historical odds movement and closing-line data", bool(row.get("odds_history_evidence"))),
+                ("cross-bookmaker exact price comparison", other_bookmaker_available),
                 ("empirical cross-fixture correlation data", bool(row.get("correlation_evidence"))),
                 ("out-of-sample probability calibration evidence", bool(row.get("calibration_evidence"))),
-                ("tactical matchup evidence", bool(row.get("tactical_evidence"))),
-                ("current league standings", bool(row.get("standings_evidence"))),
-                ("first-goal-before-10-minute statistics", bool(row.get("early_goal_evidence"))),
+                ("tactical matchup evidence for both teams", tactical_available),
             ) if not present
         ],
     })
