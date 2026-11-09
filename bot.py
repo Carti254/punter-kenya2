@@ -2258,26 +2258,21 @@ async def autobuild_sportybet_command(update, context):
             max_candidates=None,
         )
         chosen = build["selections"]
-        # Never resolve or present a below-target partial as a parlay. The engine
-        # may retain its best partial internally for diagnostics, but the user asked
-        # for a target-odds accumulator, not a lower-odds substitute.
         target_reached = bool(build.get("target_reached"))
-        # Always attempt to show the engine's best valid construction. If it
-        # cannot reach the requested target, label the actual odds honestly and
-        # do not offer a booking code.
-        if not target_reached:
+        if not target_reached or not chosen:
             context.user_data.pop("pending_sportybet_booking", None)
-            logger.info(
-                "Requested target %.2f not reached; presenting best available candidate at %.2f",
-                target, float(build.get("combined_odds") or 1.0),
+            reason = str(build.get("reason") or "No valid combination reached the requested target.")
+            await reply(
+                update,
+                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\\n"
+                f"PUNTER checked {available_fixtures} fixtures and {len(rows)} eligible selections.\\n"
+                f"{reason}\\n"
+                "No lower-odds substitute or booking code was created."
             )
+            return
         if len(chosen) < min_legs or (max_legs is not None and len(chosen) > max_legs):
             context.user_data.pop("pending_sportybet_booking", None)
-            await reply(update, f"NO SLIP: I could not find a qualifying combination with exactly {min_legs} legs near your {target:.2f} target. I will not silently change your requested leg count or fill it with negative-value picks.")
-            return
-        if not chosen:
-            context.user_data.pop("pending_sportybet_booking", None)
-            await reply(update, "No qualifying SportyBet selections were found.")
+            await reply(update, "NO SLIP: the selected combination did not satisfy the configured leg constraints.")
             return
 
         # Keep the exact fixture, market and outcome IDs returned by the odds scan.
