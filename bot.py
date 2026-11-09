@@ -37,6 +37,7 @@ from premium_intelligence import market_probabilities, assess_price, rollover_pr
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
+from advanced_models import build_elo_ratings, monte_carlo_scoreline
 from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models as enrich_specialist_candidates
 from free_football_sources import enrich_candidates as enrich_free_football_sources, fetch_provider_fixtures as fetch_free_provider_fixtures, provider_key_status
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
@@ -2156,7 +2157,7 @@ async def autobuild_sportybet_command(update, context):
             logger.warning("Optional specialist research failed; continuing with primary candidates: %s", exc)
         # Apply one auditable research/value gate. Keep non-negative-EV candidates;
         # never silently pad a requested slip with negative-EV selections.
-        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.03)
+        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.03, use_dixon_coles=True)
 
         # Run one real Gemini evidence-review pass on the strongest candidates.
         # Gemini receives only PUNTER/provider facts already retrieved; it cannot
@@ -3284,6 +3285,10 @@ def build_pre_match_prediction(raw_fixture, fixture):
         "h2h_results": h2h_results,
         "lambda_home": lambda_home,
         "lambda_away": lambda_away,
+        "elo_home_rating": elo_home_rating,
+        "elo_away_rating": elo_away_rating,
+        "elo_matches_used": len(elo_rows),
+        "monte_carlo": monte_carlo,
         "home_win": home_win,
         "draw": draw,
         "away_win": away_win,
@@ -3421,6 +3426,26 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
     else:
         lambda_home = max(0.15, min(4.0, ((home_scored + away_conceded) / 2) * 1.08))
         lambda_away = max(0.15, min(4.0, ((away_scored + home_conceded) / 2) * 0.92))
+
+    # Chronological competition Elo, strictly excluding the forecast date.
+    elo_rows = []
+    for result_row in rows:
+        try:
+            elo_rows.append({
+                "date": result_row.get("date"), "home": result_row.get("home"),
+                "away": result_row.get("away"), "home_goals": result_row.get("ft_home"),
+                "away_goals": result_row.get("ft_away"),
+            })
+        except Exception:
+            continue
+    elo_ratings = build_elo_ratings(
+        elo_rows, before_date=(as_of_date.date().isoformat() if isinstance(as_of_date, datetime)
+                               else str(as_of_date)[:10] if as_of_date else None)
+    )
+    elo_home_rating = elo_ratings.get(fixture["home_team"])
+    elo_away_rating = elo_ratings.get(fixture["away_team"])
+    # Reproducible Monte Carlo cross-check from the same transparent goal-rate inputs.
+    monte_carlo = monte_carlo_scoreline(lambda_home, lambda_away, simulations=10000)
 
     grid = []
     for home_goals in range(9):
@@ -4139,6 +4164,10 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         "h2h_results": prediction.get("h2h_results", []),
                         "lambda_home": prediction.get("lambda_home"),
                         "lambda_away": prediction.get("lambda_away"),
+                        "elo_home_rating": prediction.get("elo_home_rating"),
+                        "elo_away_rating": prediction.get("elo_away_rating"),
+                        "elo_matches_used": prediction.get("elo_matches_used"),
+                        "monte_carlo": prediction.get("monte_carlo"),
                         "kickoff": game.get("kickoff_eat") or fixture.get("kickoffUtc"),
                         "url": game.get("url"),
                         "event_id": game.get("event_id"),
