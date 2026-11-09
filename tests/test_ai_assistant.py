@@ -35,6 +35,13 @@ class AIAssistantTests(unittest.TestCase):
         self.assertIn("models/gemini-test:generateContent", post.call_args.args[0])
         self.assertEqual(post.call_args.kwargs["headers"]["x-goog-api-key"], "test-key")
 
+    def test_plain_fixture_request_bypasses_gemini(self):
+        with patch.object(ai_assistant.requests, "post", side_effect=AssertionError("Gemini should not be called")):
+            result = ai_assistant.interpret_request("León vs Guadalajara")
+        self.assertEqual(result["action"], "deepdive")
+        self.assertEqual(result["fixture"], "León vs Guadalajara")
+        self.assertEqual(result["market"], "all")
+
     def test_unknown_action_and_invalid_fixture_fall_back_safely(self):
         response = FakeResponse('{"action":"place_bet","fixture":"somewhere","date":"yesterday","target_odds":0}')
         with patch.object(ai_assistant.requests, "post", return_value=response):
