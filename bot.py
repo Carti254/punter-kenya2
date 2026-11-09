@@ -2391,37 +2391,58 @@ async def accumulator_status_command(update, context):
             return
 
     try:
-        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "safest")
+        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "all")
+        # Keep this command on the same research/value gate as the SportyBet
+        # auto-builder. The old implementation selected the six highest raw
+        # probabilities, bypassed the 3% EV screen and hard-coded six legs.
+        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.03)
     except Exception as exc:
         logger.exception("Accumulator scan failed")
         await reply(update, f"❌ ACCUMULATOR SCAN FAILED: {type(exc).__name__}: {str(exc)[:250]}")
         return
 
-    build = build_accumulator(rows, target, max_legs=6, ranking="probability")
-    chosen, combined = build["selections"], build["combined_odds"]
+    fixture_count = len({
+        (str(x.get("day") or "")[:10], canonical_team_key(x.get("home")), canonical_team_key(x.get("away")))
+        for x in rows if x.get("home") and x.get("away")
+    })
+    if not rows or fixture_count == 0:
+        await reply(update, "⚠️ NO QUALIFIED ACCUMULATOR CANDIDATES\n"
+                    + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No model-supported bookmaker prices were retrieved.")
+                    + f"\nResearch screen: {research_stats.get('rejected', 0)} rejected; {research_stats.get('eligible', 0)} eligible.")
+        return
 
-    if not chosen:
-        await reply(update, "⚠️ NO USABLE ACCUMULATOR CANDIDATES\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No model-supported bookmaker prices were retrieved."))
+    # The engine chooses the number of legs automatically from distinct fixtures.
+    build = build_accumulator(rows, target, max_legs=None, ranking="value")
+    chosen, combined = build["selections"], build["combined_odds"]
+    if not chosen or not build.get("target_reached"):
+        await reply(update, f"NO BET: no qualifying combination reached your {target:.2f} target within the 20% tolerance. "
+                    "No partial slip has been presented as a completed accumulator. "
+                    f"Qualified fixtures: {fixture_count}; eligible markets: {len(rows)}.")
         return
 
     probability_product = math.prod(item["probability"] for item in chosen)
     lines = [
         "🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR",
-        f"Target: {target:.2f} | Combined decimal odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"),
+        f"Target: {target:.2f} | Combined decimal odds: {combined:.2f} | TARGET REACHED",
+        f"Automatic leg count: {len(chosen)} | Qualified fixtures: {fixture_count}",
+        f"Research screen: {research_stats['eligible']} eligible; {research_stats['rejected']} rejected",
         "",
     ]
     for number, item in enumerate(chosen, 1):
         lines.extend([
-            f"{number}. {item['home']} vs {item['away']} — {item['league']}",
-            f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item['bookmaker']})",
-            f"   Model probability: {item['probability']:.1%} | Estimated EV: {item['ev']:+.1%}",
+            f"{number}. {item['home']} vs {item['away']} — {item.get('league') or 'Competition'}",
+            f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item.get('bookmaker') or 'Unknown'})",
+            f"   Model probability: {item['probability']:.1%} | Estimated EV: {item.get('ev', 0):+.1%}",
+            f"   Evidence gaps: {', '.join(item.get('research_gaps') or []) or 'None reported'}",
         ])
     lines.extend([
         "",
         f"Naive independent-leg probability product: {probability_product:.2%}",
-        "This assumes independence. Correlation is not modelled, so this is NOT a calibrated accumulator probability.",
-        "Experimental estimates only. Confirm every price and market with the bookmaker. No BTTS or Under 2.5.",
+        "This assumes independence and is not a calibrated accumulator probability.",
     ])
+    if build.get("correlation_warnings"):
+        lines.append("Correlation warning: " + "; ".join(build["correlation_warnings"]))
+    lines.append("Experimental model estimates only. Confirm every price and settlement rule. No BTTS or Under 2.5.")
     await reply(update, "\n".join(lines))
 
 
