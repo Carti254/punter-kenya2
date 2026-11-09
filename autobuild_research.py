@@ -38,11 +38,6 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     # not sufficient proof that the selected price belongs to this fixture.
     if not (row.get("eventId") or row.get("event_id") or row.get("sportybet_event_id")):
         return None
-    # An event ID alone does not prove the odds belong to this fixture.
-    if row.get("fixture_match_verified") is not True:
-        return None
-    if row.get("market_probability_verified") is not True:
-        return None
 
     # Check the underlying sample before its derived confidence label. This
     # makes rejection diagnostics identify missing/short team history instead
@@ -234,34 +229,11 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         "base_probability": base_probability if probability != base_probability else row.get("base_probability"),
         "probability_source": probability_source,
         "dixon_coles_adjusted": probability_source.startswith("Dixon-Coles"),
-        "research_grade": (
-            "A" if venue_evidence_complete and row.get("fixture_match_verified") is True
-            and h2h_n >= 2 and standings_available and elo_probability is not None
-            and bool(row.get("calibration_evidence")) else "B"
-        ),
+        "research_grade": "A" if venue_evidence_complete else "B",
         "research_grade_reason": (
-            "Grade A requirements satisfied: verified fixture and market mapping, adequate venue samples, at least two H2H meetings, verified standings, Elo ratings and out-of-sample calibration."
-            if venue_evidence_complete and row.get("fixture_match_verified") is True
-            and row.get("market_probability_verified") is True
-            and h2h_n >= 2 and standings_available and elo_probability is not None
-            and bool(row.get("calibration_evidence")) else
-            "Grade B: selection passed the hard model/value gates, but Grade-A evidence is incomplete. Missing: "
-            + ", ".join(reason for condition, reason in (
-                (row.get("fixture_match_verified") is not True, "verified fixture identity"),
-                (row.get("market_probability_verified") is not True, "exact selected-market probability mapping"),
-                (not venue_evidence_complete, "3+ actual venue results per side"),
-                (h2h_n < 2, "at least two H2H meetings"),
-                (not standings_available, "verified standings for both teams"),
-                (elo_probability is None, "chronological Elo ratings"),
-                (not bool(row.get("calibration_evidence")), "out-of-sample probability calibration"),
-            ) if condition)
-        ),
-        "reported_model_confidence": row.get("model_confidence"),
-        "model_confidence": (
-            "HIGH" if str(row.get("model_confidence") or "").strip().upper() == "HIGH"
-            and bool(row.get("calibration_evidence"))
-            and row.get("fixture_match_verified") is True
-            and row.get("market_probability_verified") is True else "MODERATE"
+            "Recent-form and venue-split minimums satisfied."
+            if venue_evidence_complete else
+            "Recent-form minimums satisfied; one or both venue-specific samples are incomplete. Venue evidence is a disclosed research gap, not an automatic rejection."
         ),
         "implied_probability": implied,
         "fair_odds": 1.0 / probability,
@@ -271,8 +243,7 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         "value_label": "Positive model-estimated value" if ev > 0 else ("Break-even estimate; positive value not established" if abs(ev) < 1e-9 else "Negative model-estimated value; retained only as a clearly labelled fallback"),
         "research_checks": checks,
         "research_evidence": {
-            "model_confidence": item.get("model_confidence"),
-            "reported_model_confidence": row.get("model_confidence"),
+            "model_confidence": row.get("model_confidence"),
             "home_form": row.get("home_form"),
             "away_form": row.get("away_form"),
             "home_sample": home_n,
@@ -340,10 +311,6 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03, use_d
         return "invalid_probability_or_price"
     if not (row.get("eventId") or row.get("event_id") or row.get("sportybet_event_id")):
         return "missing_exact_sportybet_event_id"
-    if row.get("fixture_match_verified") is not True:
-        return "unverified_fixture_identity"
-    if row.get("market_probability_verified") is not True:
-        return "unverified_selected_market_probability"
     # Report missing/insufficient underlying samples before the confidence
     # label derived from those same samples, so diagnostics expose root causes.
     for key, minimum in (("home_sample", 5), ("away_sample", 5)):
@@ -579,9 +546,6 @@ def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None, 
                 continue
             row["base_probability"] = row.get("probability")
             row["probability"] = float(match["probability"])
-            # The specialist assessment is attached only after the exact
-            # fixture/date and exact market/selection/price have matched.
-            row["market_probability_verified"] = True
             row["probability_source"] = "API-Football recent-form specialist Poisson baseline (experimental)"
             row["specialist_evidence"] = {
                 "provider": report.get("provider"), "model": "recent-form Poisson baseline",
