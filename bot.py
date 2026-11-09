@@ -1285,7 +1285,6 @@ async def process_slip_flow(update, context):
             context.user_data.pop("autobuild_config", None)
             context.user_data.pop("slip_flow", None)
             context.args = [f"{target:.12g}"]
-            await reply(update, f"Target accepted: {target:.2f}. Researching available fixtures and markets.")
             await autobuild_sportybet_command(update, context)
             return True
 
@@ -1300,7 +1299,6 @@ async def process_slip_flow(update, context):
                 await reply(update, "That old slip request expired. Press Build a slip and enter only your target combined odds.")
                 return True
             context.args = [f"{target:.12g}"]
-            await reply(update, f"Target accepted: {target:.2f}. Selecting the number of legs automatically and researching fixtures.")
             await autobuild_sportybet_command(update, context)
             return True
 
@@ -2160,52 +2158,9 @@ async def autobuild_sportybet_command(update, context):
         # never silently pad a requested slip with negative-EV selections.
         rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.03)
 
-        # Present a clean shortlist after the silent scan. Group alternative markets
-        # under their fixture so users can see the actual match coverage at a glance.
-        fixture_groups = {}
-        for item in rows:
-            fixture_key = (item.get("day"), item.get("home"), item.get("away"))
-            fixture_groups.setdefault(fixture_key, [])
-            fixture_groups[fixture_key].append(item)
-        fixture_lines = ["⚽ SPORTYBET FIXTURES FOUND", f"Fixtures with usable model-backed markets: {len(fixture_groups)}", ""]
-        for (day, home, away), items in sorted(fixture_groups.items()):
-            league = items[0].get("league") or "Competition"
-            fixture_lines.append(f"• {home} vs {away}")
-            fixture_lines.append(f"  {day} | {league} | {len(items)} eligible market selections")
-            seen_markets = set()
-            shown = 0
-            for item in items:
-                label = f"{item.get('market')}: {item.get('selection')} @ {float(item.get('odds') or 0):.2f}"
-                if item.get("bsd_consensus_odds"):
-                    label += (
-                        f" | BSD consensus {float(item['bsd_consensus_odds']):.2f}"
-                        f" | SportyBet vs consensus {float(item.get('price_vs_bsd_consensus') or 0):+.1%}"
-                    )
-                if label in seen_markets:
-                    continue
-                seen_markets.add(label)
-                fixture_lines.append(f"  – {label}")
-                shown += 1
-                if shown >= 4:
-                    break
-            if len(items) > shown:
-                fixture_lines.append(f"  – plus {len(items) - shown} other eligible selections")
-            fixture_lines.append("")
-        fixture_text = "\n".join(fixture_lines).strip()
-        # Telegram message limit is 4096 characters; split only between fixture blocks.
-        chunks, current = [], ""
-        for block in fixture_text.split("\n\n"):
-            candidate = (current + "\n\n" + block).strip() if current else block
-            if len(candidate) > 3500 and current:
-                chunks.append(current)
-                current = block
-            else:
-                current = candidate
-        if current:
-            chunks.append(current)
-        for chunk in chunks:
-            await reply(update, chunk)
-
+        # Research stays internal. Do not send fixture dumps, market lists or
+        # intermediate candidate output to Telegram; only the final slip (or a
+        # concise no-bet result) is user-facing.
         if not rows:
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(
