@@ -72,7 +72,7 @@ class AIAssistantTests(unittest.TestCase):
         response = FakeResponse('{"action":"deepdive","fixture":"Deportivo La Coruna vs Valencia","date":"today","market":"all","target_odds":2.0}')
         with patch.dict("os.environ", {"GEMINI_MODEL": "gemini-2.5-flash"}):
             with patch.object(ai_assistant.requests, "post", return_value=response) as post:
-                result = ai_assistant.interpret_request("deportivo la coruna fc vs valencia")
+                result = ai_assistant.interpret_request("Analyse deportivo la coruna fc vs valencia")
         self.assertEqual(result["fixture"], "Deportivo La Coruna vs Valencia")
         self.assertIn("models/gemini-3.8-flash:generateContent", post.call_args.args[0])
 
