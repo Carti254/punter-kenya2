@@ -79,35 +79,22 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         away_venue_n = 0
     venue_evidence_complete = home_venue_n >= 3 and away_venue_n >= 3
 
-    # Autobuild must not promote a forecast to a qualifying betting leg merely
-    # because the overall sample counters and a derived confidence label exist.
-    # Require actual venue-split goal evidence for BOTH teams, plus at least one
-    # genuinely separate corroborating source (standings, 3+ H2H meetings,
-    # exact-market specialist assessment, or an independent model comparison).
-    def _has_number(value):
-        try:
-            return math.isfinite(float(value))
-        except (TypeError, ValueError, OverflowError):
-            return False
-
-    venue_goals_present = all(_has_number(row.get(key)) for key in (
-        "home_home_gf", "home_home_ga", "away_away_gf", "away_away_ga"
-    ))
-    h2h_count_for_gate = 0
+    # Do not confuse missing optional corroboration with a bad forecast.
+    # Require real venue observations (at least one for each side); candidates
+    # with thin venue samples remain Tier B and are explicitly labelled as such.
+    # Stronger corroboration is used to award Tier A, not as a blanket discovery
+    # filter that leaves only one fixture on a busy matchday.
     try:
-        h2h_count_for_gate = int(row.get("h2h_count") or 0)
+        home_venue_gf = float(row.get("home_home_gf"))
+        home_venue_ga = float(row.get("home_home_ga"))
+        away_venue_gf = float(row.get("away_away_gf"))
+        away_venue_ga = float(row.get("away_away_ga"))
+        venue_goals_present = all(math.isfinite(value) for value in (
+            home_venue_gf, home_venue_ga, away_venue_gf, away_venue_ga
+        ))
     except (TypeError, ValueError, OverflowError):
-        pass
-    standings_for_gate = row.get("standings_evidence") or {}
-    corroboration_present = bool(
-        (standings_for_gate.get("home") and standings_for_gate.get("away"))
-        or h2h_count_for_gate >= 3
-        or row.get("specialist_evidence")
-        or row.get("external_model_disagreement") is not None
-    )
-    if not venue_evidence_complete or not venue_goals_present:
-        return None
-    if not corroboration_present:
+        venue_goals_present = False
+    if home_venue_n < 1 or away_venue_n < 1 or not venue_goals_present:
         return None
 
     market = str(row.get("market") or "")
@@ -344,24 +331,12 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03, use_d
             return math.isfinite(float(value))
         except (TypeError, ValueError, OverflowError):
             return False
-    if home_venue_n < 3 or away_venue_n < 3 or not all(
+    if home_venue_n < 1 or away_venue_n < 1 or not all(
         _has_number(row.get(key)) for key in (
             "home_home_gf", "home_home_ga", "away_away_gf", "away_away_ga"
         )
     ):
         return "insufficient_venue_split_evidence"
-    standings = row.get("standings_evidence") or {}
-    try:
-        h2h_n = int(row.get("h2h_count") or 0)
-    except (TypeError, ValueError, OverflowError):
-        h2h_n = 0
-    if not (
-        (standings.get("home") and standings.get("away"))
-        or h2h_n >= 3
-        or row.get("specialist_evidence")
-        or row.get("external_model_disagreement") is not None
-    ):
-        return "missing_independent_corroboration"
     try:
         disagreement = float(row.get("external_model_disagreement"))
     except (TypeError, ValueError, OverflowError):
