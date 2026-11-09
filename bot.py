@@ -2134,6 +2134,18 @@ async def autobuild_sportybet_command(update, context):
             )
             return
 
+        # Attach timestamped odds movement and exact cross-bookmaker comparisons
+        # from PUNTER's existing snapshots. Missing DB/history is reported, not guessed.
+        try:
+            snapshot_rows, price_history_stats = await asyncio.to_thread(
+                enrich_candidates_with_price_history, rows[:100]
+            )
+            rows = snapshot_rows + rows[100:]
+        except Exception as price_error:
+            price_history_stats = {
+                "reason": f"Stored odds history unavailable: {type(price_error).__name__}: {str(price_error)[:120]}"
+            }
+
         # API-Football specialist evidence is optional and quota-limited. When
         # configured, it enriches exact fixture/market matches; missing reports
         # remain visible as research gaps and are never fabricated.
@@ -2224,6 +2236,7 @@ async def autobuild_sportybet_command(update, context):
             live_leg["ev"] = float(model_leg["ev"])
             live_leg["probability_source"] = model_leg.get("probability_source") or "PUNTER statistical model"
             for key in (
+                "home", "away", "league", "day", "kickoff",
                 "fair_odds", "implied_probability", "edge", "value_tier", "value_label",
                 "model_confidence", "model_version", "home_form", "away_form",
                 "home_sample", "away_sample", "home_scored_avg", "home_conceded_avg",
@@ -2404,7 +2417,7 @@ async def accumulator_status_command(update, context):
         return
 
     # The engine chooses the number of legs automatically from distinct fixtures.
-    build = build_accumulator(rows, target, max_legs=None, ranking="value")
+    build = build_accumulator(rows, target, max_legs=20, ranking="value")
     chosen, combined = build["selections"], build["combined_odds"]
     if not chosen or not build.get("target_reached"):
         await reply(update, f"NO BET: no qualifying combination reached your {target:.2f} target within the 20% tolerance. "
