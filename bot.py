@@ -2450,6 +2450,12 @@ async def accumulator_status_command(update, context):
               if item.get("tactical_evidence") else []),
             *([f"   Odds movement: {item['odds_history_evidence'].get('movement_direction')} ({item['odds_history_evidence'].get('movement_fraction',0):+.1%}, {item['odds_history_evidence'].get('observations')} snapshots)."]
               if (item.get('odds_history_evidence') or {}).get('status') == 'observed' else []),
+            *([f"   Best other bookmaker: {item['best_other_bookmaker'].get('bookmaker')} @ {item['best_other_bookmaker'].get('odds'):.2f}."]
+              if item.get("best_other_bookmaker") else []),
+            *([f"   Gemini review: {item['ai_research_review'].get('assessment','')[:180]}"]
+              if item.get("ai_research_review") else []),
+            *([f"   Calibration: temperature {item['calibration_evidence'].get('temperature'):.2f}; holdout n={item['calibration_evidence'].get('holdout')}."]
+              if item.get("calibration_evidence") else []),
         ])
     lines.extend([
         "",
