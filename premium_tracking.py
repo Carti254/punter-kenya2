@@ -5,6 +5,8 @@ fixture/market/selection match exists; missing observations are reported, not gu
 """
 from __future__ import annotations
 
+import math
+
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from database import get_connection
