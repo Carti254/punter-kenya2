@@ -36,7 +36,7 @@ class AutobuildResearchTests(unittest.TestCase):
         self.assertAlmostEqual(row["probability"], expected)
 
     def test_walk_forward_calibration_is_not_applied_without_ready_holdout(self):
-        rows = [self.candidate(lambda_home=1.8, lambda_away=0.9)]
+        rows = [self.candidate(lambda_home=1.8, lambda_away=0.9, probability_source="PUNTER venue-weighted Poisson scoreline model")]
         result, status = apply_walk_forward_calibration(rows, {"ready": False})
         self.assertFalse(status["applied"])
         self.assertEqual(result[0]["probability"], rows[0]["probability"])
