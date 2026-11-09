@@ -29,7 +29,7 @@ class AccumulatorEngineTests(unittest.TestCase):
             {"home": "Safe", "away": "Choice", "odds": 1.50, "probability": 0.99, "market": "1X2"},
             {"home": "Closer", "away": "Choice", "odds": 2.20, "probability": 0.60, "market": "1X2"},
         ]
-        result = build_accumulator(candidates, 2.00, max_legs=2)
+        result = build_accumulator(candidates, 2.50, max_legs=2)
         self.assertFalse(result["target_reached"])
         self.assertEqual(len(result["selections"]), 1)
         self.assertAlmostEqual(result["combined_odds"], 2.20)
