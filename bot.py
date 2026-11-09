@@ -2137,12 +2137,6 @@ async def autobuild_sportybet_command(update, context):
             league = items[0].get("league") or "Competition"
             fixture_lines.append(f"• {home} vs {away}")
             fixture_lines.append(f"  {day} | {league} | {len(items)} eligible market selections")
-            sources = sorted({source for item in items for source in (item.get("external_evidence_sources") or [])})
-            if sources:
-                fixture_lines.append("  Research sources: " + " + ".join(source.upper() for source in sources))
-            if any(item.get("external_model_disagreement") is not None for item in items):
-                deltas = [float(item["external_model_disagreement"]) for item in items if item.get("external_model_disagreement") is not None]
-                fixture_lines.append(f"  Independent model comparison: max probability gap {max(deltas):.1%}")
             seen_markets = set()
             shown = 0
             for item in items:
