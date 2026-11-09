@@ -343,7 +343,7 @@ def smoke_test_bookmakers():
     for name, fetcher in (
         ("Betika", lambda: fetch_betika(day, max_pages=1, max_details=3)),
         ("Betika tomorrow", lambda: fetch_betika(day + timedelta(days=1), max_pages=1, max_details=3)),
-        ("SportyBet", lambda: fetch_sportybet(day, max_pages=1)),
+        ("SportyBet", lambda: fetch_sportybet({day, day + timedelta(days=1)}, max_pages=5)),
     ):
         try:
             games = fetcher()
