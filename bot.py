@@ -2144,9 +2144,12 @@ async def autobuild_sportybet_command(update, context):
                 asyncio.create_task(reply(update, "🔎 " + safe_message))
             loop.call_soon_threadsafe(send_progress)
 
-        rows, diagnostics = await asyncio.to_thread(
-            scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet",
-            progress_callback=scan_progress,
+        rows, diagnostics = await asyncio.wait_for(
+            asyncio.to_thread(
+                scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet",
+                progress_callback=scan_progress,
+            ),
+            timeout=90,
         )
         scanned_count = len(rows)
         await reply(update, f"✅ Fixture and odds scan complete: {scanned_count} priced/modelled market rows. Applying research filters…")
@@ -2190,8 +2193,9 @@ async def autobuild_sportybet_command(update, context):
         specialist_stats = {"reason": "Specialist research not configured or unavailable."}
         price_history_stats = {"matched": 0, "reason": "Stored odds history not checked."}
         try:
-            rows, specialist_stats = await asyncio.to_thread(
-                enrich_specialist_candidates, rows, max_fixtures=3
+            rows, specialist_stats = await asyncio.wait_for(
+                asyncio.to_thread(enrich_specialist_candidates, rows, max_fixtures=3),
+                timeout=25,
             )
         except Exception as enrichment_error:
             logger.warning("Autobuild specialist enrichment failed: %s", enrichment_error)
@@ -2201,8 +2205,9 @@ async def autobuild_sportybet_command(update, context):
         # Odds-history lookup is supplementary; failure must not block a live scan.
         try:
             original_rows = rows
-            enriched_rows, price_history_stats = await asyncio.to_thread(
-                enrich_candidates_with_price_history, original_rows[:100]
+            enriched_rows, price_history_stats = await asyncio.wait_for(
+                asyncio.to_thread(enrich_candidates_with_price_history, original_rows[:100]),
+                timeout=8,
             )
             rows = list(enriched_rows or []) + original_rows[100:]
         except Exception as history_error:
