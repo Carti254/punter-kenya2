@@ -2223,7 +2223,7 @@ async def autobuild_sportybet_command(update, context):
             live_leg.update({key: value for key, value in model_leg.items() if key not in protected_keys})
 
         combined = math.prod(float(x["odds"]) for x in resolved)
-        if not (target <= combined <= target * 1.20):
+        if not (target <= combined <= min(target * 1.20, 5.0)):
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(
                 update,
@@ -5855,7 +5855,7 @@ async def preferences_command(update, context):
 
 async def rollover_command(update, context):
     if len(context.args or []) != 2:
-        await reply(update, "Usage: /rollover DAYS DAILY_TARGET_ODDS\nExample: /rollover 5 2")
+        await reply(update, "Usage: /rollover DAYS DAILY_TARGET_ODDS (target 2.00–5.00)\nExample: /rollover 5 2.50")
         return
     try:
         days, target = int(context.args[0]), float(context.args[1])
