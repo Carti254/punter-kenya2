@@ -46,7 +46,7 @@ class BookmakerOddsTests(unittest.TestCase):
         self.assertIn("marketId", params)
         self.assertEqual(params["pageSize"], 100)
         self.assertEqual(params["todayGames"], "false")
-        self.assertEqual(params["timeline"], 2880)
+        self.assertNotIn("timeline", params)
 
 
 if __name__ == "__main__":
