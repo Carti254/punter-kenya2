@@ -3565,97 +3565,104 @@ def _normal_market_text(value):
 
 
 def _market_probability_for_row(prediction, row):
-    """Estimate supported markets from the scoreline distribution; never invent unavailable data."""
+    """Map only explicitly supported full-time markets to the fitted DC score matrix."""
+    if not prediction or not prediction.get("available", True):
+        return None, "fitted Dixon-Coles prediction unavailable"
+    matrix = prediction.get("score_matrix")
+    if not isinstance(matrix, list) or not matrix or any(not isinstance(r, list) for r in matrix):
+        return None, "fitted Dixon-Coles score matrix unavailable"
+
     raw_market = str(row.get("market") or "").casefold()
     raw_selection = str(row.get("selection") or "").casefold()
-    if any(token in raw_market for token in ("&", " + ", "combo", "combined")) or " & " in raw_selection or " and " in raw_selection:
-        return None, "combined market requires a joint probability model"
-    # These markets have settlement rules or time horizons different from a
-    # standard full-time scoreline. Never reuse an ordinary 1X2 probability.
-    special_market_text = f"{raw_market} {raw_selection}".casefold()
-    if any(token in special_market_text for token in (
-        "2up", "two up", "early payout", "first half", "1st half",
-        "second half", "2nd half", "half time", "half-time",
+    raw_specifier = str(row.get("specifier") or row.get("handicap") or "").casefold()
+    combined = f"{raw_market} {raw_selection}"
+    if any(x in combined for x in ("combo", "combined", " & ", " and ")):
+        return None, "combined markets are not modelled"
+    if any(x in combined for x in (
+        "btts", "both teams to score", "draw no bet", " dnb", "2up", "two up",
+        "early payout", "first half", "1st half", "second half", "2nd half",
+        "half time", "half-time", "corners", "cards", "booking", "player",
     )):
-        return None, "special or period-specific market has no dedicated PUNTER probability model"
-    market = _normal_market_text(row.get("market"))
-    selection = _normal_market_text(row.get("selection"))
-    specifier = _normal_market_text(row.get("specifier") or row.get("handicap"))
-    text = f"{market} {selection} {specifier}".strip()
-    lh, la = prediction.get("lambda_home"), prediction.get("lambda_away")
-    if lh is None or la is None:
-        return None, "model goal rates unavailable"
+        return None, "market is excluded or requires a separate model"
 
-    def line_from_text(default=None):
-        match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)(?!\d)", text)
-        return float(match.group(1)) if match else default
+    market = _normal_market_text(raw_market)
+    selection = _normal_market_text(raw_selection)
+    home_p, draw_p, away_p = (
+        prediction.get("home_win"), prediction.get("draw"), prediction.get("away_win")
+    )
+    if any(x is None for x in (home_p, draw_p, away_p)):
+        return None, "1X2 probabilities missing from fitted score matrix"
 
-    # Match result and double chance.
-    home_p = prediction.get("home_win")
-    draw_p = prediction.get("draw")
-    away_p = prediction.get("away_win")
-    if any(x in market for x in ("double chance", "1x", "12", "x2")):
-        if selection in ("1x", "home or draw", "home/draw", "home draw", "1 or x", "1 x"):
-            return home_p + draw_p, None
-        if selection in ("12", "1 or 2", "home or away", "home/away", "home away", "1 2"):
-            return home_p + away_p, None
-        if selection in ("x2", "draw or away", "draw/away", "draw away", "x or 2", "x 2"):
-            return draw_p + away_p, None
-    if any(x in market for x in ("draw no bet", "dnb")):
-        if selection in ("1", "home", "home win"):
-            denom = home_p + away_p
-            return (home_p / denom if denom else None), None
-        if selection in ("2", "away", "away win"):
-            denom = home_p + away_p
-            return (away_p / denom if denom else None), None
+    # Full-time 1X2: require an unambiguous market label and selection.
     if any(x in market for x in ("1x2", "match result", "full time result", "fulltime result", "regular time result")):
-        if selection in ("1", "home", "home win"): return home_p, None
-        if selection in ("x", "draw", "tie"): return draw_p, None
-        if selection in ("2", "away", "away win"): return away_p, None
+        mapping = {"1": home_p, "home": home_p, "home win": home_p,
+                   "x": draw_p, "draw": draw_p, "tie": draw_p,
+                   "2": away_p, "away": away_p, "away win": away_p}
+        return (mapping[selection], None) if selection in mapping else (None, "unrecognised 1X2 selection")
 
-    # Both teams to score.
-    if any(x in market for x in ("both teams", "btts", "team to score")):
-        if selection in ("yes", "y"):
-            return _score_probability(prediction, lambda h, a: h > 0 and a > 0), None
-        if selection in ("no", "n"):
-            return _score_probability(prediction, lambda h, a: h == 0 or a == 0), None
+    # Double chance: classify by selection, not by accidental text fragments.
+    if "double chance" in market:
+        mapping = {
+            "1x": home_p + draw_p, "home or draw": home_p + draw_p,
+            "home draw": home_p + draw_p, "1 or x": home_p + draw_p,
+            "12": home_p + away_p, "home or away": home_p + away_p,
+            "home away": home_p + away_p, "1 or 2": home_p + away_p,
+            "x2": draw_p + away_p, "draw or away": draw_p + away_p,
+            "draw away": draw_p + away_p, "x or 2": draw_p + away_p,
+        }
+        return (mapping[selection], None) if selection in mapping else (None, "unrecognised double-chance selection")
 
-    # Exact score / correct score.
+    # Correct score is calculated from the exact fitted score cell.
     if any(x in market for x in ("correct score", "exact score", "scorecast")):
-        match = re.search(r"(\d+)\s*[:\-]\s*(\d+)", selection)
-        if match:
-            hg, ag = int(match.group(1)), int(match.group(2))
-            return _score_probability(prediction, lambda h, a: h == hg and a == ag), None
+        match = re.fullmatch(r"(\d+)\s*[:\-]\s*(\d+)", selection)
+        if not match:
+            return None, "unrecognised correct-score selection"
+        hg, ag = int(match.group(1)), int(match.group(2))
+        if hg >= len(matrix) or ag >= len(matrix[0]):
+            return None, "score is outside the model matrix"
+        return matrix[hg][ag], None
 
-    # Team total goals.
-    team_total = any(x in market for x in ("home team total", "home goals", "team 1 total")) or "home team" in market
-    away_total = any(x in market for x in ("away team total", "away goals", "team 2 total")) or "away team" in market
-    if team_total or away_total:
-        line = line_from_text()
-        if line is not None and ("over" in selection or "under" in selection):
-            rate_home = team_total
-            over = "over" in selection
-            return _score_probability(prediction, lambda h, a: ((h if rate_home else a) > line if over else (h if rate_home else a) < line)), None
+    # Totals use the selection's explicit line. Whole-goal lines are rejected
+    # because push settlement needs a win/push/loss model, not a binary probability.
+    is_total = any(x in market for x in ("total goals", "over under", "goals over",
+                                         "goals under", "total match", "goal line"))
+    is_home_total = any(x in market for x in ("home team total", "home goals", "team 1 total"))
+    is_away_total = any(x in market for x in ("away team total", "away goals", "team 2 total"))
+    if is_total or is_home_total or is_away_total:
+        line_text = raw_specifier or raw_selection
+        match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)(?!\d)", line_text)
+        if not match:
+            return None, "totals line missing"
+        line = float(match.group(1))
+        if line.is_integer():
+            return None, "whole-goal totals require push settlement and are excluded"
+        if "under" in selection or "under" in market:
+            if line == 2.5 and (is_total or is_home_total or is_away_total):
+                return None, "Under 2.5 is excluded"
+            condition = lambda h, a: (h + a if is_total else h if is_home_total else a) < line
+        elif "over" in selection or "over" in market:
+            condition = lambda h, a: (h + a if is_total else h if is_home_total else a) > line
+        else:
+            return None, "totals selection must explicitly say Over or Under"
+        return _score_probability(prediction, condition), None
 
-    # Total match goals, including lines other than 1.5 / 2.5.
-    if any(x in market for x in ("total goals", "over under", "goals over", "goals under", "total match", "goal line")):
-        line = line_from_text()
-        if line is not None and ("over" in selection or "under" in selection):
-            over = "over" in selection
-            return _score_probability(prediction, lambda h, a: (h + a > line if over else h + a < line)), None
+    # Handicap selections must state the signed handicap. Unqualified 1/2
+    # selections are ambiguous and are deliberately not guessed.
+    if "handicap" in market:
+        line_text = raw_specifier or raw_selection
+        match = re.search(r"([+-])\s*(\d+(?:\.\d+)?)", line_text)
+        if not match:
+            return None, "signed handicap line missing"
+        handicap = float(match.group(2)) * (1 if match.group(1) == "+" else -1)
+        if handicap == 0 or abs(handicap - round(handicap)) < 1e-9:
+            return None, "whole-goal handicap requires push settlement and is excluded"
+        if selection.startswith(("home", "1 " , "1")):
+            return _score_probability(prediction, lambda h, a: h + handicap > a), None
+        if selection.startswith(("away", "2 ", "2")):
+            return _score_probability(prediction, lambda h, a: a - handicap > h), None
+        return None, "handicap side is ambiguous"
 
-    # Handicap / Asian handicap / European handicap: evaluate the adjusted score.
-    if any(x in market for x in ("handicap", "asian handicap", "european handicap")):
-        line = line_from_text()
-        if line is not None:
-            if selection in ("1", "home", "home win"):
-                return _score_probability(prediction, lambda h, a: h + line > a), None
-            if selection in ("2", "away", "away win"):
-                return _score_probability(prediction, lambda h, a: a - line > h), None
-            if selection in ("x", "draw"):
-                return _score_probability(prediction, lambda h, a: h + line == a), None
-
-    return None, "market requires data not available in the current model (e.g. corners, cards, player or half-time events)"
+    return None, "market type is not supported by the fitted full-time score model"
 
 
 def _market_probability(prediction, market_key):
