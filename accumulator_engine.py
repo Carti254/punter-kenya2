@@ -77,11 +77,14 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
     eligible_partials = []
 
     def completed_score(state):
-        if ranking == "probability":
-            return (state[2], state[1] * state[2], -len(state[0]))
+        picks, odds_now, probability_now, _, _ = state
+        grade_a_legs = sum(1 for pick in picks if pick.get("research_grade") == "A")
+        # Once a combination reaches the requested odds band, retain the
+        # highest-probability combinations first. Expected return and evidence
+        # grade are tie-breakers, not a reason to prefer a fragile longshot.
         if ranking == "odds":
-            return (state[1], state[1] * state[2], -len(state[0]))
-        return (state[1] * state[2], state[2], -len(state[0]))
+            return (probability_now, odds_now, grade_a_legs, -len(picks))
+        return (probability_now, grade_a_legs, odds_now * probability_now, -len(picks))
 
     for _depth in range(max_legs):
         expanded = []
@@ -114,24 +117,24 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
             picks, odds_now, probability_now, _, _ = state
             distance_bonus = -0.20 * abs(math.log(target / odds_now))
             grade_a_legs = sum(1 for pick in picks if pick.get("research_grade") == "A")
-            if ranking == "probability":
-                return (grade_a_legs, math.log(max(1e-15, probability_now)) + distance_bonus,
-                        odds_now * probability_now, -len(picks))
             if ranking == "odds":
-                return (grade_a_legs, math.log(max(1e-15, odds_now)) + distance_bonus,
-                        odds_now * probability_now, -len(picks))
-            return (grade_a_legs, math.log(max(1e-15, odds_now * probability_now)) + distance_bonus,
-                    probability_now, -len(picks))
+                return (grade_a_legs, math.log(max(1e-15, probability_now)) + distance_bonus,
+                        odds_now, -len(picks))
+            return (grade_a_legs, math.log(max(1e-15, probability_now)) + distance_bonus,
+                    odds_now * probability_now, -len(picks))
         expanded.sort(key=beam_score, reverse=True)
         states = expanded[:beam_width]
 
     if completed:
-        # Minimise overshoot first; ranking is only a tie-breaker.
+        # All completed states already satisfy the target band. Choose the
+        # strongest combined hit probability first; target proximity must not
+        # outrank selection quality. Use evidence grade/expected return as
+        # tie-breakers, then prefer fewer legs.
         def completion_score(state):
             picks, odds_now, probability_now, _, _ = state
             grade_a_legs = sum(1 for pick in picks if pick.get("research_grade") == "A")
-            secondary = probability_now if ranking in {"probability", "odds"} else odds_now * probability_now
-            return (-((odds_now / target) - 1.0), grade_a_legs, secondary, probability_now, -len(picks))
+            return (probability_now, grade_a_legs, odds_now * probability_now,
+                    -len(picks), -((odds_now / target) - 1.0))
         best = max(completed, key=completion_score)
     else:
         # Strict target rule: never return a lower-odds partial as a slip.
