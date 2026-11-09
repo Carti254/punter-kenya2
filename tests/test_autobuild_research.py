@@ -26,11 +26,16 @@ class AutobuildResearchTests(unittest.TestCase):
 
     def test_dixon_coles_recalculates_1x2_when_goal_rates_exist(self):
         from dixon_coles_engine import selected_outcome_probability
-        row = assess_candidate(self.candidate(lambda_home=1.8, lambda_away=0.9))
+        row = assess_candidate(self.candidate(lambda_home=1.8, lambda_away=0.9), use_dixon_coles=True)
         expected = selected_outcome_probability(1.8, 0.9, "Home", "Home FC", "Away FC")
         self.assertTrue(row["dixon_coles_adjusted"])
         self.assertEqual(row["probability_source"].split(" (")[0], "Dixon-Coles Poisson")
         self.assertAlmostEqual(row["probability"], expected)
+
+    def test_dixon_coles_is_not_applied_to_default_production_candidates(self):
+        row = assess_candidate(self.candidate(lambda_home=1.8, lambda_away=0.9))
+        self.assertFalse(row["dixon_coles_adjusted"] if "dixon_coles_adjusted" in row else False)
+        self.assertEqual(row["probability"], 0.52)
 
     def test_dixon_coles_is_not_used_without_goal_rates(self):
         row = assess_candidate(self.candidate())
