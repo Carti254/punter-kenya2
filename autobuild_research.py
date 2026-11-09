@@ -17,7 +17,7 @@ _SPECIALIST_REPORT_CACHE = {}
 _SPECIALIST_CACHE_TTL = 900
 
 
-def assess_candidate(row: dict, marginal_ev_floor: float = 0.0) -> dict | None:
+def assess_candidate(row: dict, marginal_ev_floor: float = 0.03) -> dict | None:
     """Validate a priced model candidate and assign an auditable value tier.
 
     Tier A: positive raw expected value.
@@ -65,8 +65,8 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.0) -> dict | None:
     edge = probability - implied
     ev = probability * odds - 1.0
     floor = float(marginal_ev_floor)
-    if not math.isfinite(floor) or floor > 0:
-        raise ValueError("marginal_ev_floor must be finite and no greater than zero.")
+    if not math.isfinite(floor):
+        raise ValueError("marginal_ev_floor must be finite.")
     if ev < floor:
         return None
 
@@ -138,7 +138,7 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.0) -> dict | None:
     return item
 
 
-def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.0) -> tuple[list[dict], dict]:
+def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.03) -> tuple[list[dict], dict]:
     """Create a tiered candidate pool; A selections rank ahead of B fallbacks."""
     assessed = []
     rejected = 0
