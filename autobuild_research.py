@@ -38,13 +38,22 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     # that weak forecast into an accumulator leg.
     if str(row.get("model_confidence") or "").strip().upper() == "LOW":
         return None
-    for sample_key in ("home_sample", "away_sample"):
-        if row.get(sample_key) is not None:
-            try:
-                if int(row[sample_key]) < 5:
-                    return None
-            except (TypeError, ValueError, OverflowError):
-                return None
+    # A candidate must have a real, auditable sample for both teams and
+    # venue-specific evidence. Missing data is not treated as a zero or silently
+    # accepted: the builder must wait for a better-supported fixture.
+    required_samples = {
+        "home_sample": 5,
+        "away_sample": 5,
+        "home_home_sample": 3,
+        "away_away_sample": 3,
+    }
+    for sample_key, minimum in required_samples.items():
+        try:
+            sample_size = int(row.get(sample_key))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if sample_size < minimum:
+            return None
 
     market = str(row.get("market") or "")
     selection = str(row.get("selection") or "")
@@ -52,6 +61,10 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     if "btts" in combined_text or "both teams to score" in combined_text:
         return None
     if "under 2.5" in combined_text or ("under" in combined_text and "2.5" in str(row.get("specifier") or "")):
+        return None
+    # 2UP/early-payout is a distinct settlement market, not an ordinary 1X2
+    # away win. It must never inherit a full-time result probability.
+    if any(token in combined_text for token in ("2up", "two up", "early payout", "two-goal lead")):
         return None
 
     # Re-score supported 1X2 selections with the Dixon-Coles low-score
