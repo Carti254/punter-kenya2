@@ -2179,7 +2179,7 @@ async def autobuild_sportybet_command(update, context):
         specialist_stats = {"reason": "Specialist enrichment was not run."}
         try:
             rows, specialist_stats = await asyncio.to_thread(
-                enrich_specialist_candidates, rows, max_fixtures=4
+                enrich_specialist_candidates, rows, max_fixtures=3
             )
         except Exception as enrichment_error:
             logger.warning("Autobuild specialist enrichment failed: %s", enrichment_error)
