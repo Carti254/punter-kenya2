@@ -3446,7 +3446,15 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
         except Exception as exc:
             logger.warning("Could not load historical results for %s: %s", folder, exc)
             return {"available": False, "reason": "Historical competition results could not be retrieved."}
-    fit = fit_dixon_coles(rows, before_date=as_of_date, min_matches=60, min_team_matches=4)
+    # Fit once per competition and matchday; every fixture reuses the same parameter set.
+    cache = globals().setdefault("_DIXON_COLES_FIT_CACHE", {})
+    cache_key = (folder, str(as_of_date)[:10] if as_of_date is not None else "latest")
+    fit = cache.get(cache_key)
+    if fit is None:
+        fit = fit_dixon_coles(rows, before_date=as_of_date, min_matches=60, min_team_matches=4)
+        if len(cache) >= 200:
+            cache.clear()
+        cache[cache_key] = fit
     if not fit.get("available"):
         return {"available": False, "reason": fit.get("reason"), "training_sample": fit.get("sample_size", 0)}
     forecast = predict_fixture(fit, fixture.get("home_team"), fixture.get("away_team"))
