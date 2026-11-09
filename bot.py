@@ -2321,6 +2321,7 @@ async def autobuild_sportybet_command(update, context):
                 update,
                 f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\n"
                 f"Research-qualified selections: {len(rows)} across {fixture_count} fixtures.\n"
+                f"Research rejection breakdown: {', '.join(f'{k}={v}' for k, v in (research_stats.get('rejection_reasons') or {}).items()) or 'not available'}.\n"
                 "No combination reached the target within the permitted 20% range. "
                 "No lower-odds substitute or booking code was created."
             )
