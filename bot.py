@@ -809,9 +809,16 @@ def upcoming_fixtures(raw_fixtures, limit=None, offset=0, include_past=False):
 
 
 def openmatchday_season_code():
-    """Return the shared season code used by open-matchday."""
+    """Return the current season code used by open-matchday."""
     now = datetime.now(EAT)
     start_year = now.year if now.month >= 7 else now.year - 1
+    return f"{start_year % 100:02d}{(start_year + 1) % 100:02d}"
+
+
+def openmatchday_previous_season_code():
+    """Return the preceding season code for deeper team-form samples."""
+    now = datetime.now(EAT)
+    start_year = (now.year if now.month >= 7 else now.year - 1) - 1
     return f"{start_year % 100:02d}{(start_year + 1) % 100:02d}"
 
 
@@ -855,9 +862,9 @@ def fetch_all_leagues():
     return openmatchday_index()
 
 
-def fetch_openmatchday_csv(folder, kind="fixtures"):
+def fetch_openmatchday_csv(folder, kind="fixtures", season_code=None):
     """Fetch one public CSV file; cache successful responses to reduce traffic."""
-    season = openmatchday_season_code()
+    season = str(season_code or openmatchday_season_code())
     path = f"data/{folder}/{kind}_{season}.csv"
     cache_key = goal_cache_key("open-matchday:" + path, {})
     cached = goal_cached_response(cache_key)
@@ -875,8 +882,32 @@ def fetch_openmatchday_csv(folder, kind="fixtures"):
     response.raise_for_status()
 
     rows = list(csv.DictReader(io.StringIO(response.text)))
-    goal_store_response(cache_key, "fixtures", rows)
+    goal_store_response(cache_key, path, rows)
     return rows
+
+
+def fetch_openmatchday_results_history(folder):
+    """Combine current and previous-season results for reliable recent team form."""
+    combined = []
+    seen = set()
+    for season in (openmatchday_season_code(), openmatchday_previous_season_code()):
+        try:
+            season_rows = fetch_openmatchday_csv(folder, "results", season_code=season)
+        except Exception as exc:
+            logger.info("Results history unavailable for %s season %s: %s", folder, season, exc)
+            continue
+        for row in season_rows:
+            key = (
+                str(row.get("date") or ""),
+                str(row.get("home") or "").strip().casefold(),
+                str(row.get("away") or "").strip().casefold(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            combined.append(row)
+    combined.sort(key=lambda row: str(row.get("date") or ""), reverse=True)
+    return combined
 
 
 def fetch_openmatchday_team_history_rows(max_age_seconds=1800):
@@ -895,7 +926,7 @@ def fetch_openmatchday_team_history_rows(max_age_seconds=1800):
         if not folder:
             return []
         try:
-            return fetch_openmatchday_csv(folder, "results")
+            return fetch_openmatchday_results_history(folder)
         except Exception as exc:
             logger.info("Cross-competition history unavailable for %s: %s", folder, exc)
             return []
@@ -4308,7 +4339,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
 
         def fetch_history(folder):
             try:
-                return folder, fetch_openmatchday_csv(folder, "results")
+                return folder, fetch_openmatchday_results_history(folder)
             except Exception as exc:
                 logger.warning("Autobuild history fetch failed for %s: %s", folder, exc)
                 return folder, []
