@@ -13,8 +13,8 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
     target = float(target_odds)
     if not math.isfinite(target) or target <= 1:
         raise ValueError("Target odds must be finite and greater than 1.")
-    if not isinstance(max_legs, int) or not 1 <= max_legs <= 20:
-        raise ValueError("max_legs must be an integer from 1 to 20.")
+    if not isinstance(max_legs, int) or not 1 <= max_legs <= 50:
+        raise ValueError("max_legs must be an integer from 1 to 50.")
     if not isinstance(min_legs, int) or not 1 <= min_legs <= max_legs:
         raise ValueError("min_legs must be an integer from 1 to max_legs.")
     clean = []
@@ -122,27 +122,51 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
             return (-((odds_now / target) - 1.0), secondary, probability_now, -len(picks))
         best = max(completed, key=completion_score)
     else:
-        # Return the best available partial construction, never pretend target was met.
-        all_states = eligible_partials or states
-        if not all_states:
-            all_states = [([], 1.0, 1.0, frozenset(), 0)]
-        if ranking == "probability":
-            best = max(all_states, key=lambda s: (s[2], s[1], -len(s[0])))
-        elif ranking == "odds":
-            best = max(all_states, key=lambda s: (s[1], s[2], -len(s[0])))
-        else:
-            best = max(all_states, key=lambda s: (s[1] * s[2], s[2], -len(s[0])))
+        # Strict target rule: never return a lower-odds partial as a slip.
+        return {
+            "selections": [],
+            "combined_odds": 1.0,
+            "combined_probability": 0.0,
+            "naive_independent_probability": 0.0,
+            "correlation_adjustment_factor": 1.0,
+            "expected_return_factor": 0.0,
+            "expected_roi": -1.0,
+            "target_reached": False,
+            "independence_assumption": True,
+            "reason": "No qualifying combination reached the requested target. No lower-odds substitute was generated.",
+        }
     picks, odds_product, probability_product, _, _ = best
     selections = []
     for item in picks:
         selections.append({k: v for k, v in item.items() if not k.startswith("_")})
+
+    # A conservative disclosed haircut is applied when multiple legs come from
+    # the same competition on the same date. It is a heuristic, not a measured
+    # correlation estimate; empirical dependence data is not available here.
+    same_competition_same_day = set()
+    for item in selections:
+        day = str(item.get("day") or item.get("match_date") or "")[:10]
+        league = str(item.get("league") or "").strip().casefold()
+        if day and league:
+            same_competition_same_day.add((day, league))
+    has_same_competition_pair = any(
+        sum(1 for item in selections
+            if str(item.get("day") or item.get("match_date") or "")[:10] == day
+            and str(item.get("league") or "").strip().casefold() == league) > 1
+        for day, league in same_competition_same_day
+    )
+    correlation_factor = 0.97 if has_same_competition_pair else 1.0
+    naive_probability = probability_product
+    adjusted_probability = naive_probability * correlation_factor
     return {
         "selections": selections,
         "combined_odds": odds_product,
-        "combined_probability": probability_product,
-        "expected_return_factor": odds_product * probability_product,
-        "expected_roi": odds_product * probability_product - 1,
-        "target_reached": target <= odds_product <= target * 1.20,
+        "combined_probability": adjusted_probability,
+        "naive_independent_probability": naive_probability,
+        "correlation_adjustment_factor": correlation_factor,
+        "expected_return_factor": odds_product * adjusted_probability,
+        "expected_roi": odds_product * adjusted_probability - 1,
+        "target_reached": target <= odds_product <= target * 1.20 and len(selections) >= min_legs,
         "independence_assumption": True,
-        "reason": None if target <= odds_product <= target * 1.20 else "No combination found within 20% above target.",
+        "reason": None,
     }
