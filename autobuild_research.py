@@ -270,7 +270,7 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     return item
 
 
-def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03) -> str:
+def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles: bool = False) -> str:
     """Return the first auditable reason a raw market row fails the research gate."""
     try:
         odds = float(row.get("odds"))
@@ -300,6 +300,30 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03) -> st
         return "excluded_under_2_5"
     if any(token in market_text for token in ("2up", "two up", "early payout", "two-goal lead")):
         return "unsupported_2up_market"
+    # Mirror the exact optional 1X2 Dixon-Coles re-score used by
+    # assess_candidate so the rejection report evaluates the same probability.
+    market = str(row.get("market") or "")
+    probability_source = str(row.get("probability_source") or "PUNTER statistical model")
+    market_key = " ".join(market.casefold().replace("-", " ").split())
+    is_1x2 = any(token in market_key for token in (
+        "1x2", "match result", "full time result", "fulltime result"
+    ))
+    is_punter_source = probability_source.startswith(
+        ("PUNTER venue-weighted", "PUNTER statistical model")
+    )
+    if (use_dixon_coles and is_1x2 and is_punter_source
+            and row.get("lambda_home") is not None and row.get("lambda_away") is not None
+            and not probability_source.startswith("Dixon-Coles + walk-forward temperature calibration")):
+        try:
+            adjusted = selected_outcome_probability(
+                row.get("lambda_home"), row.get("lambda_away"),
+                str(row.get("selection") or ""), str(row.get("home") or ""),
+                str(row.get("away") or ""),
+            )
+            if adjusted is not None and 0 < adjusted < 1:
+                probability = float(adjusted)
+        except (TypeError, ValueError, ArithmeticError):
+            pass
     if probability * odds - 1.0 < float(marginal_ev_floor):
         return "estimated_ev_below_3pct_floor"
     return "other_assessment_rejection"
@@ -314,7 +338,7 @@ def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.03, us
         item = assess_candidate(row, marginal_ev_floor=marginal_ev_floor, use_dixon_coles=use_dixon_coles)
         if item is None:
             rejected += 1
-            rejection_reasons[candidate_rejection_bucket(row, marginal_ev_floor)] += 1
+            rejection_reasons[candidate_rejection_bucket(row, marginal_ev_floor, use_dixon_coles)] += 1
         else:
             assessed.append(item)
 
