@@ -53,6 +53,12 @@ class AccumulatorEngineTests(unittest.TestCase):
         result = build_accumulator([{"home": "X", "away": "Y", "odds": 1.0, "probability": 0.8}], 2.0)
         self.assertEqual(result["selections"], [])
 
+    def test_single_selection_is_not_an_accumulator_even_if_its_price_reaches_target(self):
+        candidate = {"home": "One", "away": "Two", "odds": 2.20, "probability": 0.60, "market": "1X2"}
+        result = build_accumulator([candidate], 2.00, max_legs=1)
+        self.assertFalse(result["target_reached"])
+        self.assertEqual(result["selections"], [])
+
     def test_single_longshot_does_not_satisfy_small_target(self):
         result = build_accumulator([{"home": "Long", "away": "Shot", "odds": 22.0, "probability": 0.426}], 2.0)
         self.assertFalse(result["target_reached"])
@@ -122,10 +128,12 @@ class AccumulatorEngineTests(unittest.TestCase):
             {"home": "A", "away": "B", "odds": 1.8, "probability": 0.8, "market": "Both Teams To Score", "selection": "Yes"},
             {"home": "C", "away": "D", "odds": 1.8, "probability": 0.8, "market": "Total Goals", "selection": "Under 2.5"},
             {"home": "E", "away": "F", "odds": 1.8, "probability": 0.8, "market": "Total Goals", "selection": "Over 1.5"},
+            {"home": "G", "away": "H", "odds": 1.8, "probability": 0.8, "market": "Total Goals", "selection": "Over 1.5"},
         ]
-        result = build_accumulator(candidates, 1.8)
-        self.assertEqual(len(result["selections"]), 1)
-        self.assertEqual(result["selections"][0]["selection"], "Over 1.5")
+        result = build_accumulator(candidates, 3.0)
+        self.assertTrue(result["target_reached"])
+        self.assertEqual(len(result["selections"]), 2)
+        self.assertTrue(all(x["selection"] == "Over 1.5" for x in result["selections"]))
 
     def test_same_teams_on_different_dates_are_distinct_fixtures(self):
         candidates = [
