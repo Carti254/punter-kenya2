@@ -17,7 +17,7 @@ _SPECIALIST_REPORT_CACHE = {}
 _SPECIALIST_CACHE_TTL = 900
 
 
-def assess_candidate(row: dict, marginal_ev_floor: float = 0.03) -> dict | None:
+def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles: bool = False) -> dict | None:
     """Validate a priced model candidate and assign an auditable value tier.
 
     Tier A: positive raw expected value.
@@ -49,7 +49,7 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03) -> dict | None:
     is_1x2 = any(token in market_key for token in (
         "1x2", "match result", "full time result", "fulltime result"
     ))
-    if is_1x2 and row.get("lambda_home") is not None and row.get("lambda_away") is not None:
+    if use_dixon_coles and is_1x2 and row.get("lambda_home") is not None and row.get("lambda_away") is not None:
         try:
             dc_probability = selected_outcome_probability(
                 row.get("lambda_home"), row.get("lambda_away"), selection,
@@ -138,12 +138,12 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03) -> dict | None:
     return item
 
 
-def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.03) -> tuple[list[dict], dict]:
+def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.03, use_dixon_coles: bool = False) -> tuple[list[dict], dict]:
     """Create a tiered candidate pool; A selections rank ahead of B fallbacks."""
     assessed = []
     rejected = 0
     for row in rows or []:
-        item = assess_candidate(row, marginal_ev_floor=marginal_ev_floor)
+        item = assess_candidate(row, marginal_ev_floor=marginal_ev_floor, use_dixon_coles=use_dixon_coles)
         if item is None:
             rejected += 1
         else:
