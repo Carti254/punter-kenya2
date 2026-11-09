@@ -3766,6 +3766,20 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
              canonical_team_key(fixture.get("away_team")))
             for _, fixture in day_fixtures
         }
+        # Resolve SportyBet-only events to a real Open-Matchday competition
+        # before attempting model fitting. Never fit a generic synthetic league.
+        try:
+            known_leagues = fetch_all_leagues()
+        except Exception:
+            known_leagues = []
+        league_lookup = {}
+        for league_row in known_leagues:
+            league_name = _normal_market_text(
+                league_row.get("leagueName") or league_row.get("name") or
+                league_row.get("competition") or ""
+            )
+            if league_name and league_row.get("leagueShortcut"):
+                league_lookup.setdefault(league_name, []).append(league_row)
         sportybet_added = 0
         for game in day_games:
             home = str(game.get("home") or "").strip()
@@ -3784,19 +3798,28 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             except (TypeError, ValueError):
                 continue
             competition = str(game.get("competition") or "SportyBet competition").strip()
+            competition_key = _normal_market_text(competition)
+            possible_leagues = league_lookup.get(competition_key, [])
+            resolved_league = possible_leagues[0] if len(possible_leagues) == 1 else None
+            league_folder = str((resolved_league or {}).get("leagueShortcut") or "__sportybet_discovery__")
+            league_label = str(
+                (resolved_league or {}).get("leagueName") or competition
+            ).strip()
             raw_sportybet = {
                 "id": f"sportybet:{game.get('event_id') or pair[0] + ':' + pair[1]}",
                 "home": home, "away": away,
                 "kickoffUtc": kickoff_utc.isoformat(),
                 "matchStatus": "Scheduled",
-                "leagueName": competition, "countryName": "",
-                "leagueShortcut": "__sportybet_discovery__",
+                "leagueName": league_label,
+                "countryName": str((resolved_league or {}).get("countryName") or ""),
+                "leagueShortcut": league_folder,
             }
             fixture_sportybet = {
                 "provider_match_id": raw_sportybet["id"],
                 "home_team": home, "away_team": away,
                 "kickoff_at": kickoff_utc,
-                "competition": competition, "country": "",
+                "competition": league_label,
+                "country": raw_sportybet["countryName"],
             }
             day_fixtures.append((raw_sportybet, fixture_sportybet))
             existing_pairs.add(pair)
