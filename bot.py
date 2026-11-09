@@ -2101,45 +2101,29 @@ async def autobuild_sportybet_command(update, context):
         context.user_data["slip_flow"] = "autobuild_target"
         await reply(update, "🎟️ BUILD YOUR SPORTYBET SLIP\n\nWhat target combined odds do you want?\nExample: 2, 5, 10, 20 or 50.\n/cancel to stop.")
         return
-    target = float(guided["target"]) if guided else 2.0
-    if not guided and args and re.fullmatch(r"\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
-        target = float(re.sub(r"odds$", "", str(args.pop(0)), flags=re.I))
-        if not math.isfinite(target) or target <= 1.0:
-            await reply(update, "Target odds must be greater than 1.00.")
+    if guided:
+        try:
+            target = float(guided["target"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            await reply(update, "Invalid saved target. Enter your target combined odds again.")
             return
+    else:
+        if len(args) != 1 or not re.fullmatch(r"\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
+            await reply(update, "Enter only your target combined odds, for example: /build 2 or /build 50. PUNTER chooses the markets and number of legs automatically.")
+            return
+        target = float(re.sub(r"odds$", "", str(args[0]), flags=re.I))
+
+    if not math.isfinite(target) or not 1.0 < target <= 1000.0:
+        await reply(update, "Target odds must be greater than 1.00 and no higher than 1,000.")
+        return
 
     min_legs = 5 if target >= 10 else 2
     max_legs = 20
-    if target > 1000:
-        await reply(update, "Target odds cannot exceed 1,000.")
-        return
-
-    # Value-led by default. The explicit user exclusions are enforced again
-    # inside prepare_candidate_pool and accumulator_engine.
-    rank_mode = "value"
-    market_parts = []
-    for token in args:
-        lowered = token.casefold()
-        if lowered.startswith("rank="):
-            rank_mode = lowered.split("=", 1)[1]
-        elif lowered.startswith("market="):
-            market_parts.append(token.split("=", 1)[1])
-        elif lowered.startswith(("legs=", "minlegs=", "maxlegs=")):
-            await reply(update, "Leg-count controls have been removed. Enter only your target combined odds; PUNTER chooses the number of legs automatically.")
-            return
-        elif lowered in ("value", "odds", "probability", "parlay"):
-            rank_mode = lowered
-        else:
-            market_parts.append(token)
-    if rank_mode not in ("value", "odds", "probability", "parlay"):
-        await reply(update, "Ranking must be value, odds, probability or parlay.")
-        return
-
-    market_filter = ",".join(market_parts) if market_parts else "all"
+    market_filter = "all"
     await reply(
         update,
         f"🤖 PUNTER RESEARCH SCAN — TARGET {target:.2f}\n"
-        f"Automatically choosing 2–{max_legs} different matches; checking form, venue splits, "
+        f"Automatically choosing {min_legs}–{max_legs} different matches; checking form, venue splits, "
         "goals, H2H, Elo, model probability, specialist evidence and live SportyBet prices…"
     )
     try:
@@ -2147,9 +2131,24 @@ async def autobuild_sportybet_command(update, context):
             scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
         )
         scanned_count = len(rows)
+        # Add exact-match timestamped odds movement and cross-bookmaker checks
+        # from stored PUNTER snapshots. If history is unavailable, keep the gap visible.
+        price_history_stats = {"reason": "Stored price history not available."}
+        try:
+            snapshot_rows, price_history_stats = await asyncio.to_thread(
+                enrich_candidates_with_price_history, rows[:100]
+            )
+            rows = snapshot_rows + rows[100:]
+        except Exception as price_error:
+            price_history_stats = {
+                "reason": f"Stored odds history unavailable: {type(price_error).__name__}: {str(price_error)[:120]}"
+            }
+
         specialist_stats = {"reason": "Specialist enrichment was not run."}
         try:
-            rows, specialist_stats = await asyncio.to_thread(enrich_with_specialist_models, rows)
+            rows, specialist_stats = await asyncio.to_thread(
+                enrich_specialist_candidates, rows, max_fixtures=10
+            )
         except Exception as enrichment_error:
             logger.warning("Autobuild specialist enrichment failed: %s", enrichment_error)
             specialist_stats = {"reason": f"Specialist enrichment unavailable: {type(enrichment_error).__name__}"}
@@ -2186,7 +2185,7 @@ async def autobuild_sportybet_command(update, context):
 
         build = build_accumulator(
             rows, target, min_legs=min_legs, max_legs=max_legs,
-            ranking=("odds" if rank_mode in ("parlay", "odds") else rank_mode),
+            ranking="value",
             max_candidates=250,
         )
         chosen = build["selections"]
@@ -2233,6 +2232,10 @@ async def autobuild_sportybet_command(update, context):
             build.get("combined_probability") or
             math.prod(float(x["probability"]) for x in resolved)
         )
+        naive_probability = float(
+            build.get("naive_independent_probability") or combined_probability
+        )
+        correlation_factor = float(build.get("correlation_adjustment_factor") or 1.0)
         context.user_data["pending_sportybet_booking"] = resolved
 
         lines = [
@@ -2241,7 +2244,8 @@ async def autobuild_sportybet_command(update, context):
             f"Selections: {len(resolved)}",
             f"Research screen: {research_stats.get('eligible', 0)} eligible; "
             f"{research_stats.get('rejected', 0)} rejected; "
-            f"{research_stats.get('tier_a', 0)} Tier A positive-value candidates",
+            f"{research_stats.get('tier_a', 0)} Tier A positive-value candidates; "
+            f"exact odds-history matches: {price_history_stats.get('matched', 0)}",
             "",
         ]
         for i, leg in enumerate(resolved, 1):
@@ -2288,10 +2292,16 @@ async def autobuild_sportybet_command(update, context):
         lines.extend([
             "",
             f"Estimated accumulator hit probability: {combined_probability:.2%}",
-            "Probability is experimental and uncalibrated unless a verified walk-forward calibration is explicitly reported. "
-            "The combined estimate assumes independent fixtures; same-competition dependence may be adjusted by the engine.",
+            f"Unadjusted independent product: {naive_probability:.2%}",
+            (
+                "A conservative 3% same-competition/same-day dependence haircut was applied (heuristic, not measured correlation)."
+                if correlation_factor < 1.0 else
+                "No same-competition/same-day dependence haircut was triggered; the base calculation assumes fixture independence."
+            ),
+            "Probabilities remain experimental unless the walk-forward holdout explicitly confirms calibration.",
             f"Specialist research: {specialist_stats.get('reason', 'No additional specialist evidence reported.')}",
             f"Walk-forward calibration: {calibration_stats.get('reason', 'not available')}",
+            f"Stored odds history: {price_history_stats.get('reason', str(price_history_stats.get('matched', 0)) + ' exact matches')}",
         ])
 
         markup = InlineKeyboardMarkup([[
@@ -4089,7 +4099,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             matched_events += len(matches)
             folder = str(raw.get("leagueShortcut") or "").strip()
             try:
-                prediction = build_openmatchday_prediction(raw, fixture, historical_rows=historical_cache[folder], model_variant="venue_weighted")
+                prediction = build_openmatchday_prediction(raw, fixture, historical_rows=historical_cache.get(folder, []), model_variant="venue_weighted")
             except Exception as exc:
                 prediction_unavailable += 1
                 logger.exception("Autobuild prediction failed for %s vs %s", home_name, away_name)
