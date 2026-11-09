@@ -182,6 +182,10 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
                 ("xG and shot-quality evidence", bool(row.get("xg_evidence"))),
                 ("live odds movement history", bool(row.get("odds_history_evidence"))),
                 ("independent specialist market model", bool(row.get("specialist_evidence"))),
+                ("cross-bookmaker exact price comparison", bool(row.get("other_bookmaker_evidence"))),
+                ("historical odds movement and closing-line data", bool(row.get("odds_history_evidence"))),
+                ("empirical cross-fixture correlation data", bool(row.get("correlation_evidence"))),
+                ("out-of-sample probability calibration evidence", bool(row.get("calibration_evidence"))),
                 ("tactical matchup evidence", bool(row.get("tactical_evidence"))),
             ) if not present
         ],
