@@ -121,6 +121,19 @@ class AccumulatorEngineTests(unittest.TestCase):
         self.assertTrue(result["target_reached"])
         self.assertEqual(len(result["selections"]), 2)
 
+    def test_same_competition_same_day_gets_dependence_haircut(self):
+        candidates = [
+            {"home": "A", "away": "B", "day": "2026-11-09", "league": "League X",
+             "odds": 2.0, "probability": 0.60, "market": "1X2"},
+            {"home": "C", "away": "D", "day": "2026-11-09", "league": "League X",
+             "odds": 2.0, "probability": 0.60, "market": "1X2"},
+        ]
+        result = build_accumulator(candidates, 4.0, max_legs=2)
+        self.assertEqual(len(result["selections"]), 2)
+        self.assertAlmostEqual(result["naive_independent_probability"], 0.36)
+        self.assertAlmostEqual(result["combined_probability"], 0.36 * 0.97)
+        self.assertAlmostEqual(result["correlation_adjustment_factor"], 0.97)
+
     def test_ranking_is_validated(self):
         with self.assertRaises(ValueError):
             build_accumulator(self.candidates, 2.0, ranking="random")
