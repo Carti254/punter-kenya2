@@ -2136,10 +2136,24 @@ async def autobuild_sportybet_command(update, context):
         # Run optional API-Football specialist research (corners, cards, shots,
         # shots on target and first-half goals) against exact fixture/date/price matches.
         # If the provider key or a reliable exact match is absent, base candidates remain unchanged.
-        rows, specialist_stats = await asyncio.wait_for(
-            asyncio.to_thread(enrich_with_specialist_models, rows),
-            timeout=45,
-        )
+        # Specialist market research is optional enrichment, never a prerequisite
+        # for building a slip from the primary fixture/odds scan. Run it on shallow
+        # copies so a timed-out worker cannot mutate the base candidate pool later.
+        base_rows = rows
+        specialist_rows = [dict(item) for item in base_rows]
+        try:
+            rows, specialist_stats = await asyncio.wait_for(
+                asyncio.to_thread(enrich_with_specialist_models, specialist_rows),
+                timeout=45,
+            )
+        except asyncio.TimeoutError:
+            rows = base_rows
+            specialist_stats = {"available": False, "reason": "Specialist research timed out; primary model candidates retained."}
+            logger.warning("Optional specialist research timed out; continuing with primary candidates.")
+        except Exception as exc:
+            rows = base_rows
+            specialist_stats = {"available": False, "reason": f"Specialist research unavailable: {type(exc).__name__}"}
+            logger.warning("Optional specialist research failed; continuing with primary candidates: %s", exc)
         # Apply one auditable research/value gate. Keep non-negative-EV candidates;
         # never silently pad a requested slip with negative-EV selections.
         rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.03)
