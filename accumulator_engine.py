@@ -30,9 +30,17 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
         home, away = str(row.get("home") or "").strip(), str(row.get("away") or "").strip()
         if not home or not away:
             continue
+        market_text = (str(row.get("market") or "") + " " + str(row.get("selection") or "") + " " + str(row.get("specifier") or "")).casefold()
+        # Enforce the user's permanent market exclusions at the final selection boundary.
+        if "btts" in market_text or "both teams to score" in market_text:
+            continue
+        if "under 2.5" in market_text or ("under" in market_text and "2.5" in str(row.get("specifier") or "")):
+            continue
         item = dict(row)
         item["odds"], item["probability"] = odds, probability
-        item["_fixture_key"] = (home.casefold(), away.casefold())
+        # Distinguish the same teams playing on different local dates.
+        day = str(row.get("day") or row.get("match_date") or "")[:10]
+        item["_fixture_key"] = (day, home.casefold(), away.casefold())
         item["_expected_factor"] = odds * probability
         # Aggressive target building may include high-variance, negative-EV legs.
         # Keep the model probability and expected factor visible to ranking/reporting;
@@ -47,9 +55,17 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
         clean.sort(key=lambda x: (x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
     else:
         clean.sort(key=lambda x: (x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
-    # No arbitrary leg or candidate ceiling: each fixture can contribute at most one leg.
-    fixture_count = len({item["_fixture_key"] for item in clean})
-    max_legs = min(max_legs, fixture_count) if max_legs is not None else fixture_count
+    # SportyBet's adapter currently validates a maximum of 20 selections.
+    # Keep the four strongest market alternatives per fixture to avoid expanding
+    # thousands of near-identical beam-search states for the same match.
+    by_fixture = {}
+    for item in clean:
+        alternatives = by_fixture.setdefault(item["_fixture_key"], [])
+        if len(alternatives) < 4:
+            alternatives.append(item)
+    clean = [item for alternatives in by_fixture.values() for item in alternatives]
+    fixture_count = len(by_fixture)
+    max_legs = min(max_legs, fixture_count, 20) if max_legs is not None else min(fixture_count, 20)
     if min_legs > max_legs:
         return {"selections": [], "combined_odds": 1.0, "combined_probability": 0.0,
                 "expected_return_factor": 0.0, "target_reached": False,
