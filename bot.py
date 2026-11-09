@@ -2304,7 +2304,7 @@ async def autobuild_sportybet_command(update, context):
         # Specialist and secondary prediction layers are disabled.
         specialist_stats = {"enabled": False, "reason": "Single fitted Dixon-Coles model only."}
         price_history_stats = {"matched": 0, "reason": "Not used for prediction."}
-                if not rows:
+        if not rows:
             context.user_data.pop("pending_sportybet_booking", None)
             # Research and feed diagnostics stay internal; Telegram gets a clean result.
             logger.info(
