@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -86,14 +85,9 @@ def _market(provider, market, selection, price, handicap=None):
 
 
 SPORTYBET_BASE = "https://www.sportybet.com/api/ke"
-SPORTYBET_SESSION = requests.Session()
-# The public SportyBet feed is polled page-by-page during slip construction.
-# Do not inherit the generic adapter's multi-retry policy: retries on every
-# slow page can exceed the Telegram scan deadline before any candidates exist.
-SPORTYBET_SESSION.mount("https://", HTTPAdapter(max_retries=Retry(total=0, connect=0, read=0, status=0)))
 
 
-def fetch_sportybet(day: date | None = None, max_pages=8):
+def fetch_sportybet(day: date | None = None, max_pages=30):
     """Fetch all active SportyBet Kenya football markets and outcomes from its public JSON feed."""
     if day is None:
         target_days = {datetime.now(EAT).date().isoformat()}
@@ -107,11 +101,15 @@ def fetch_sportybet(day: date | None = None, max_pages=8):
         "Referer": "https://www.sportybet.com/ke/sport/football",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/134.0.0.0 Safari/537.36",
     }
-    def fetch_page(page):
-        response = SPORTYBET_SESSION.get(
+    games, seen = [], set()
+    for page in range(1, max_pages + 1):
+        payload = _get(
             SPORTYBET_BASE + "/factsCenter/pcUpcomingEvents",
             params={
                 "sportId": "sr:sport:1",
+                # SportyBet's web feed expects an explicit market catalogue.
+                # These IDs cover the common pre-match football markets; each
+                # event's returned markets are still parsed dynamically.
                 "marketId": "1,18,10,29,11,26,36,14,60100",
                 "pageSize": 100,
                 "pageNum": page,
@@ -119,50 +117,16 @@ def fetch_sportybet(day: date | None = None, max_pages=8):
                 "timeline": 720,
                 "_t": int(time.time() * 1000),
             },
-            headers=headers, timeout=(4, 8),
+            headers=headers, timeout=(8, 20),
         )
-        response.raise_for_status()
-        try:
-            payload = response.json()
-        except ValueError:
-            raise ValueError("SportyBet returned unreadable JSON.") from None
         if not isinstance(payload, dict) or int(payload.get("bizCode", 0) or 0) != 10000:
             code = payload.get("bizCode") if isinstance(payload, dict) else "invalid"
             raise ValueError(f"SportyBet rejected the public feed (bizCode={code}).")
-        return payload
-
-    # Fetch page 1 first: totalNum tells us how many pages actually exist.
-    # This avoids making 12 sequential requests when only 1-3 pages are needed.
-    first_payload = fetch_page(1)
-    first_data = first_payload.get("data") or {}
-    if not isinstance(first_data, dict):
-        raise ValueError("SportyBet returned an unexpected event catalogue.")
-    total = int(first_data.get("totalNum", 0) or 0)
-    page_count = min(max(1, int(max_pages)), max(1, (total + 99) // 100)) if total else 1
-    page_payloads = {1: first_payload}
-    page_errors = []
-    if page_count > 1:
-        with ThreadPoolExecutor(max_workers=min(4, page_count - 1)) as pool:
-            futures = {pool.submit(fetch_page, page): page for page in range(2, page_count + 1)}
-            for future in as_completed(futures):
-                page = futures[future]
-                try:
-                    page_payloads[page] = future.result()
-                except Exception as exc:
-                    page_errors.append(f"page {page}: {type(exc).__name__}: {str(exc)[:120]}")
-                    LOG.warning("SportyBet page %s failed; retaining other pages: %s", page, exc)
-    if not page_payloads:
-        raise RuntimeError("SportyBet returned no usable event pages.")
-    if page_errors and len(page_payloads) == 1:
-        LOG.warning("SportyBet pagination was partial: %s", "; ".join(page_errors[:4]))
-
-    games, seen = [], set()
-    for page in sorted(page_payloads):
-        payload = page_payloads[page]
         data = payload.get("data") or {}
         tournaments = data.get("tournaments", []) if isinstance(data, dict) else []
         if not isinstance(tournaments, list):
             raise ValueError("SportyBet returned an unexpected event catalogue.")
+        page_events = 0
         for tournament in tournaments:
             if not isinstance(tournament, dict):
                 continue
@@ -173,6 +137,7 @@ def fetch_sportybet(day: date | None = None, max_pages=8):
                 if not event_id or str(event_id) in seen:
                     continue
                 seen.add(str(event_id))
+                page_events += 1
                 kickoff = _eat_time(event.get("estimateStartTime"))
                 if not kickoff or kickoff[:10] not in target_days:
                     continue
@@ -202,6 +167,10 @@ def fetch_sportybet(day: date | None = None, max_pages=8):
                         "url": "https://www.sportybet.com/ke/sport/football",
                         "fetched_at": datetime.now(timezone.utc).isoformat(),
                     })
+        total = int(data.get("totalNum", 0) or 0) if isinstance(data, dict) else 0
+        if not tournaments or page_events == 0 or (total and len(seen) >= total):
+            break
+        time.sleep(0.25)
     return games
 
 
