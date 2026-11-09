@@ -237,6 +237,33 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
         sporty.assert_called_once()
 
 
+    def test_booking_fixture_catalogue_reads_beyond_twenty_pages(self):
+        from sportybet_client import _get_fixtures, FIXTURE_PAGE_SIZE
+        calls = []
+
+        def fake_get(url, params, headers, timeout):
+            page = params["pageNum"]
+            calls.append(page)
+            events = [
+                {"eventId": f"event-{page}-{index}"}
+                for index in range(FIXTURE_PAGE_SIZE if page <= 20 else 1)
+            ]
+            return FakeResponse({
+                "bizCode": 10000,
+                "data": {"tournaments": [{"events": events}]},
+            })
+
+        with patch("sportybet_client.SESSION.get", side_effect=fake_get):
+            fixtures = _get_fixtures()
+        self.assertEqual(calls[-1], 21)
+        self.assertEqual(len(fixtures), 2001)
+
+    def test_booking_fixture_catalogue_rejects_malformed_envelope(self):
+        from sportybet_client import _get_fixtures
+        with patch("sportybet_client.SESSION.get", return_value=FakeResponse({"bizCode": 10000, "data": {}})):
+            with self.assertRaisesRegex(SportyBetError, "valid tournament catalogue"):
+                _get_fixtures()
+
 
 if __name__ == "__main__":
     unittest.main()
