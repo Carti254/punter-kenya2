@@ -84,11 +84,11 @@ def _json_from_response(raw: str) -> dict[str, Any]:
 
 def _plain_fixture_request(message: str) -> dict[str, Any] | None:
     """Route an unambiguous 'Home vs Away' message without depending on Gemini."""
-    match = re.fullmatch(r"\\s*(.+?)\\s+(?:vs?\\.?|v)\\s+(.+?)\\s*", message, flags=re.IGNORECASE)
+    match = re.fullmatch(r"\s*(.+?)\s+(?:vs?\.?|v)\s+(.+?)\s*", message, flags=re.IGNORECASE)
     if not match:
         return None
-    home = re.sub(r"\\s+", " ", match.group(1)).strip(" .,-")
-    away = re.sub(r"\\s+", " ", match.group(2)).strip(" .,-")
+    home = re.sub(r"\s+", " ", match.group(1)).strip(" .,-")
+    away = re.sub(r"\s+", " ", match.group(2)).strip(" .,-")
     if not home or not away or len(home) > 90 or len(away) > 90:
         return None
     return {
