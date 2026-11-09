@@ -3662,9 +3662,10 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
     # than the documented minimum and discarded otherwise assessable fixtures.
     # Confidence reflects sample depth only, not certainty of the outcome.
     combined_sample = len(home_results) + len(away_results)
-    confidence = "LOW" if min(len(home_results), len(away_results)) < 5 else (
-        "HIGH" if combined_sample >= 16 else "MODERATE"
-    )
+    # Sample size alone cannot establish HIGH confidence. That requires
+    # validated out-of-sample calibration, which this raw Poisson layer does
+    # not possess. Keep an otherwise eligible forecast MODERATE at most.
+    confidence = "LOW" if min(len(home_results), len(away_results)) < 5 else "MODERATE"
 
     # Same-competition head-to-head sample, restricted to completed results
     # already available before this fixture's forecast cutoff.
@@ -4376,37 +4377,14 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                     as_of_date=fixture.get("kickoff_at"),
                     model_variant="venue_weighted"
                 )
-                # Retry every unavailable prediction with cross-competition
-                # team history, not only the exact "Insufficient recent results"
-                # message. A local results feed can be empty, stale, or malformed
-                # while the teams still have usable results in another competition.
-                # Keep the fixture's own competition rows for league baseline,
-                # H2H and Elo; broaden only the two teams' recent-form samples.
-                if not prediction.get("available") and folder:
+                # Do not silently merge another competition's results into this
+                # fixture's form sample. Team-name fuzzy matching across all
+                # competitions can mix reserve/youth/senior sides and tournaments.
+                # If this competition lacks five verified results per team, the
+                # fixture stays unmodelled until a team-ID-backed history source exists.
+                if not prediction.get("available"):
                     history_fallback_attempted += 1
-                    original_reason = str(prediction.get("reason") or "unknown model-history failure")
-                    try:
-                        cross_competition_rows = fetch_openmatchday_team_history_rows()
-                        fallback_prediction = build_openmatchday_prediction(
-                            raw, fixture, historical_rows=local_history,
-                            as_of_date=fixture.get("kickoff_at"),
-                            team_history_rows=cross_competition_rows,
-                            model_variant="venue_weighted"
-                        )
-                        if fallback_prediction.get("available"):
-                            prediction = fallback_prediction
-                            history_fallback_recovered += 1
-                        else:
-                            history_failure_reasons[original_reason[:100]] += 1
-                            history_failure_reasons[str(fallback_prediction.get("reason") or "cross-competition history insufficient")[:100]] += 1
-                    except Exception as fallback_exc:
-                        history_failure_reasons[
-                            f"cross-competition fallback error: {type(fallback_exc).__name__}"[:100]
-                        ] += 1
-                        logger.warning(
-                            "Cross-competition history fallback failed for %s vs %s: %s",
-                            home_name, away_name, fallback_exc
-                        )
+                    history_failure_reasons[str(prediction.get("reason") or "insufficient same-competition history")[:100]] += 1
             except Exception as exc:
                 prediction_unavailable += 1
                 logger.exception("Autobuild prediction failed for %s vs %s", home_name, away_name)
