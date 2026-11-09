@@ -1990,7 +1990,7 @@ def enrich_with_specialist_models(rows):
         "fixtures_checked": int(specialist.get("fixtures_checked") or 0),
         "matched_prices": int(specialist.get("matched_prices") or 0),
         "specialist_panels": 0, "cross_bookmaker_matches": 0,
-        "x_posts": 0, "odds_snapshots_saved": 0,
+        "x_posts": 0, "x_fixtures_checked": 0, "odds_snapshots_saved": 0,
         "reason": specialist.get("reason") or "",
     }
     if not rows:
@@ -2019,7 +2019,7 @@ def enrich_with_specialist_models(rows):
         fixture_groups.setdefault(key, []).append(row)
 
     x_token = os.getenv("X_BEARER_TOKEN")
-    for (day_text, home, away), candidates in fixture_groups.items():
+    for group_index, ((day_text, home, away), candidates) in enumerate(fixture_groups.items()):
         games = games_by_day.get(day_text, [])
         for candidate in candidates:
             wanted_market = _normal_market_text(candidate.get("market"))
@@ -2047,7 +2047,7 @@ def enrich_with_specialist_models(rows):
                 candidate["other_bookmaker_evidence"] = True
                 stats["cross_bookmaker_matches"] += 1
 
-        if x_token:
+        if x_token and group_index < 12:
             try:
                 from x_research import search_match_posts
                 report = search_match_posts(home, away, limit=12, token=x_token)
@@ -2059,6 +2059,7 @@ def enrich_with_specialist_models(rows):
                     "url": post.get("url"),
                     "warning": "Unverified public-post lead; not confirmed team news.",
                 } for post in (report.get("posts") or [])[:8]]
+                stats["x_fixtures_checked"] += 1
                 stats["x_posts"] += int(report.get("result_count") or 0)
                 for candidate in candidates:
                     candidate["x_research_evidence"] = posts
