@@ -80,7 +80,7 @@ def _split_competition_country(competition, country):
         }
         for country_key, names in prefixes.items():
             for name in names:
-                match = re.match(r"^" + re.escape(name) + r"\\s*(?:[-:|>]\\s*)", league_name)
+                match = re.match(r"^" + re.escape(name) + r"\s*(?:[-:|>]\s*)", league_name)
                 if match:
                     country_name = country_key
                     league_name = league_name[match.end():].strip()
