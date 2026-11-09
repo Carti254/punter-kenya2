@@ -1726,6 +1726,23 @@ async def ai_natural_language_handler(update: Update, context: ContextTypes.DEFA
         context.args = direct_fixture["fixture"].split()
         await deepdive_command(update, context)
         return True
+
+    # A target-odds reply must never be sent to Gemini. This also recovers
+    # gracefully if Telegram user_data lost the guided slip state between
+    # the menu prompt and the user's numeric reply.
+    target_match = re.fullmatch(r"\\s*(\\d+(?:\\.\\d+)?)\\s*(?:odds?)?\\s*", message, re.I)
+    if target_match:
+        target = float(target_match.group(1))
+        if math.isfinite(target) and target > 1.0:
+            context.args = [f"{target:.12g}"]
+            context.user_data.pop("slip_flow", None)
+            context.user_data.pop("autobuild_target", None)
+            context.user_data.pop("autobuild_config", None)
+            await autobuild_sportybet_command(update, context)
+            return True
+        await reply(update, "Target odds must be greater than 1.00.")
+        return True
+
     if not ai_is_configured():
         await reply(update,
             "🧠 AI assistant is not connected yet. The bot's existing commands still work. "
