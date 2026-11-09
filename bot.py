@@ -3157,7 +3157,7 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
     cache_key = (folder, str(as_of_date)[:10] if as_of_date is not None else "latest")
     fit = cache.get(cache_key)
     if fit is None:
-        fit = fit_dixon_coles(rows, before_date=as_of_date, min_matches=60, min_team_matches=4)
+        fit = fit_dixon_coles(rows, before_date=as_of_date, min_matches=50, min_team_matches=3)
         if len(cache) >= 200:
             cache.clear()
         cache[cache_key] = fit
@@ -3903,10 +3903,14 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                 continue
             if not prediction.get("available"):
                 prediction_unavailable += 1
-                # Keep the exact SportyBet fixture in the research pool. BSD can
-                # independently supply supported 1X2, goal-total and corner
-                # probabilities even when verified history is still unavailable.
-                prediction = {}
+                # No verified pre-kickoff history means no model probability.
+                # Keep this fixture out of candidate generation rather than
+                # allowing a second feed or an empty prediction to bypass the model.
+                logger.info(
+                    "Skipping %s vs %s: Dixon-Coles history unavailable (%s)",
+                    home_name, away_name, prediction.get("reason") or "insufficient history"
+                )
+                continue
             progress(f"{day.isoformat()}: matched {home_name} vs {away_name}; evaluating {sum(len(g.get('markets') or []) for g in matches)} market rows…")
             for game in matches:
                 for row in game.get("markets", []):
