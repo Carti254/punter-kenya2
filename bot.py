@@ -2088,7 +2088,7 @@ async def autobuild_sportybet_command(update, context):
 
     # User supplies target odds only. PUNTER automatically chooses the
     # number of legs from qualified, distinct fixtures and risk/value constraints.
-    min_legs = 1
+    min_legs = 2
     max_legs = None
 
     # Scan all fixtures and every retrieved market the scoreline model supports.
