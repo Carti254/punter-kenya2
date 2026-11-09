@@ -38,6 +38,11 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     # not sufficient proof that the selected price belongs to this fixture.
     if not (row.get("eventId") or row.get("event_id") or row.get("sportybet_event_id")):
         return None
+    # An event ID alone does not prove the odds belong to this fixture.
+    if row.get("fixture_match_verified") is not True:
+        return None
+    if row.get("market_probability_verified") is not True:
+        return None
 
     # Check the underlying sample before its derived confidence label. This
     # makes rejection diagnostics identify missing/short team history instead
@@ -229,11 +234,17 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         "base_probability": base_probability if probability != base_probability else row.get("base_probability"),
         "probability_source": probability_source,
         "dixon_coles_adjusted": probability_source.startswith("Dixon-Coles"),
-        "research_grade": "A" if venue_evidence_complete else "B",
+        "research_grade": (
+            "A" if venue_evidence_complete and row.get("fixture_match_verified") is True
+            and h2h_n >= 2 and standings_available and elo_probability is not None
+            and bool(row.get("calibration_evidence")) else "B"
+        ),
         "research_grade_reason": (
-            "Recent-form and venue-split minimums satisfied."
-            if venue_evidence_complete else
-            "Recent-form minimums satisfied; one or both venue-specific samples are incomplete. Venue evidence is a disclosed research gap, not an automatic rejection."
+            "Verified fixture and market mapping, adequate venue samples, H2H, standings, Elo and out-of-sample calibration evidence are present."
+            if venue_evidence_complete and row.get("fixture_match_verified") is True
+            and h2h_n >= 2 and standings_available and elo_probability is not None
+            and bool(row.get("calibration_evidence")) else
+            "Grade B: minimum selection gates passed, but independent evidence or calibration required for Grade A is missing."
         ),
         "implied_probability": implied,
         "fair_odds": 1.0 / probability,
@@ -311,6 +322,10 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03, use_d
         return "invalid_probability_or_price"
     if not (row.get("eventId") or row.get("event_id") or row.get("sportybet_event_id")):
         return "missing_exact_sportybet_event_id"
+    if row.get("fixture_match_verified") is not True:
+        return "unverified_fixture_identity"
+    if row.get("market_probability_verified") is not True:
+        return "unverified_selected_market_probability"
     # Report missing/insufficient underlying samples before the confidence
     # label derived from those same samples, so diagnostics expose root causes.
     for key, minimum in (("home_sample", 5), ("away_sample", 5)):
