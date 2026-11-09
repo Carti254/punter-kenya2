@@ -55,7 +55,7 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
         clean.sort(key=lambda x: (x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
     else:
         clean.sort(key=lambda x: (x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
-    # SportyBet's adapter currently validates a maximum of 20 selections.
+    # SportyBet Kenya's published betslip limit is 50 selections.
     # Keep the four strongest market alternatives per fixture to avoid expanding
     # thousands of near-identical beam-search states for the same match.
     by_fixture = {}
@@ -65,7 +65,7 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
             alternatives.append(item)
     clean = [item for alternatives in by_fixture.values() for item in alternatives]
     fixture_count = len(by_fixture)
-    max_legs = min(max_legs, fixture_count, 20) if max_legs is not None else min(fixture_count, 20)
+    max_legs = min(max_legs, fixture_count, 50) if max_legs is not None else min(fixture_count, 50)
     if min_legs > max_legs:
         return {"selections": [], "combined_odds": 1.0, "combined_probability": 0.0,
                 "expected_return_factor": 0.0, "target_reached": False,
