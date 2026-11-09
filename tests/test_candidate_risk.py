@@ -46,6 +46,15 @@ class CandidateRiskTests(unittest.TestCase):
         })
         self.assertTrue(any("xG-versus-goal-model" in flag for flag in result["risk_flags"]))
 
+    def test_converging_risk_flags_reject_candidate(self):
+        result = assess_candidate_risk({
+            "model_confidence": "LOW",
+            "home_sample": 3,
+            "away_sample": 4,
+        })
+        self.assertTrue(result["risk_rejected"])
+        self.assertEqual(result["risk_level"], "HIGH")
+
 
 if __name__ == "__main__":
     unittest.main()
