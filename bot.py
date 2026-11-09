@@ -2201,11 +2201,17 @@ async def autobuild_sportybet_command(update, context):
     await reply(update, f"🔎 Finding matches for target odds {target:.2f}…")
     try:
         # Keep research and diagnostics internal; Telegram receives only the final slip.
+        # Search a full rolling week so the builder has a wider pool of
+        # independently researched fixtures instead of forcing today's small slate.
+        scan_days = tuple(
+            (datetime.now(EAT).date() + timedelta(days=offset)).isoformat()
+            for offset in range(7)
+        )
         rows, diagnostics = await asyncio.wait_for(
             asyncio.to_thread(
-                scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet",
+                scan_value_candidates, scan_days, market_filter, "SportyBet",
             ),
-            timeout=90,
+            timeout=180,
         )
         scanned_count = len(rows)
 
@@ -2330,7 +2336,10 @@ async def autobuild_sportybet_command(update, context):
         build = build_accumulator(
             rows, target, min_legs=min_legs, max_legs=max_legs,
             ranking="value",
-            max_candidates=250,
+            # Keep a broader set of researched markets available to the
+            # combination search; do not narrow the candidate pool prematurely.
+            max_candidates=500,
+            beam_width=1200,
         )
         chosen = build["selections"]
         if not chosen or not build.get("target_reached"):
@@ -4135,10 +4144,17 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     progress("Step 1/4: downloading the fixture catalogue…")
     candidates, diagnostics = [], []
     today = datetime.now(EAT).date()
-    target_dates = {
-        today + (timedelta(days=1) if day == "tomorrow" else timedelta())
-        for day in day_filters
-    }
+    target_dates = set()
+    for day in day_filters:
+        if day == "today":
+            target_dates.add(today)
+        elif day == "tomorrow":
+            target_dates.add(today + timedelta(days=1))
+        else:
+            try:
+                target_dates.add(date.fromisoformat(str(day)))
+            except (TypeError, ValueError):
+                continue
     if not target_dates:
         return [], ["No scan dates were requested."]
 
@@ -4146,7 +4162,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     # Those sources still enrich matched candidates later, but cannot block
     # primary fixture retrieval and SportyBet price matching.
     try:
-        raw_fixtures = fetch_openmatchday_fixture_rows(2, None, None)
+        raw_fixtures = fetch_openmatchday_fixture_rows(max(1, (max(target_dates) - today).days + 1), None, None)
         all_fixtures = upcoming_fixtures(raw_fixtures)
         progress(f"Step 2/4: fixture catalogue ready ({len(all_fixtures)} upcoming fixtures). Fetching SportyBet prices…")
     except Exception as exc:
