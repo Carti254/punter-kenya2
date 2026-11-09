@@ -44,6 +44,12 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
         # overstates accumulator hit probability and can misstate combined returns.
         if "draw no bet" in market_text or __import__("re").search(r"(?<![a-z])dnb(?![a-z])", market_text):
             continue
+        push_market = any(term in market_text for term in (
+            "total goals", "over under", "goals over", "goals under",
+            "total match", "goal line", "asian handicap", "handicap",
+        ))
+        if push_market and __import__("re").search(r"(?<!\\d)\\d+\\.0+(?!\\d)|(?<!\\d)\\d+(?![\\d.])", market_text):
+            continue
         if "btts" in market_text or "both teams to score" in market_text:
             continue
         if "under 2.5" in market_text or ("under" in market_text and "2.5" in str(row.get("specifier") or "")):
