@@ -21,7 +21,7 @@ PUNTER uses Google Gemini for natural-language request routing and football slip
 Configure these variables privately in Railway **Variables** (or your local environment):
 
 - `GEMINI_API_KEY` — Google AI Studio API key. Never commit or share it.
-- `GEMINI_MODEL` — optional model name; defaults to `gemini-2.5-flash`.
+- `GEMINI_MODEL` — optional Gemini API model ID; defaults to `gemini-3.8-flash`.
 
 Without the key, existing non-AI commands continue to work. Gemini usage and quotas depend on the Google AI Studio account and current model availability.
 
@@ -107,7 +107,7 @@ The database account needs permission to create and write the tables used by the
 - `/bookies` — check both Betika and SportyBet public feeds.
 - `/odds HOME vs AWAY [today|tomorrow]` — inspect matched prices.
 - `/topvalue`, `/aipicks`, `/accumulator` — experimental scanner tools; may correctly return NO BET.
-- `/autobuild [TARGET] [MARKET FILTER] [rank=value|odds|probability] [legs=N|minlegs=N maxlegs=N]` — build a SportyBet preview with a configurable number of different matches. Targets of 10+ default to at least 5 legs (up to 20); smaller targets default to 2. Examples: `/autobuild 50` (at least 5 legs), `/autobuild 50 legs=8` (exactly 8 legs), `/autobuild 50 minlegs=5 maxlegs=12`, or `/autobuild 10 market=1X2 rank=value`. `/build` and `/slip` preserve these arguments too. Every leg shows the PUNTER statistical-model hit estimate and the slip shows the multiplied combined estimate. The combined figure assumes independence between matches and is experimental/uncalibrated, not a guarantee.
+- `/autobuild TARGET [MARKET FILTER] [rank=value|odds|probability]` — build a SportyBet preview from a target combined decimal odd. Enter the target only; PUNTER automatically chooses the number of legs from qualified, distinct fixtures and available value/risk evidence. Leg-count controls are intentionally disabled: the bot must not force a leg count, pad a slip with weak/negative-value picks, or claim the target was reached when it was not. Example: `/autobuild 5` or `/autobuild 10 market=1X2 rank=value`. `/build` and `/slip` preserve the target-only workflow. Every leg shows the PUNTER model estimate and research gaps; the combined estimate assumes independence between matches and remains experimental/uncalibrated, not a guarantee.
 - `/calculator ODDS STAKE` — calculate implied probability and potential return.
 - `/record`, `/oddshistory`, `/myslips` — prediction history, odds history and saved slips; require the optional database.
 - `/calibrate` — run a date-ordered walk-forward evaluation using only matches before each test date; compare the current Poisson model, a venue-weighted/shrunk candidate and a training-only prevalence baseline on the final 30% holdout. Temperature calibration is reported separately. It requires at least 50 training and 30 holdout forecasts and never changes live model settings automatically.
