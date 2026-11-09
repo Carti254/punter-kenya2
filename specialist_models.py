@@ -13,6 +13,9 @@ from datetime import date, timedelta
 from football_stats_provider import _get, _team_key, FootballStatsError
 
 
+# Per-process cache prevents duplicate event calls when both teams share recent fixtures.
+_EARLY_EVENT_CACHE = {}
+
 STAT_ALIASES = {
     "corners": ("corner kicks", "corners"),
     "shots": ("total shots", "shots total"),
@@ -95,9 +98,44 @@ def _recent_team_observations(team_id, before_date, api_key, session, last=5):
                 ht_total = float(home_ht["home"]) + float(home_ht["away"])
         except (TypeError, ValueError):
             pass
-        obs = {"half_time_goals": ht_total}
         home_id = (teams.get("home") or {}).get("id")
         own_stats = home_stats if str(home_id) == str(team_id) else away_stats
+
+        # Goal-event timing is kept separate from half-time totals. A first-half
+        # goal is not mislabelled as an early (first-10-minute) goal.
+        cache_key = int(fixture_id)
+        if cache_key not in _EARLY_EVENT_CACHE:
+            try:
+                _EARLY_EVENT_CACHE[cache_key] = _get(
+                    "fixtures/events", {"fixture": cache_key}, api_key, session
+                )
+            except Exception:
+                _EARLY_EVENT_CACHE[cache_key] = None
+        event_rows = _EARLY_EVENT_CACHE.get(cache_key)
+        goal_events = []
+        for event in event_rows or []:
+            if str(event.get("type") or "").casefold() != "goal":
+                continue
+            event_time = event.get("time") or {}
+            try:
+                elapsed = int(event_time.get("elapsed"))
+                extra = int(event_time.get("extra") or 0)
+                event_minute = elapsed + (extra / 100.0)
+            except (TypeError, ValueError):
+                continue
+            event_team_id = (event.get("team") or {}).get("id")
+            goal_events.append((event_minute, str(event_team_id or "")))
+        first_goal = min(goal_events, key=lambda item: item[0]) if goal_events else None
+        first_goal_minute = first_goal[0] if first_goal else None
+        first_goal_team = first_goal[1] if first_goal else None
+        obs = {
+            "half_time_goals": ht_total,
+            "events_available": isinstance(event_rows, list),
+            "first_goal_minute": first_goal_minute,
+            "goal_before_10": int(first_goal_minute is not None and first_goal_minute <= 10),
+            "early_goal_for": int(first_goal_minute is not None and first_goal_minute <= 10 and first_goal_team == str(team_id)),
+            "early_goal_against": int(first_goal_minute is not None and first_goal_minute <= 10 and first_goal_team != str(team_id)),
+        }
         for key, aliases in STAT_ALIASES.items():
             h, a = _value(home_stats, aliases), _value(away_stats, aliases)
             obs[key] = (h + a) if h is not None and a is not None else None
@@ -126,6 +164,55 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
     teams = exact[0].get("teams") or {}
     home_team, away_team = teams.get("home") or {}, teams.get("away") or {}
     fixture_id = int(((exact[0].get("fixture") or {}).get("id") or 0))
+    league_info = exact[0].get("league") or {}
+    standings_evidence = None
+    if league_info.get("id") is not None and league_info.get("season") is not None:
+        try:
+            standings_rows = _get(
+                "standings",
+                {"league": int(league_info["id"]), "season": int(league_info["season"])},
+                key, session,
+            )
+            table_entries = []
+            for envelope in standings_rows or []:
+                league_block = envelope.get("league") or {}
+                for group in league_block.get("standings") or []:
+                    table_entries.extend(group or [])
+
+            def team_table_row(team_id):
+                for entry in table_entries:
+                    team = entry.get("team") or {}
+                    if str(team.get("id")) != str(team_id):
+                        continue
+                    all_stats = entry.get("all") or {}
+                    goals = all_stats.get("goals") or {}
+                    return {
+                        "rank": entry.get("rank"),
+                        "points": entry.get("points"),
+                        "form": entry.get("form"),
+                        "played": all_stats.get("played"),
+                        "wins": all_stats.get("win"),
+                        "draws": all_stats.get("draw"),
+                        "losses": all_stats.get("lose"),
+                        "goal_difference": entry.get("goalsDiff"),
+                        "goals_for": goals.get("for"),
+                        "goals_against": goals.get("against"),
+                    }
+                return None
+
+            home_table = team_table_row(home_team.get("id"))
+            away_table = team_table_row(away_team.get("id"))
+            if home_table or away_table:
+                standings_evidence = {
+                    "provider": "API-Football",
+                    "league": league_info.get("name"),
+                    "country": league_info.get("country"),
+                    "season": league_info.get("season"),
+                    "home": home_table,
+                    "away": away_table,
+                }
+        except Exception as exc:
+            provider_warnings = [f"Standings unavailable: {type(exc).__name__}"]
     lineup_evidence = None
     team_news_evidence = None
     provider_warnings = []
@@ -251,10 +338,31 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
             "away_xg_average": sum(away_xg) / len(away_xg),
             "source_statistic": "expected goals where returned by fixture statistics",
         }
+    def early_goal_profile(observations):
+        valid = [row for row in observations if row.get("events_available")]
+        if len(valid) < 3:
+            return None
+        n = len(valid)
+        return {
+            "provider": "API-Football goal events",
+            "sample": n,
+            "goal_before_10_rate": sum(row.get("goal_before_10", 0) for row in valid) / n,
+            "team_scored_first_before_10_rate": sum(row.get("early_goal_for", 0) for row in valid) / n,
+            "team_conceded_first_before_10_rate": sum(row.get("early_goal_against", 0) for row in valid) / n,
+            "warning": "First goal within 10 minutes, based on available event timelines; not a calibrated forecast.",
+        }
+
+    early_goal_evidence = {
+        "home": early_goal_profile(home_rows),
+        "away": early_goal_profile(away_rows),
+    }
+
     return {
         "fixture": f"{home} vs {away}", "date": target.isoformat(),
         "fixture_id": fixture_id,
         "provider": "API-Football", "panels": panels,
+        "standings_evidence": standings_evidence,
+        "early_goal_evidence": early_goal_evidence,
         "lineup_evidence": lineup_evidence,
         "team_news_evidence": team_news_evidence,
         "xg_evidence": xg_evidence,
