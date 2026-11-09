@@ -78,7 +78,7 @@ class AIAssistantTests(unittest.TestCase):
 
     def test_default_model_is_gemini_38_flash(self):
         response = FakeResponse('{"action":"help","fixture":"","date":"both","market":"all","target_odds":5.0}')
-        with patch.dict("os.environ", {}, clear=True):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}, clear=True):
             with patch.object(ai_assistant.requests, "post", return_value=response) as post:
                 ai_assistant.interpret_request("help")
         self.assertIn("models/gemini-3.8-flash:generateContent", post.call_args.args[0])
