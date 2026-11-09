@@ -3985,7 +3985,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
 
     try:
         if str(bookmaker_only or "").casefold() == "sportybet":
-            priced_games = fetch_sportybet_odds(sorted(target_dates), max_pages=12)
+            priced_games = fetch_sportybet_odds(sorted(target_dates), max_pages=8)
             feed_errors = {}
             progress(f"Step 3/4: SportyBet returned {len(priced_games)} priced events. Matching fixtures and checking markets…")
         else:
