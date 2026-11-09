@@ -2409,7 +2409,8 @@ async def accumulator_status_command(update, context):
                     f"Qualified fixtures: {fixture_count}; eligible markets: {len(rows)}.")
         return
 
-    probability_product = math.prod(item["probability"] for item in chosen)
+    probability_product = float(build.get("combined_probability") or math.prod(item["probability"] for item in chosen))
+    naive_probability_product = math.prod(item["probability"] for item in chosen)
     lines = [
         "🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR",
         f"Target: {target:.2f} | Combined decimal odds: {combined:.2f} | TARGET REACHED",
@@ -2423,11 +2424,22 @@ async def accumulator_status_command(update, context):
             f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item.get('bookmaker') or 'Unknown'})",
             f"   Model probability: {item['probability']:.1%} | Estimated EV: {item.get('ev', 0):+.1%}",
             f"   Evidence gaps: {', '.join(item.get('research_gaps') or []) or 'None reported'}",
+            *([f"   Confirmed lineups: {', '.join(x.get('team','') for x in (item.get('lineup_evidence') or {}).get('sides', []))}."]
+              if (item.get("lineup_evidence") or {}).get("sides") else []),
+            *([f"   Reported absences: {len((item.get('team_news_evidence') or {}).get('reported_absences', []))} (API-Football)."]
+              if item.get("team_news_evidence") else []),
+            *([f"   xG sample: home {item['xg_evidence'].get('home_sample')} / away {item['xg_evidence'].get('away_sample')}."]
+              if item.get("xg_evidence") else []),
+            *([f"   Tactical profile: {((item.get('tactical_evidence') or {}).get('home') or {}).get('descriptive_style','not available')}; away {((item.get('tactical_evidence') or {}).get('away') or {}).get('descriptive_style','not available')}."]
+              if item.get("tactical_evidence") else []),
+            *([f"   Odds movement: {item['odds_history_evidence'].get('movement_direction')} ({item['odds_history_evidence'].get('movement_fraction',0):+.1%}, {item['odds_history_evidence'].get('observations')} snapshots)."]
+              if (item.get('odds_history_evidence') or {}).get('status') == 'observed' else []),
         ])
     lines.extend([
         "",
-        f"Naive independent-leg probability product: {probability_product:.2%}",
-        "This assumes independence and is not a calibrated accumulator probability.",
+        f"Naive independent-leg probability product: {naive_probability_product:.2%}",
+        f"Dependence-adjusted model estimate: {probability_product:.2%} (factor {build.get('correlation_adjustment_factor', 1.0):.3f}).",
+        "Same-competition/date dependence uses a conservative heuristic haircut, not measured pairwise correlation; this is not a calibrated accumulator probability.",
     ])
     if build.get("correlation_warnings"):
         lines.append("Correlation warning: " + "; ".join(build["correlation_warnings"]))
