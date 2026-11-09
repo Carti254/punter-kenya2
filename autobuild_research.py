@@ -35,7 +35,13 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.0, use_dixon_coles:
         return None
     if not (math.isfinite(odds) and odds > 1 and math.isfinite(probability) and 0 < probability < 1):
         return None
+    if str(row.get("bookmaker") or "").strip().casefold().replace(" ", "") != "sportybet":
+        return None
     if not (row.get("eventId") or row.get("event_id") or row.get("sportybet_event_id")):
+        return None
+    if not (row.get("marketId") or row.get("market_id")):
+        return None
+    if not (row.get("outcomeId") or row.get("outcome_id")):
         return None
     if row.get("fixture_match_verified") is not True:
         return None
@@ -91,8 +97,14 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.0, use_di
         return "missing_probability_or_price"
     if not (math.isfinite(odds) and odds > 1 and math.isfinite(probability) and 0 < probability < 1):
         return "invalid_probability_or_price"
+    if str(row.get("bookmaker") or "").strip().casefold().replace(" ", "") != "sportybet":
+        return "not_a_sportybet_price"
     if not (row.get("eventId") or row.get("event_id") or row.get("sportybet_event_id")):
         return "missing_exact_sportybet_event_id"
+    if not (row.get("marketId") or row.get("market_id")):
+        return "missing_exact_sportybet_market_id"
+    if not (row.get("outcomeId") or row.get("outcome_id")):
+        return "missing_exact_sportybet_outcome_id"
     if row.get("fixture_match_verified") is not True:
         return "unverified_fixture_identity"
     if not str(row.get("probability_source") or "").startswith("Fitted time-decayed Dixon-Coles"):
