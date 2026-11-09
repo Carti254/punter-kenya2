@@ -32,7 +32,7 @@ from results_tracker import record_bet, settle_bet, bet_statistics, list_pending
 from prediction_validation import brier_score, log_loss, fit_temperature, apply_temperature
 from football_stats_provider import fetch_match_market_data, FootballStatsError
 from market_settlement import settle_bet_with_market_evidence
-from ai_assistant import ai_is_configured, interpret_request, read_slip_image
+from ai_assistant import ai_is_configured, interpret_request, read_slip_image, _plain_fixture_request
 from premium_intelligence import market_probabilities, assess_price, rollover_projection
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
@@ -1717,6 +1717,14 @@ async def ai_natural_language_handler(update: Update, context: ContextTypes.DEFA
     message = (update.effective_message.text or "").strip()
     if not message or message.startswith("/"):
         return False
+    # A plain "Home vs Away" request is deterministic: route it directly to
+    # match research before checking Gemini. This keeps the core fixture workflow
+    # available even when Gemini is slow, rate-limited, misconfigured or offline.
+    direct_fixture = _plain_fixture_request(message)
+    if direct_fixture is not None:
+        context.args = direct_fixture["fixture"].split()
+        await deepdive_command(update, context)
+        return True
     if not ai_is_configured():
         await reply(update,
             "🧠 AI assistant is not connected yet. The bot's existing commands still work. "
