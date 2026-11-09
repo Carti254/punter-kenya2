@@ -2082,8 +2082,6 @@ def enrich_with_specialist_models(rows):
 
 
 async def autobuild_sportybet_command(update, context):
-    # Parse the actual Telegram message as well as context.args. This prevents
-    # another handler/wrapper from silently dropping the user's requested odds.
     message_text = str(getattr(update.effective_message, "text", "") or "").strip()
     message_parts = message_text.split(maxsplit=1)
     raw_tail = message_parts[1].strip() if message_text.startswith("/") and len(message_parts) > 1 else ""
@@ -2096,21 +2094,23 @@ async def autobuild_sportybet_command(update, context):
         await reply(update, "🎟️ BUILD YOUR SPORTYBET SLIP\n\nWhat target combined odds do you want?\nExample: 2, 5, 10, 20 or 50.\n/cancel to stop.")
         return
     target = float(guided["target"]) if guided else 2.0
-    # Accept decimal odds and shorthand such as /autobuild 50odds.
     if not guided and args and re.fullmatch(r"\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
         target = float(re.sub(r"odds$", "", str(args.pop(0)), flags=re.I))
         if not math.isfinite(target) or target <= 1.0:
             await reply(update, "Target odds must be greater than 1.00.")
             return
 
-    # User supplies target odds only. PUNTER automatically chooses the
-    # number of legs from qualified, distinct fixtures and risk/value constraints.
-    min_legs = 2
-    max_legs = None
+    # Automatic leg count: require at least two distinct fixtures and let the
+    # historical target-search engine determine how many are needed.
+    min_legs = 5 if target >= 10 else 2
+    max_legs = 20
+    if target > 1000:
+        await reply(update, "Target odds cannot exceed 1,000.")
+        return
 
     # Scan all fixtures and every retrieved market the scoreline model supports.
     # Default parlay excludes BTTS and Under 2.5 per the user's standing preferences.
-    rank_mode = "value"
+    rank_mode = "parlay"
     market_parts = []
     for token in args:
         lowered = token.casefold()
@@ -2118,9 +2118,24 @@ async def autobuild_sportybet_command(update, context):
             rank_mode = lowered.split("=", 1)[1]
         elif lowered.startswith("market="):
             market_parts.append(token.split("=", 1)[1])
-        elif lowered.startswith(("legs=", "minlegs=", "maxlegs=")):
-            await reply(update, "Leg-count controls have been removed. Enter only your target combined odds; PUNTER chooses the number of legs automatically.")
-            return
+        elif lowered.startswith("legs="):
+            try:
+                min_legs = max_legs = int(lowered.split("=", 1)[1])
+            except ValueError:
+                await reply(update, "Use legs=1 to 20, for example /autobuild 50 legs=8.")
+                return
+        elif lowered.startswith("minlegs="):
+            try:
+                min_legs = int(lowered.split("=", 1)[1])
+            except ValueError:
+                await reply(update, "Use minlegs=1 to 20.")
+                return
+        elif lowered.startswith("maxlegs="):
+            try:
+                max_legs = int(lowered.split("=", 1)[1])
+            except ValueError:
+                await reply(update, "Use maxlegs=1 to 20.")
+                return
         elif lowered in ("value", "odds", "probability", "parlay"):
             rank_mode = lowered
         else:
@@ -2128,128 +2143,29 @@ async def autobuild_sportybet_command(update, context):
     if rank_mode not in ("value", "odds", "probability", "parlay"):
         await reply(update, "Ranking must be parlay, value, odds or probability.")
         return
-    if min_legs < 1 or (max_legs is not None and (max_legs < 1 or min_legs > max_legs)):
-        await reply(update, "Leg count must use positive whole numbers and minimum cannot exceed maximum.")
+    if not (1 <= min_legs <= max_legs <= 20):
+        await reply(update, "Leg count must satisfy 1 <= minimum <= maximum <= 20. Use legs=8 or minlegs=5 maxlegs=12.")
         return
 
     market_filter = ",".join(market_parts) if market_parts else "all"
-    leg_plan = "automatic leg count"
+    await reply(update, f"🤖 SPORTYBET SCAN — TARGET {target:.2f}\nBuilding {min_legs}–{max_legs} different matches; scanning upcoming fixtures and supported markets…")
     try:
-        # Keep all feed scanning, matching and model research internal. Telegram receives
-        # only the completed slip or a concise no-bet result.
-        # Bound each expensive stage so a slow upstream feed cannot leave the
-        # Telegram handler waiting indefinitely. The worker thread may finish in
-        # the background, but this request returns a controlled result to Telegram.
-        rows, diagnostics = await asyncio.wait_for(
-            asyncio.to_thread(
-                scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
-            ),
-            timeout=240,
+        rows, diagnostics = await asyncio.to_thread(
+            scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
         )
         rows = [
             x for x in rows
             if str(x.get("bookmaker", "")).casefold() == "sportybet"
-            and float(x.get("odds") or 0) > 1.0
+            and 1.01 <= float(x.get("odds") or 0) <= 4.50
+            and "btts" not in str(x.get("market", "")).casefold()
+            and "both teams" not in str(x.get("market", "")).casefold()
+            and not (
+                "under" in str(x.get("selection", "")).casefold()
+                and "2.5" in (
+                    str(x.get("selection", "")) + " " + str(x.get("specifier", ""))
+                )
+            )
         ]
-        # Attach historical SportyBet price movement only from exact, persisted snapshots.
-        try:
-            rows, odds_history_stats = await asyncio.wait_for(
-                asyncio.to_thread(enrich_candidates_with_price_history, rows),
-                timeout=12,
-            )
-        except asyncio.TimeoutError:
-            odds_history_stats = {"matched": 0, "reason": "Odds-history lookup timed out; no movement claim made."}
-        except Exception as exc:
-            odds_history_stats = {"matched": 0, "reason": f"Odds-history lookup unavailable: {type(exc).__name__}"}
-        logger.info("Autobuild odds history: %s", odds_history_stats)
-
-        # Run optional API-Football specialist research (corners, cards, shots,
-        # shots on target and first-half goals) against exact fixture/date/price matches.
-        # If the provider key or a reliable exact match is absent, base candidates remain unchanged.
-        # Specialist market research is optional enrichment, never a prerequisite
-        # for building a slip from the primary fixture/odds scan. Run it on shallow
-        # copies so a timed-out worker cannot mutate the base candidate pool later.
-        base_rows = rows
-        specialist_rows = [dict(item) for item in base_rows]
-        try:
-            rows, specialist_stats = await asyncio.wait_for(
-                asyncio.to_thread(enrich_with_specialist_models, specialist_rows),
-                timeout=45,
-            )
-        except asyncio.TimeoutError:
-            rows = base_rows
-            specialist_stats = {"available": False, "reason": "Specialist research timed out; primary model candidates retained."}
-            logger.warning("Optional specialist research timed out; continuing with primary candidates.")
-        except Exception as exc:
-            rows = base_rows
-            specialist_stats = {"available": False, "reason": f"Specialist research unavailable: {type(exc).__name__}"}
-            logger.warning("Optional specialist research failed; continuing with primary candidates: %s", exc)
-        # Fit temperature only on an earlier training window and require
-        # improvement on a later untouched holdout before applying it.
-        calibration_stats = {"ready": False, "reason": "Not run"}
-        calibration_apply_stats = {"applied": False, "reason": "No validated calibration"}
-        try:
-            calibration_stats = await asyncio.wait_for(
-                asyncio.to_thread(evaluate_historical_calibration), timeout=25
-            )
-            rows, calibration_apply_stats = apply_walk_forward_calibration(rows, calibration_stats)
-        except asyncio.TimeoutError:
-            calibration_stats = {"ready": False, "reason": "Walk-forward calibration timed out; raw model probabilities retained."}
-        except Exception as exc:
-            calibration_stats = {"ready": False, "reason": f"Walk-forward calibration unavailable: {type(exc).__name__}"}
-        logger.info("Autobuild calibration: validation=%s application=%s",
-                    calibration_stats, calibration_apply_stats)
-
-        # Apply one auditable research/value gate. Keep non-negative-EV candidates;
-        # never silently pad a requested slip with negative-EV selections.
-        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.03, use_dixon_coles=True)
-
-        # Run one real Gemini evidence-review pass on the strongest candidates.
-        # Gemini receives only PUNTER/provider facts already retrieved; it cannot
-        # invent missing lineups, injuries, xG, tactics or price movement.
-        ai_research_stats = {"enabled": False, "reason": "Not run"}
-        try:
-            ai_fixtures = {}
-            for candidate in rows:
-                fixture_label = str(candidate.get("fixture") or
-                                    f"{candidate.get('home','')} vs {candidate.get('away','')}")
-                key = (str(candidate.get("day") or "")[:10], fixture_label.casefold())
-                ai_fixtures.setdefault(key, {
-                    **candidate, "fixture": fixture_label,
-                })
-            ai_payload = list(ai_fixtures.values())[:12]
-            ai_research_stats = await asyncio.wait_for(
-                asyncio.to_thread(review_fixture_evidence, ai_payload, 12),
-                timeout=50,
-            )
-            ai_reviews = ai_research_stats.get("reviews") or {}
-            for candidate in rows:
-                fixture_label = str(candidate.get("fixture") or
-                                    f"{candidate.get('home','')} vs {candidate.get('away','')}")
-                review = ai_reviews.get(fixture_label)
-                if review:
-                    candidate["ai_research_review"] = review
-                    candidate["ai_research_provider"] = "Gemini evidence-grounded review"
-        except asyncio.TimeoutError:
-            ai_research_stats = {"enabled": ai_is_configured(), "reviewed": 0,
-                                 "reason": "Gemini evidence review timed out; no AI review is claimed."}
-        except Exception as exc:
-            ai_research_stats = {"enabled": ai_is_configured(), "reviewed": 0,
-                                 "reason": f"Gemini evidence review failed: {type(exc).__name__}"}
-            logger.warning("Gemini autobuild evidence review failed: %s", exc)
-
-
-        # Research stays internal. Do not send fixture dumps, market lists or
-        # intermediate candidate output to Telegram; only the final slip (or a
-        # concise no-bet result) is user-facing.
-        if not rows:
-            context.user_data.pop("pending_sportybet_booking", None)
-            await reply(
-                update,
-                "NO BET: no usable, correctly matched SportyBet market candidates were produced after fixture, market and price validation. "
-                "No matched fixture produced a usable model-backed market. Please try again when more SportyBet fixtures are available."
-            )
-            return
 
         if rank_mode in ("parlay", "odds"):
             rows.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
@@ -2258,73 +2174,28 @@ async def autobuild_sportybet_command(update, context):
         else:
             rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
 
-        available_fixtures = len({(str(x.get("home") or "").casefold(), str(x.get("away") or "").casefold()) for x in rows})
-        # Leg count is fully automatic; no explicit_max_legs flag exists or is needed.
-        # Count distinct fixtures by date and canonical home/away identity.
-        effective_max_legs = len({
-            (str(x.get("day") or ""), canonical_team_key(x.get("home")), canonical_team_key(x.get("away")))
-            for x in rows
-            if x.get("home") and x.get("away")
-        })
-        if effective_max_legs < min_legs:
-            await reply(update, f"Only {available_fixtures} distinct eligible fixtures are available; cannot satisfy minlegs={min_legs}.")
-            return
         build = build_accumulator(
-            rows, target, min_legs=min_legs, max_legs=effective_max_legs,
-            ranking=("value" if rank_mode == "parlay" else rank_mode),
-            max_candidates=None,
+            rows, target, min_legs=min_legs, max_legs=max_legs,
+            ranking=("odds" if rank_mode == "parlay" else rank_mode),
+            max_candidates=250,
         )
         chosen = build["selections"]
-        target_reached = bool(build.get("target_reached"))
-        if not target_reached or not chosen:
+        if not chosen:
             context.user_data.pop("pending_sportybet_booking", None)
-            reason = str(build.get("reason") or "No valid combination reached the requested target.")
-            await reply(
-                update,
-                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\n"
-                f"PUNTER checked {available_fixtures} fixtures and {len(rows)} eligible selections.\n"
-                f"{reason}\n"
-                "No lower-odds substitute or booking code was created."
-            )
-            return
-        if len(chosen) < min_legs or (max_legs is not None and len(chosen) > max_legs):
-            context.user_data.pop("pending_sportybet_booking", None)
-            await reply(update, "NO SLIP: the selected combination did not satisfy the configured leg constraints.")
+            await reply(update, "No qualifying SportyBet selections were found.")
             return
 
         # Keep the exact fixture, market and outcome IDs returned by the odds scan.
-        resolved = await asyncio.wait_for(
-            asyncio.to_thread(prepare_sportybet_candidates, chosen),
-            timeout=30,
-        )
+        resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
         # The live SportyBet resolver returns booking fields only. Reattach the
         # exact scanner probabilities in the same order for transparent reporting.
         for live_leg, model_leg in zip(resolved, chosen):
             live_leg["probability"] = float(model_leg["probability"])
             live_leg["ev"] = model_leg.get("ev")
-            live_leg["edge"] = model_leg.get("edge")
-            live_leg["value_tier"] = model_leg.get("value_tier")
-            live_leg["research_evidence"] = model_leg.get("research_evidence") or {}
-            live_leg["research_checks"] = model_leg.get("research_checks") or []
-            live_leg["research_gaps"] = model_leg.get("research_gaps") or []
             live_leg["probability_source"] = model_leg.get("probability_source") or "PUNTER statistical model"
-            live_leg["model_confidence"] = model_leg.get("model_confidence")
-            for evidence_key in ("specialist_evidence", "specialist_panels", "x_research_evidence",
-                                 "x_research_warning", "other_bookmaker_prices",
-                                 "best_other_bookmaker", "cross_bookmaker_edge",
-                                 "external_evidence_sources", "external_market_probability",
-                                 "external_model_disagreement", "bsd_consensus_odds",
-                                 "price_vs_bsd_consensus", "lineup_evidence",
-                                 "team_news_evidence", "xg_evidence", "odds_history_evidence",
-                                 "tactical_evidence", "calibration_evidence", "ai_research_review", "ai_research_provider",
-                                 "other_bookmaker_evidence"):
-                live_leg[evidence_key] = model_leg.get(evidence_key)
         combined = math.prod(float(x["odds"]) for x in resolved)
-        # Preserve the accumulator engine's dependence adjustment. Recomputing
-        # this as a plain product here would silently discard that adjustment.
-        naive_probability = float(build.get("naive_independent_probability") or
-                                  math.prod(float(x["probability"]) for x in resolved))
-        combined_probability = float(build.get("combined_probability") or naive_probability)
+        combined_probability = float(build.get("combined_probability") or
+                                      math.prod(float(x["probability"]) for x in resolved))
         target_reached = target <= combined <= target * 1.20
         if target_reached:
             context.user_data["pending_sportybet_booking"] = resolved
@@ -2332,67 +2203,26 @@ async def autobuild_sportybet_command(update, context):
             context.user_data.pop("pending_sportybet_booking", None)
 
         lines = [
-            (f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET" if target_reached
-             else f"⚠️ BEST AVAILABLE SLIP — {target:.2f} TARGET NOT REACHED"),
-            f"Actual combined odds: {combined:.2f}",
+            f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET",
+            f"Combined odds: {combined:.2f} — " + ("TARGET REACHED" if target_reached else "TARGET NOT REACHED"),
             f"Selections: {len(resolved)}",
             "",
         ]
         for i, leg in enumerate(resolved, 1):
-            lines.append(f"{i}. {leg['fixture']} — {leg['market']}: {leg['selection']} @ {float(leg['odds']):.2f}")
-        lines.append("")
+            lines.append(
+                f"{i}. {leg['fixture']} — {leg['market']}: "
+                f"{leg['selection']} @ {leg['odds']:.2f}"
+            )
+            lines.append(f"   PUNTER model hit estimate: {leg['probability']:.1%}")
+        lines.extend([
+            "",
+            f"Estimated accumulator hit probability: {combined_probability:.2%}",
+            "This multiplies individual model estimates and assumes different matches are independent. It is experimental and uncalibrated, not a guarantee.",
+        ])
         if not target_reached:
-            lines.append(f"Target not reached. Best available construction from {available_fixtures} fixtures and {len(rows)} eligible selections; no booking code is available.")
-        for leg in resolved:
-            checks = leg.get("research_checks") or []
-            gaps = list(leg.get("research_gaps") or [])
-            ai_review = leg.get("ai_research_review") or {}
-            source = leg.get("probability_source") or "PUNTER statistical model"
-            lines.append(f"Model: {source}; single-leg estimate {float(leg.get('probability') or 0):.1%}; EV {float(leg.get('ev') or 0):+.1%}.")
-            if checks:
-                lines.append("Verified inputs: " + "; ".join(checks[:5]) + ".")
-            lineup = leg.get("lineup_evidence") or {}
-            sides = lineup.get("sides") or []
-            if sides:
-                lines.append("Confirmed starting lineups: " + ", ".join(str(x.get("team") or "Team") for x in sides) + ".")
-            news = leg.get("team_news_evidence") or {}
-            absences = news.get("reported_absences") or []
-            if absences:
-                lines.append(f"Reported injury/suspension entries: {len(absences)} (provider feed; verify names/status).")
-            xg = leg.get("xg_evidence") or {}
-            if xg:
-                lines.append(f"xG sample: home {xg.get('home_sample')} matches, avg {float(xg.get('home_xg_average') or 0):.2f}; away {xg.get('away_sample')} matches, avg {float(xg.get('away_xg_average') or 0):.2f}.")
-            tactical = leg.get("tactical_evidence") or {}
-            if tactical:
-                for side in ("home", "away"):
-                    profile = tactical.get(side) or {}
-                    if profile:
-                        lines.append(f"{side.title()} recent-stat profile: {profile.get('descriptive_style','no clear signal')}; sample {profile.get('matches_sampled',0)}.")
-            history = leg.get("odds_history_evidence") or {}
-            if history.get("status") == "observed":
-                lines.append(f"Observed odds movement: {history.get('movement_direction')} {float(history.get('movement_fraction') or 0):+.1%} across {history.get('observations')} snapshots.")
-            else:
-                lines.append("Odds movement: not established (fewer than two exact historical snapshots or feed unavailable).")
-            other = leg.get("best_other_bookmaker")
-            if other:
-                lines.append(f"Other bookmaker reference: {other.get('bookmaker')} @ {float(other.get('odds') or 0):.2f} (quotes may not be simultaneous).")
-            calibration = leg.get("calibration_evidence") or {}
-            if calibration:
-                lines.append(f"Calibration evidence: holdout n={calibration.get('holdout')}; temperature={calibration.get('temperature')}.")
-            if ai_review.get("assessment"):
-                lines.append("Gemini evidence review: " + str(ai_review["assessment"])[:220])
-            if ai_review.get("risk_flags"):
-                lines.append("AI risk flags: " + "; ".join(ai_review["risk_flags"][:3]))
-            if not leg.get("ai_research_review"):
-                gaps.append("Gemini evidence review not completed for this fixture")
-            if gaps:
-                lines.append("Not verified: " + "; ".join(dict.fromkeys(gaps)) + ".")
-        if ai_research_stats.get("reason"):
-            lines.append("AI research status: " + str(ai_research_stats["reason"])[:220])
-        lines.append(f"Naive independent-leg probability product: {naive_probability:.2%}.")
-        lines.append(f"Dependence-adjusted model estimate: {combined_probability:.2%} (factor {float(build.get('correlation_adjustment_factor') or 1.0):.3f}).")
-        lines.append(str(build.get("correlation_note") or "Cross-fixture dependence is not fully measured; accumulator probability is experimental."))
-        lines.append("Model estimates are not guarantees; odds can change.")
+            lines.append("")
+            lines.append("No booking code available because the target was not reached.")
+
         markup = (
             InlineKeyboardMarkup([[
                 InlineKeyboardButton("Generate SportyBet code", callback_data="sb:confirm"),
@@ -2401,22 +2231,10 @@ async def autobuild_sportybet_command(update, context):
             if target_reached else None
         )
         await update.effective_message.reply_text("\n".join(lines), reply_markup=markup)
-    except asyncio.TimeoutError:
-        logger.error("SportyBet auto-builder timed out during fixture scan, research or price resolution.")
-        context.user_data.pop("pending_sportybet_booking", None)
-        await reply(
-            update,
-            "⏱️ The SportyBet search took too long because a fixture or odds feed did not respond in time. "
-            "No slip or booking code was created. Please try again shortly."
-        )
     except Exception as exc:
         logger.exception("SportyBet auto-builder failed")
         context.user_data.pop("pending_sportybet_booking", None)
-        await reply(
-            update,
-            "⚠️ I couldn't complete the SportyBet search because a data or price check failed. "
-            "No slip or booking code was created. Please try again shortly."
-        )
+        await reply(update, f"SportyBet scan failed: {type(exc).__name__}: {str(exc)[:180]}")
 
 
 async def accumulator_status_command(update, context):
