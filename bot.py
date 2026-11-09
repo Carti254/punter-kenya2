@@ -3266,7 +3266,7 @@ def build_pre_match_prediction(raw_fixture, fixture):
 
 
 
-def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None, model_variant="current"):
+def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None, model_variant="current", ensemble_simulations=20000):
     """Forecast from competition results strictly before as_of_date when supplied."""
     folder = str(raw_fixture.get("leagueShortcut") or "").strip()
     if not folder:
@@ -3414,7 +3414,8 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
     # Independent pre-match ensemble: Dixon-Coles low-score correction, Elo replay
     # and reproducible Monte Carlo. Historical rows are already cutoff-filtered above.
     advanced_ensemble = build_advanced_prediction_ensemble(
-        fixture["home_team"], fixture["away_team"], lambda_home, lambda_away, rows
+        fixture["home_team"], fixture["away_team"], lambda_home, lambda_away, rows,
+        simulations=ensemble_simulations,
     )
     home_win = advanced_ensemble["probabilities"]["1"]
     draw = advanced_ensemble["probabilities"]["X"]
@@ -5383,6 +5384,7 @@ def collect_walk_forward_forecasts(max_matches=2000):
                 {"home_team": home, "away_team": away},
                 historical_rows=rows,
                 as_of_date=match_date,
+                ensemble_simulations=1000,
             )
             candidate = build_openmatchday_prediction(
                 {"leagueShortcut": folder},
@@ -5390,6 +5392,7 @@ def collect_walk_forward_forecasts(max_matches=2000):
                 historical_rows=rows,
                 as_of_date=match_date,
                 model_variant="venue_weighted",
+                ensemble_simulations=1000,
             )
             if not prediction.get("available") or not candidate.get("available"):
                 continue
