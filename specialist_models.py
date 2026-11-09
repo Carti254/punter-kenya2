@@ -19,6 +19,7 @@ STAT_ALIASES = {
     "shots_on_target": ("shots on goal", "shots on target"),
     "yellow_cards": ("yellow cards",),
     "red_cards": ("red cards",),
+    "xg": ("expected goals", "expected_goals", "xg"),
 }
 
 
@@ -207,12 +208,23 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
             "model": "recent-form Poisson baseline",
         })
     available = [p for p in panels if p["available"]]
+    home_xg = [r["xg"] for r in home_rows if r.get("xg") is not None]
+    away_xg = [r["xg"] for r in away_rows if r.get("xg") is not None]
+    xg_evidence = None
+    if len(home_xg) >= 3 and len(away_xg) >= 3:
+        xg_evidence = {
+            "provider": "API-Football", "home_sample": len(home_xg), "away_sample": len(away_xg),
+            "home_xg_average": sum(home_xg) / len(home_xg),
+            "away_xg_average": sum(away_xg) / len(away_xg),
+            "source_statistic": "expected goals where returned by fixture statistics",
+        }
     return {
         "fixture": f"{home} vs {away}", "date": target.isoformat(),
         "fixture_id": fixture_id,
         "provider": "API-Football", "panels": panels,
         "lineup_evidence": lineup_evidence,
         "team_news_evidence": team_news_evidence,
+        "xg_evidence": xg_evidence,
         "provider_warnings": provider_warnings,
         "council": {
             "available_panels": len(available),
