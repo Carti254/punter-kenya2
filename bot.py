@@ -40,6 +40,7 @@ from premium_tracking import save_price_observations, capture_current_prices, cl
 from accumulator_engine import build_accumulator
 from autobuild_research import prepare_candidate_pool, candidate_research_summary
 from free_football_sources import fetch_provider_fixtures as fetch_free_provider_fixtures, provider_key_status
+from historical_data_sources import fetch_competition_history as fetch_supplementary_competition_history
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
@@ -3164,27 +3165,69 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
     """Fit and apply the single competition-specific Dixon-Coles model."""
     from dixon_coles_engine import fit_dixon_coles, predict_fixture
     folder = str(raw_fixture.get("leagueShortcut") or "").strip()
-    if not folder:
-        return {"available": False, "reason": "Competition reference is missing."}
     if historical_rows is not None:
         rows = list(historical_rows)
-    else:
+    elif folder and folder != "__sportybet_discovery__":
         try:
             rows = fetch_openmatchday_csv(folder, "results")
         except Exception as exc:
-            logger.warning("Could not load historical results for %s: %s", folder, exc)
-            return {"available": False, "reason": "Historical competition results could not be retrieved."}
-    # Fit once per competition and matchday; every fixture reuses the same parameter set.
+            logger.warning("Could not load Open-Matchday history for %s: %s", folder, exc)
+            rows = []
+    else:
+        rows = []
+
+    # First fit the fixture's own competition. If that source is missing or
+    # insufficient, retrieve a separately mapped Football-Data.co.uk history.
+    # The supplemental rows replace the primary rows; competitions are never mixed.
     cache = globals().setdefault("_DIXON_COLES_FIT_CACHE", {})
-    cache_key = (folder, str(as_of_date)[:10] if as_of_date is not None else "latest")
+    cutoff_key = str(as_of_date)[:10] if as_of_date is not None else "latest"
+    cache_key = (folder or "__unmapped__", cutoff_key, "open-matchday")
     fit = cache.get(cache_key)
     if fit is None:
         fit = fit_dixon_coles(rows, before_date=as_of_date, min_matches=50, min_team_matches=3)
         if len(cache) >= 200:
             cache.clear()
         cache[cache_key] = fit
+
+    history_source = "Open-Matchday"
     if not fit.get("available"):
-        return {"available": False, "reason": fit.get("reason"), "training_sample": fit.get("sample_size", 0)}
+        competition = (
+            raw_fixture.get("leagueName") or raw_fixture.get("competition")
+            or fixture.get("competition") or ""
+        )
+        country = raw_fixture.get("countryName") or raw_fixture.get("country") or fixture.get("country") or ""
+        try:
+            supplementary_rows, source_info = fetch_supplementary_competition_history(
+                competition, country, as_of_date=as_of_date, seasons=6
+            )
+        except Exception as exc:
+            logger.warning("Supplementary history source failed for %s (%s): %s",
+                           competition, country, exc)
+            supplementary_rows, source_info = [], {"reason": type(exc).__name__}
+        if supplementary_rows:
+            source_code = source_info.get("competition_code") or "unknown"
+            supplementary_key = (f"football-data:{source_code}", cutoff_key, "football-data")
+            supplementary_fit = cache.get(supplementary_key)
+            if supplementary_fit is None:
+                supplementary_fit = fit_dixon_coles(
+                    supplementary_rows, before_date=as_of_date,
+                    min_matches=50, min_team_matches=3
+                )
+                cache[supplementary_key] = supplementary_fit
+            if supplementary_fit.get("available"):
+                rows, fit = supplementary_rows, supplementary_fit
+                history_source = "Football-Data.co.uk"
+            else:
+                logger.info("Football-Data history for %s unavailable: %s",
+                            competition, supplementary_fit.get("reason"))
+        if not fit.get("available"):
+            return {
+                "available": False,
+                "reason": fit.get("reason") or "Competition history unavailable.",
+                "training_sample": fit.get("sample_size", 0),
+                "history_source": history_source,
+                "supplementary_history": source_info,
+            }
     forecast = predict_fixture(fit, fixture.get("home_team"), fixture.get("away_team"))
     if not forecast.get("available"):
         return forecast
@@ -3255,6 +3298,7 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
         "training_sample": fit["sample_size"], "training_teams": fit["team_count"],
         "rho": fit["rho"], "model_version": "dixon-coles-fitted-v1",
         "probability_source": "Fitted time-decayed Dixon-Coles",
+        "history_source": history_source,
         "monte_carlo": None, "elo_home_rating": None, "elo_away_rating": None,
     }
 
