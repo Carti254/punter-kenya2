@@ -271,7 +271,8 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         "value_label": "Positive model-estimated value" if ev > 0 else ("Break-even estimate; positive value not established" if abs(ev) < 1e-9 else "Negative model-estimated value; retained only as a clearly labelled fallback"),
         "research_checks": checks,
         "research_evidence": {
-            "model_confidence": row.get("model_confidence"),
+            "model_confidence": item.get("model_confidence"),
+            "reported_model_confidence": row.get("model_confidence"),
             "home_form": row.get("home_form"),
             "away_form": row.get("away_form"),
             "home_sample": home_n,
