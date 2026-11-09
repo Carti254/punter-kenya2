@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 
 
-def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, max_candidates=None, ranking="value", min_legs=1):
+def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, max_candidates=None, ranking="value", min_legs=2):
     target = float(target_odds)
     if not math.isfinite(target) or target <= 1:
         raise ValueError("Target odds must be finite and greater than 1.")
