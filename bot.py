@@ -2118,7 +2118,7 @@ async def autobuild_sportybet_command(update, context):
     leg_plan = "automatic leg count"
     try:
         # Keep all feed scanning, matching and model research internal. Telegram receives
-        # only the resulting fixture shortlist and the completed slip.
+        # only the completed slip or a concise no-bet result.
         # Bound each expensive stage so a slow upstream feed cannot leave the
         # Telegram handler waiting indefinitely. The worker thread may finish in
         # the background, but this request returns a controlled result to Telegram.
@@ -2202,12 +2202,10 @@ async def autobuild_sportybet_command(update, context):
             reason = build.get("reason") or "No permitted combination reached the requested odds range."
             await reply(
                 update,
-                f"🚫 NO QUALIFYING COMBINATION — {target:.2f} TARGET\\n\\n"
-                f"PUNTER found {len(rows)} eligible market selections across {available_fixtures} distinct fixtures, "
-                f"but could not build a combination between {target:.2f} and {target * 1.20:.2f}.\\n"
+                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\\n\\n"
+                f"PUNTER checked {available_fixtures} fixtures and {len(rows)} eligible selections internally.\\n"
                 f"{reason}\\n\\n"
-                "No lower-odds substitute was created and no booking code is available. "
-                "The fixture and market shortlist above shows what was available."
+                "No lower-odds substitute or booking code was created."
             )
             return
         if len(chosen) < min_legs or (max_legs is not None and len(chosen) > max_legs):
