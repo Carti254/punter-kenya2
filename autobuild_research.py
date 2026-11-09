@@ -33,6 +33,11 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         return None
     if not (math.isfinite(odds) and odds > 1 and math.isfinite(probability) and 0 < probability < 1):
         return None
+    # Every autobuild candidate must retain the exact SportyBet event identifier
+    # from the event/market match. A team-name-only or fuzzy catalogue row is
+    # not sufficient proof that the selected price belongs to this fixture.
+    if not (row.get("eventId") or row.get("event_id") or row.get("sportybet_event_id")):
+        return None
 
     # Check the underlying sample before its derived confidence label. This
     # makes rejection diagnostics identify missing/short team history instead
@@ -317,6 +322,8 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03, use_d
         return "missing_probability_or_price"
     if not (math.isfinite(odds) and odds > 1 and math.isfinite(probability) and 0 < probability < 1):
         return "invalid_probability_or_price"
+    if not (row.get("eventId") or row.get("event_id") or row.get("sportybet_event_id")):
+        return "missing_exact_sportybet_event_id"
     # Report missing/insufficient underlying samples before the confidence
     # label derived from those same samples, so diagnostics expose root causes.
     for key, minimum in (("home_sample", 5), ("away_sample", 5)):
