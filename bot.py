@@ -2067,6 +2067,13 @@ def enrich_with_specialist_models(rows):
             except Exception as exc:
                 logger.info("X research unavailable for %s vs %s: %s", home, away, exc)
 
+    try:
+        rows, price_history_stats = enrich_candidates_with_price_history(rows)
+        stats["price_history"] = price_history_stats
+    except Exception as history_error:
+        logger.info("Autobuild historical price enrichment unavailable: %s", history_error)
+        stats["price_history"] = {"reason": f"Price history unavailable: {type(history_error).__name__}"}
+
     gaps = []
     if not specialist.get("enabled"):
         gaps.append("API-Football specialist research not configured")
@@ -2145,6 +2152,16 @@ async def autobuild_sportybet_command(update, context):
         except Exception as enrichment_error:
             logger.warning("Autobuild specialist enrichment failed: %s", enrichment_error)
             specialist_stats = {"reason": f"Specialist enrichment unavailable: {type(enrichment_error).__name__}"}
+
+        # Apply temperature calibration only if the chronological holdout has
+        # enough settled forecasts and beats raw Brier score AND log loss.
+        calibration_stats = {"applied": False, "reason": "Walk-forward validation not run."}
+        try:
+            validation = await asyncio.to_thread(evaluate_historical_calibration)
+            rows, calibration_stats = apply_walk_forward_calibration(rows, validation)
+        except Exception as calibration_error:
+            logger.warning("Autobuild walk-forward calibration unavailable: %s", calibration_error)
+            calibration_stats = {"applied": False, "reason": f"Calibration unavailable: {type(calibration_error).__name__}"}
 
         # Same evidence/value gate as /accumulator: minimum recent and venue samples,
         # LOW confidence rejected, BTTS/Under 2.5/2UP excluded, and at least 3% EV.
@@ -2273,6 +2290,7 @@ async def autobuild_sportybet_command(update, context):
             "Probability is experimental and uncalibrated unless a verified walk-forward calibration is explicitly reported. "
             "The combined estimate assumes independent fixtures; same-competition dependence may be adjusted by the engine.",
             f"Specialist research: {specialist_stats.get('reason', 'No additional specialist evidence reported.')}",
+            f"Walk-forward calibration: {calibration_stats.get('reason', 'not available')}",
         ])
 
         markup = InlineKeyboardMarkup([[
