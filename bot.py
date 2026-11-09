@@ -3463,7 +3463,7 @@ def build_pre_match_prediction(raw_fixture, fixture):
         "elo_away_rating": elo_away_rating,
         "elo_matches_used": len(elo_rows),
         "monte_carlo": monte_carlo,
-        "model_version": "venue-weighted-poisson-elo-mc-v1",
+        "model_version": "dixon-coles-fitted-v1",
     }
 
 
@@ -3875,18 +3875,12 @@ async def value_command(update, context):
     await reply(update, "\n".join(lines))
 
 def _score_probability(prediction, condition):
-    """Probability of a score-grid condition using the existing Poisson goal model."""
-    lh = prediction.get("lambda_home")
-    la = prediction.get("lambda_away")
-    if lh is None or la is None:
+    """Resolve probabilities from the fitted Dixon-Coles score matrix only."""
+    matrix = prediction.get("score_matrix")
+    if not isinstance(matrix, list) or not matrix:
         return None
-    grid = []
-    for hg in range(11):
-        for ag in range(11):
-            p = poisson_probability(hg, lh) * poisson_probability(ag, la)
-            grid.append((hg, ag, p))
-    return sum(p for hg, ag, p in grid if condition(hg, ag))
-
+    return sum(matrix[h][g] for h in range(len(matrix))
+               for g in range(len(matrix[h])) if condition(h, g))
 
 def _normal_market_text(value):
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9.+\-:]", " ", str(value or "").casefold())).strip()
@@ -4283,7 +4277,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         "fair_odds": (1 / probability) if probability is not None else None,
                         "model_confidence": prediction.get("confidence"),
                         "model_version": prediction.get("model_version") or "venue-weighted-poisson-elo-mc-v1",
-                        "probability_source": "PUNTER venue-weighted Poisson scoreline model" if probability is not None else None,
+                        "probability_source": "Fitted time-decayed Dixon-Coles" if probability is not None else None,
                         "home_form": prediction.get("home_form"),
                         "away_form": prediction.get("away_form"),
                         "home_recent_matches": prediction.get("home_recent_matches") or [],
@@ -4304,10 +4298,9 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         "h2h_results": prediction.get("h2h_results", []),
                         "lambda_home": prediction.get("lambda_home"),
                         "lambda_away": prediction.get("lambda_away"),
-                        "elo_home_rating": prediction.get("elo_home_rating"),
-                        "elo_away_rating": prediction.get("elo_away_rating"),
-                        "elo_matches_used": prediction.get("elo_matches_used"),
-                        "monte_carlo": prediction.get("monte_carlo"),
+                        "rho": prediction.get("rho"),
+                        "training_sample": prediction.get("training_sample"),
+                        "training_teams": prediction.get("training_teams"),
                         "kickoff": game.get("kickoff_eat") or fixture.get("kickoffUtc"),
                         "url": game.get("url"),
                         "event_id": game.get("event_id"),
