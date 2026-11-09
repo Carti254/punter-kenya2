@@ -322,6 +322,8 @@ def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None, 
                 row["team_news_evidence"] = report["team_news_evidence"]
             if report.get("xg_evidence"):
                 row["xg_evidence"] = report["xg_evidence"]
+            if report.get("tactical_evidence"):
+                row["tactical_evidence"] = report["tactical_evidence"]
             if report.get("lineup_evidence") or report.get("team_news_evidence"):
                 providers = set(row.get("external_evidence_sources") or [])
                 providers.add("api-football")
