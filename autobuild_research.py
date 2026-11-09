@@ -449,7 +449,10 @@ def apply_walk_forward_calibration(rows: list[dict], validation: dict) -> tuple[
         adjusted = 0
         for row in output:
             market = str(row.get("market") or "").casefold()
+            source = str(row.get("probability_source") or "")
             if not any(token in market for token in ("1x2", "match result", "full time result", "fulltime result")):
+                continue
+            if not source.startswith(("PUNTER venue-weighted", "PUNTER statistical model")):
                 continue
             try:
                 if row.get("lambda_home") is None or row.get("lambda_away") is None:
