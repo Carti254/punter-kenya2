@@ -11,8 +11,8 @@ import math
 
 def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max_candidates=250, ranking="value", min_legs=2):
     target = float(target_odds)
-    if not math.isfinite(target) or target <= 1:
-        raise ValueError("Target odds must be finite and greater than 1.")
+    if not math.isfinite(target) or not 2.0 <= target <= 5.0:
+        raise ValueError("PUNTER KENYA accumulator targets must be between 2.00 and 5.00.")
     if not isinstance(max_legs, int) or not 1 <= max_legs <= 50:
         raise ValueError("max_legs must be an integer from 1 to 50.")
     if max_legs == 1 and min_legs == 2:
@@ -32,6 +32,21 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
         except (KeyError, TypeError, ValueError):
             continue
         if not (math.isfinite(odds) and odds > 1 and math.isfinite(probability) and 0 < probability < 1):
+            continue
+        # Accept only executable SportyBet candidates with exact identifiers.
+        if str(row.get("bookmaker") or "").strip().casefold().replace(" ", "") != "sportybet":
+            continue
+        if not (row.get("eventId") or row.get("event_id") or row.get("sportybet_event_id")):
+            continue
+        if not (row.get("marketId") or row.get("market_id")):
+            continue
+        if not (row.get("outcomeId") or row.get("outcome_id")):
+            continue
+        if row.get("fixture_match_verified") is not True:
+            continue
+        if row.get("model_version") != "dixon-coles-fitted-v1":
+            continue
+        if not str(row.get("probability_source") or "").startswith("Fitted time-decayed Dixon-Coles"):
             continue
         home, away = str(row.get("home") or "").strip(), str(row.get("away") or "").strip()
         if not home or not away:
