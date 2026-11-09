@@ -3179,23 +3179,35 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
     # First fit the fixture's own competition. If that source is missing or
     # insufficient, retrieve a separately mapped Football-Data.co.uk history.
     # The supplemental rows replace the primary rows; competitions are never mixed.
+    competition = (
+        raw_fixture.get("leagueName") or raw_fixture.get("competition")
+        or fixture.get("competition") or ""
+    )
+    country = raw_fixture.get("countryName") or raw_fixture.get("country") or fixture.get("country") or ""
+
     cache = globals().setdefault("_DIXON_COLES_FIT_CACHE", {})
     cutoff_key = str(as_of_date)[:10] if as_of_date is not None else "latest"
-    cache_key = (folder or "__unmapped__", cutoff_key, "open-matchday")
-    fit = cache.get(cache_key)
+    # SportyBet discovery fixtures share a pseudo-folder. Include competition
+    # identity so one fixture can never reuse another competition's fitted model.
+    cache_key = (
+        folder or "__unmapped__",
+        str(competition).casefold().strip(),
+        str(country).casefold().strip(),
+        cutoff_key,
+        "open-matchday",
+    )
+    # Explicit caller-supplied history may differ for the same competition;
+    # fit it without putting it into the shared process cache.
+    fit = None if historical_rows is not None else cache.get(cache_key)
     if fit is None:
         fit = fit_dixon_coles(rows, before_date=as_of_date, min_matches=50, min_team_matches=3)
-        if len(cache) >= 200:
-            cache.clear()
-        cache[cache_key] = fit
+        if historical_rows is None:
+            if len(cache) >= 200:
+                cache.clear()
+            cache[cache_key] = fit
 
     history_source = "Open-Matchday"
     if not fit.get("available"):
-        competition = (
-            raw_fixture.get("leagueName") or raw_fixture.get("competition")
-            or fixture.get("competition") or ""
-        )
-        country = raw_fixture.get("countryName") or raw_fixture.get("country") or fixture.get("country") or ""
         try:
             supplementary_rows, source_info = fetch_supplementary_competition_history(
                 competition, country, as_of_date=as_of_date, seasons=6
