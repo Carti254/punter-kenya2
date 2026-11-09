@@ -37,7 +37,7 @@ def _norm(value):
 
 def _get_fixtures():
     fixtures = []
-    for page in range(1, 11):
+    for page in range(1, 21):
         params = {
             "sportId": "sr:sport:1",
             "marketId": MARKET_IDS,
