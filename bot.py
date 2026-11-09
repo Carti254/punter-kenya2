@@ -3227,10 +3227,22 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
                 "training_sample": fit.get("sample_size", 0),
                 "history_source": history_source,
                 "supplementary_history": source_info,
+                "reason": (
+                    str(fit.get("reason") or "Competition history unavailable.")
+                    + " Supplementary source: "
+                    + str(source_info.get("reason") or (
+                        f"{source_info.get('source')} mapped to {source_info.get('competition_code')}; "
+                        f"{source_info.get('valid_results', 0)} prior results"
+                    ))
+                ),
             }
     forecast = predict_fixture(fit, fixture.get("home_team"), fixture.get("away_team"))
     if not forecast.get("available"):
-        return forecast
+        return {
+            **forecast,
+            "history_source": history_source,
+            "training_sample": fit.get("sample_size", 0),
+        }
     cutoff = as_of_date.date() if isinstance(as_of_date, datetime) else (
         datetime.strptime(str(as_of_date)[:10], "%Y-%m-%d").date() if as_of_date else date.today()
     )
