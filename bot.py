@@ -1256,6 +1256,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/build 2 — /build 3 — /build 5\n"
         "Allowed target combined odds: 2.00–5.00. PUNTER chooses the number of legs automatically.\n\n"
         "📊 TRACKING\n"
+        "/logbet HOME vs AWAY | MARKET | PICK | ODDS | STAKE — record a placed SportyBet bet\n"
         "/results — settled betting records\n"
         "/roi — recorded betting performance\n"
         "/history — previous saved slips\n"
@@ -5500,13 +5501,16 @@ async def betlog_command(update, context):
     raw = " ".join(context.args or [])
     parts = [part.strip() for part in raw.split("|")]
     if len(parts) not in (5, 6, 7):
-        await reply(update, "Usage: /betlog HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER | YYYY-MM-DD]\nExample: /betlog Arsenal vs Chelsea | 1X2 | Arsenal | 2.10 | 100 | SportyBet | 2026-11-08")
+        await reply(update, "Usage: /logbet HOME vs AWAY | MARKET | SELECTION | ODDS | STAKE [| BOOKMAKER | YYYY-MM-DD]\nExample: /betlog Arsenal vs Chelsea | 1X2 | Arsenal | 2.10 | 100 | SportyBet | 2026-11-08")
         return
     fixture = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", parts[0], maxsplit=1, flags=re.I)
     if len(fixture) != 2:
         await reply(update, "Enter the fixture as HOME vs AWAY.")
         return
     bookmaker = parts[5] if len(parts) >= 6 and parts[5] else "SportyBet"
+    if str(bookmaker).strip().casefold().replace(" ", "") != "sportybet":
+        await reply(update, "PUNTER KENYA records SportyBet bets only. Omit the bookmaker field or enter SportyBet.")
+        return
     try:
         if len(parts) == 7:
             match_date = datetime.strptime(parts[6], "%Y-%m-%d").date()
@@ -5914,6 +5918,7 @@ async def set_bot_commands(application):
     await application.bot.set_my_commands([
         BotCommand("start", "Open PUNTER KENYA"),
         BotCommand("build", "Build a SportyBet slip at 2.00–5.00 odds"),
+        BotCommand("logbet", "Record a placed SportyBet bet for ROI tracking"),
         BotCommand("results", "Refresh and view settled betting records"),
         BotCommand("roi", "View recorded betting ROI and profit/loss"),
         BotCommand("history", "View saved SportyBet slips"),
@@ -5976,6 +5981,7 @@ def main():
         ("start", start),
         ("help", help_command),
         ("build", build_sportybet_command),
+        ("logbet", betlog_command),
         ("results", betresults_command),
         ("roi", betstats_command),
         ("history", my_slips_command),
