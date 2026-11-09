@@ -2252,109 +2252,22 @@ async def autobuild_sportybet_command(update, context):
         else:
             context.user_data.pop("pending_sportybet_booking", None)
 
+        # Keep the Telegram response focused on the finished slip. All evidence,
+        # model checks and risk screening happen internally before this point.
         lines = [
             f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET",
-            f"Combined odds: {combined:.2f} — " + ("TARGET REACHED" if target_reached else "TARGET NOT REACHED"),
+            f"Combined odds: {combined:.2f}",
             f"Selections: {len(resolved)}",
             "",
         ]
         for i, leg in enumerate(resolved, 1):
             lines.append(
                 f"{i}. {leg['fixture']} — {leg['market']}: "
-                f"{leg['selection']} @ {leg['odds']:.2f}"
+                f"{leg['selection']} @ {float(leg['odds']):.2f}"
             )
-            lines.append(
-                f"   Model probability: {float(leg['probability']):.1%} "
-                f"| Source: {leg.get('probability_source') or 'PUNTER statistical model'}"
-            )
-            if leg.get("bsd_consensus_odds"):
-                lines.append(
-                    f"   BSD consensus reference: {float(leg['bsd_consensus_odds']):.2f} "
-                    f"| SportyBet price difference: {float(leg.get('price_vs_bsd_consensus') or 0):+.1%}"
-                )
-            if leg.get("external_model_disagreement") is not None:
-                lines.append(f"   Independent model probability gap: {float(leg['external_model_disagreement']):.1%}")
-            lineup = leg.get("lineup_evidence") or {}
-            if lineup.get("confirmed"):
-                lines.append("   Confirmed lineups: " + ", ".join(
-                    f"{side.get('team')} ({side.get('formation') or 'formation n/a'})"
-                    for side in lineup.get("sides", [])
-                ))
-            team_news = leg.get("team_news_evidence") or {}
-            absences = team_news.get("reported_absences") or []
-            if absences:
-                lines.append("   Reported absences: " + "; ".join(
-                    f"{item.get('player') or 'Player'} — {item.get('team') or 'Team'} "
-                    f"({item.get('type') or 'status n/a'}: {item.get('reason') or 'reason n/a'})"
-                    for item in absences[:4]
-                ))
-            specialist = leg.get("research_evidence", {}).get("specialist_evidence")
-            if specialist:
-                lines.append(
-                    f"   Specialist model: {specialist.get('market')} | "
-                    f"expected total {specialist.get('expected_total') if specialist.get('expected_total') is not None else 'n/a'} "
-                    f"| {specialist.get('model') or 'experimental'}"
-                )
-            evidence = leg.get("research_evidence") or {}
-            home_n, away_n = int(evidence.get("home_sample") or 0), int(evidence.get("away_sample") or 0)
-            if home_n and away_n:
-                lines.append(
-                    f"   Recent form: {evidence.get('home_form') or 'available'} / "
-                    f"{evidence.get('away_form') or 'available'} ({home_n}/{away_n} matches)"
-                )
-            confidence = str(leg.get("model_confidence") or "UNAVAILABLE").upper()
-            risk_flags = []
-            if confidence == "MODERATE":
-                risk_flags.append("moderate model confidence")
-            if home_n < 8 or away_n < 8:
-                risk_flags.append("limited recent-form sample")
-            if int(evidence.get("home_home_sample") or 0) < 3 or int(evidence.get("away_away_sample") or 0) < 3:
-                risk_flags.append("insufficient home/away split evidence")
-            if not leg.get("lineup_evidence"):
-                risk_flags.append("confirmed line-ups unavailable")
-            if not leg.get("team_news_evidence"):
-                risk_flags.append("injury/team-news evidence unavailable")
-            lines.append(
-                f"   Risk review ({confidence}): " +
-                ("; ".join(risk_flags) if risk_flags else "no listed evidence gaps; this is not a safety guarantee")
-            )
-            venue_n = int(evidence.get("home_home_sample") or 0) + int(evidence.get("away_away_sample") or 0)
-            if venue_n:
-                lines.append(
-                    f"   Venue evidence: home {int(evidence.get('home_home_sample') or 0)}; "
-                    f"away {int(evidence.get('away_away_sample') or 0)}"
-                )
-            if evidence.get("h2h_count"):
-                lines.append(f"   Head-to-head sample: {int(evidence.get('h2h_count'))} matches")
-            if evidence.get("expected_home_goals") is not None and evidence.get("expected_away_goals") is not None:
-                lines.append(
-                    f"   Model goal rates: {float(evidence['expected_home_goals']):.2f}–"
-                    f"{float(evidence['expected_away_goals']):.2f}"
-                )
-            alternative = leg.get("best_other_bookmaker")
-            if alternative:
-                lines.append(
-                    f"   Other-book price: {alternative['bookmaker']} @ {float(alternative['odds']):.2f} "
-                    f"(SportyBet {float(leg['odds']):.2f})"
-                )
-            specialist = leg.get("specialist_evidence")
-            if isinstance(specialist, dict):
-                lines.append(
-                    f"   Specialist model: {specialist.get('market') or 'market'} line "
-                    f"{specialist.get('line')} | expected total {specialist.get('expected_total')}"
-                )
-            social_leads = leg.get("x_research_evidence") or []
-            if social_leads:
-                lines.append(f"   X research: {len(social_leads)} public-post leads; unverified, not confirmed team news")
-
-        lines.extend([""])
-        if build.get("correlation_warnings"):
-            lines.append("Risk note: " + "; ".join(build["correlation_warnings"]))
-        lines.append("Probability estimates are experimental, not guaranteed; bookmaker prices and team information can change.")
-        if not target_reached:
-            lines.append("")
-            lines.append("No booking code available because the target was not reached.")
-
+        lines.append("")
+        lines.append("PUNTER completed its fixture, price, probability and risk checks internally.")
+        lines.append("Model estimates are not guarantees; odds can change.")
         markup = (
             InlineKeyboardMarkup([[
                 InlineKeyboardButton("Generate SportyBet code", callback_data="sb:confirm"),
