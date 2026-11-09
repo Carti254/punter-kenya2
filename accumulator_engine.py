@@ -48,7 +48,7 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
             "total goals", "over under", "goals over", "goals under",
             "total match", "goal line", "asian handicap", "handicap",
         ))
-        if push_market and __import__("re").search(r"(?<!\\d)\\d+\\.0+(?!\\d)|(?<!\\d)\\d+(?![\\d.])", market_text):
+        if push_market and __import__("re").search(r"(?<!\d)\d+\.0+(?!\d)|(?<!\d)\d+(?![\d.])", market_text):
             continue
         if "btts" in market_text or "both teams to score" in market_text:
             continue
