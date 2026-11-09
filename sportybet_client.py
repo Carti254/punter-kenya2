@@ -87,10 +87,12 @@ def _hydrate_event_markets(event):
         )
         response.raise_for_status()
         payload = response.json()
-    except requests.RequestException as exc:
+    except (requests.RequestException, ValueError) as exc:
+        # Use index markets only as a strict fallback. If the exact native market
+        # is absent there, the caller will reject the candidate rather than guess.
+        if isinstance(event.get("markets"), list) and event["markets"]:
+            return event
         raise SportyBetError(f"Could not refresh SportyBet event markets: {type(exc).__name__}.") from None
-    except ValueError:
-        raise SportyBetError("SportyBet returned unreadable event-market details.") from None
     if not isinstance(payload, dict) or payload.get("bizCode") not in (None, 10000):
         raise SportyBetError("SportyBet rejected the event-market detail request.")
     data = payload.get("data") or {}
