@@ -355,3 +355,70 @@ def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None, 
     return output, {"enabled": True, "fixtures_checked": checked, "matched_prices": matched,
                     "fixture_failures": failures, "fixtures_skipped_by_free_quota_cap": skipped_by_quota_cap,
                     "reason": "Exact-match specialist evidence applied where provider data and matching bookmaker lines were available. The free API-Football tier is quota-limited; specialist enrichment is capped per autobuild run."}
+
+
+def apply_walk_forward_calibration(rows: list[dict], validation: dict) -> tuple[list[dict], dict]:
+    """Apply temperature calibration only when an out-of-sample test beats raw scores.
+
+    Uses walk-forward holdout metrics generated from earlier training dates. If the
+    validation sample is too small or calibration fails to improve both Brier and
+    log loss, probabilities remain untouched and the reason is returned.
+    """
+    output = [dict(row) for row in (rows or [])]
+    if not validation or not validation.get("ready"):
+        return output, {"applied": False, "reason": "Insufficient walk-forward history; calibration not applied."}
+    try:
+        if not (float(validation["calibrated_brier"]) < float(validation["raw_brier"])
+                and float(validation["calibrated_logloss"]) < float(validation["raw_logloss"])):
+            return output, {"applied": False, "reason": "Temperature calibration did not improve both holdout metrics."}
+        temperature = float(validation["temperature"])
+        from prediction_validation import apply_temperature
+        from dixon_coles_engine import selected_outcome_probability
+        adjusted = 0
+        for row in output:
+            market = str(row.get("market") or "").casefold()
+            if not any(token in market for token in ("1x2", "match result", "full time result", "fulltime result")):
+                continue
+            try:
+                if row.get("lambda_home") is None or row.get("lambda_away") is None:
+                    continue
+                home, away = str(row.get("home") or ""), str(row.get("away") or "")
+                vector = [
+                    selected_outcome_probability(row["lambda_home"], row["lambda_away"], "1", home, away),
+                    selected_outcome_probability(row["lambda_home"], row["lambda_away"], "X", home, away),
+                    selected_outcome_probability(row["lambda_home"], row["lambda_away"], "2", home, away),
+                ]
+                vector = apply_temperature(vector, temperature)
+                selection = str(row.get("selection") or "").strip().casefold()
+                if selection in {"1", "home", "home win", home.casefold()}:
+                    probability = vector[0]
+                elif selection in {"x", "draw", "tie"}:
+                    probability = vector[1]
+                elif selection in {"2", "away", "away win", away.casefold()}:
+                    probability = vector[2]
+                else:
+                    continue
+                if not 0 < float(probability) < 1:
+                    continue
+                row["probability"] = float(probability)
+                row["probability_source"] = "Dixon-Coles + walk-forward temperature calibration"
+                row["calibration_evidence"] = {
+                    "source": validation.get("source"),
+                    "temperature": temperature,
+                    "train": validation.get("train"),
+                    "holdout": validation.get("holdout"),
+                    "raw_brier": validation.get("raw_brier"),
+                    "calibrated_brier": validation.get("calibrated_brier"),
+                    "raw_logloss": validation.get("raw_logloss"),
+                    "calibrated_logloss": validation.get("calibrated_logloss"),
+                    "applied": True,
+                }
+                adjusted += 1
+            except (KeyError, TypeError, ValueError, ArithmeticError):
+                continue
+        return output, {"applied": adjusted > 0, "adjusted_candidates": adjusted,
+                        "temperature": temperature,
+                        "reason": "Walk-forward temperature calibration applied to exact 1X2 selections." if adjusted else
+                                  "Validation passed, but no exact supported 1X2 candidates were available."}
+    except Exception as exc:
+        return output, {"applied": False, "reason": f"Calibration application failed: {type(exc).__name__}"}
