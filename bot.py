@@ -3671,7 +3671,15 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
     most_likely = max(grid, key=lambda item: item[0])
     probabilities = {"1": home_win, "X": draw, "2": away_win}
     top_outcome = max(probabilities, key=probabilities.get)
-    confidence = "LOW" if len(home_results) + len(away_results) < 14 else "MODERATE"
+    # The research gate already requires at least five verified matches
+    # for EACH team. Do not then label a valid 5+5 sample LOW merely because
+    # the combined total is below 14; that made the confidence gate stricter
+    # than the documented minimum and discarded otherwise assessable fixtures.
+    # Confidence reflects sample depth only, not certainty of the outcome.
+    combined_sample = len(home_results) + len(away_results)
+    confidence = "LOW" if min(len(home_results), len(away_results)) < 5 else (
+        "HIGH" if combined_sample >= 16 else "MODERATE"
+    )
 
     # Same-competition head-to-head sample, restricted to completed results
     # already available before this fixture's forecast cutoff.
