@@ -207,6 +207,11 @@ def review_fixture_evidence(fixtures: list[dict], max_fixtures: int = 12) -> dic
             "expected_value": row.get("ev"),
             "probability_source": row.get("probability_source"),
             "model_confidence": row.get("model_confidence"),
+            "elo_home_rating": evidence.get("elo_home_rating"),
+            "elo_away_rating": evidence.get("elo_away_rating"),
+            "elo_matches_used": evidence.get("elo_matches_used"),
+            "monte_carlo": evidence.get("monte_carlo"),
+            "monte_carlo_selected_probability": evidence.get("monte_carlo_selected_probability"),
             "recent_form": {
                 "home": evidence.get("home_form"), "away": evidence.get("away_form"),
                 "home_sample": evidence.get("home_sample"), "away_sample": evidence.get("away_sample"),
