@@ -45,8 +45,10 @@ class AutobuildResearchTests(unittest.TestCase):
         rows = [self.candidate(lambda_home=1.8, lambda_away=0.9)]
         validation = {
             "ready": True, "temperature": 1.2, "train": 100, "holdout": 40,
-            "raw_brier": 0.20, "calibrated_brier": 0.19,
-            "raw_logloss": 0.60, "calibrated_logloss": 0.59,
+            "raw_brier": 0.20, "raw_logloss": 0.60,
+            "candidate_brier": 0.18, "candidate_logloss": 0.58,
+            "candidate_calibrated_brier": 0.17, "candidate_calibrated_logloss": 0.56,
+            "baseline_brier": 0.22, "baseline_logloss": 0.65,
             "source": "unit test",
         }
         result, status = apply_walk_forward_calibration(rows, validation)
@@ -55,6 +57,20 @@ class AutobuildResearchTests(unittest.TestCase):
         audited = assess_candidate(result[0], use_dixon_coles=True)
         self.assertTrue(audited["probability_source"].startswith("Dixon-Coles + walk-forward"))
         self.assertTrue(audited["research_evidence"]["calibration_evidence"]["applied"])
+
+    def test_walk_forward_calibration_requires_both_candidate_metrics_to_improve(self):
+        rows = [self.candidate(lambda_home=1.8, lambda_away=0.9)]
+        validation = {
+            "ready": True, "temperature": 1.2, "train": 100, "holdout": 40,
+            "raw_brier": 0.20, "raw_logloss": 0.60,
+            "candidate_brier": 0.18, "candidate_logloss": 0.58,
+            "candidate_calibrated_brier": 0.17, "candidate_calibrated_logloss": 0.59,
+            "baseline_brier": 0.22, "baseline_logloss": 0.65,
+            "source": "unit test",
+        }
+        result, status = apply_walk_forward_calibration(rows, validation)
+        self.assertFalse(status["applied"])
+        self.assertEqual(result[0]["probability"], rows[0]["probability"])
 
     def test_dixon_coles_is_not_applied_to_default_production_candidates(self):
         row = assess_candidate(self.candidate(lambda_home=1.8, lambda_away=0.9))
