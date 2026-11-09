@@ -76,7 +76,11 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     is_1x2 = any(token in market_key for token in (
         "1x2", "match result", "full time result", "fulltime result"
     ))
-    if (use_dixon_coles and is_1x2 and row.get("lambda_home") is not None and row.get("lambda_away") is not None
+    is_punter_scoreline_probability = probability_source.startswith(
+        ("PUNTER venue-weighted", "PUNTER statistical model")
+    )
+    if (use_dixon_coles and is_1x2 and is_punter_scoreline_probability
+            and row.get("lambda_home") is not None and row.get("lambda_away") is not None
             and not probability_source.startswith("Dixon-Coles + walk-forward temperature calibration")):
         try:
             dc_probability = selected_outcome_probability(
