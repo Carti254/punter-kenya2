@@ -259,14 +259,52 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     return item
 
 
+def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03) -> str:
+    """Return the first auditable reason a raw market row fails the research gate."""
+    try:
+        odds = float(row.get("odds"))
+        probability = float(row.get("probability"))
+    except (TypeError, ValueError, OverflowError):
+        return "missing_probability_or_price"
+    if not (math.isfinite(odds) and odds > 1 and math.isfinite(probability) and 0 < probability < 1):
+        return "invalid_probability_or_price"
+    if str(row.get("model_confidence") or "").strip().upper() not in {"MODERATE", "HIGH"}:
+        return "low_or_missing_model_confidence"
+    try:
+        disagreement = float(row.get("external_model_disagreement"))
+    except (TypeError, ValueError, OverflowError):
+        disagreement = None
+    if disagreement is not None and (not math.isfinite(disagreement) or disagreement > 0.10):
+        return "external_model_disagreement_over_10pct"
+    for key, minimum in (("home_sample", 5), ("away_sample", 5),
+                         ("home_home_sample", 3), ("away_away_sample", 3)):
+        try:
+            if int(row.get(key)) < minimum:
+                return "insufficient_" + key
+        except (TypeError, ValueError, OverflowError):
+            return "missing_" + key
+    market_text = " ".join(str(row.get(k) or "") for k in ("market", "selection", "specifier")).casefold()
+    if "btts" in market_text or "both teams to score" in market_text:
+        return "excluded_btts"
+    if "under 2.5" in market_text or ("under" in market_text and "2.5" in str(row.get("specifier") or "")):
+        return "excluded_under_2_5"
+    if any(token in market_text for token in ("2up", "two up", "early payout", "two-goal lead")):
+        return "unsupported_2up_market"
+    if probability * odds - 1.0 < float(marginal_ev_floor):
+        return "estimated_ev_below_3pct_floor"
+    return "other_assessment_rejection"
+
+
 def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.03, use_dixon_coles: bool = False) -> tuple[list[dict], dict]:
     """Create a tiered candidate pool; A selections rank ahead of B fallbacks."""
     assessed = []
     rejected = 0
+    rejection_reasons = Counter()
     for row in rows or []:
         item = assess_candidate(row, marginal_ev_floor=marginal_ev_floor, use_dixon_coles=use_dixon_coles)
         if item is None:
             rejected += 1
+            rejection_reasons[candidate_rejection_bucket(row, marginal_ev_floor)] += 1
         else:
             assessed.append(item)
 
@@ -295,6 +333,7 @@ def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.03, us
         "tier_b": counts.get("B", 0),
         "tier_c": counts.get("C", 0),
         "rejected": rejected,
+        "rejection_reasons": dict(rejection_reasons.most_common()),
         "marginal_ev_floor": marginal_ev_floor,
         "research_scope": "Current fixture match, current bookmaker price, supported model probability and price-value calculation",
         "not_verified_by_this_scan": [
