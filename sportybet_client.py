@@ -217,7 +217,7 @@ def prepare_slip(lines):
 def prepare_slip_from_candidates(candidates):
     """Resolve scanner candidates by their exact bookmaker-native IDs, never fuzzy names."""
     if not candidates or len(candidates) > 50:
-        raise SportyBetError("A SportyBet slip must contain between 1 and 20 selections.")
+        raise SportyBetError("A SportyBet slip must contain between 1 and 50 selections.")
     fixtures = _get_fixtures()
     by_id = {str(event.get("eventId")): event for event in fixtures if event.get("eventId") is not None}
     resolved, seen = [], set()
