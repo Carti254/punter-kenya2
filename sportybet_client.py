@@ -50,7 +50,6 @@ def _get_fixtures():
             "pageNum": page,
             "option": "2",
             "todayGames": "false",
-            "timeline": 2880,
             "_t": int(time.time() * 1000),
         }
         try:
