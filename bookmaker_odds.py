@@ -147,7 +147,6 @@ def fetch_sportybet(day: date | None = None, max_pages=60):
                         # marketId=1 is a lightweight event index. option=2 is
                         # the complete fixture list; option=1 is highlights-only.
                         # Full markets are fetched from factsCenter/event below.
-                        "marketId": "1",
                         "pageSize": 100,
                         "pageNum": page,
                         "option": "2",
