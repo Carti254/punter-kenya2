@@ -4325,8 +4325,54 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             kickoff = game.get("kickoff_eat")
             if str(kickoff or "")[:10] == day.isoformat():
                 day_games.append(game)
+        # SportyBet is the price source and must also be a fixture-discovery
+        # source. The external open-matchday catalogue is incomplete for some
+        # dates/competitions; add its unmatched priced events rather than silently
+        # excluding them from research. Exact SportyBet names and kickoff are kept;
+        # evidence gates still decide whether any selection can qualify.
+        existing_pairs = {
+            (canonical_team_key(fixture.get("home_team")),
+             canonical_team_key(fixture.get("away_team")))
+            for _, fixture in day_fixtures
+        }
+        sportybet_added = 0
+        for game in day_games:
+            home = str(game.get("home") or "").strip()
+            away = str(game.get("away") or "").strip()
+            kickoff_text = str(game.get("kickoff_eat") or "").strip()
+            if not home or not away or not kickoff_text:
+                continue
+            pair = (canonical_team_key(home), canonical_team_key(away))
+            if pair in existing_pairs:
+                continue
+            try:
+                kickoff_local = datetime.fromisoformat(kickoff_text)
+                if kickoff_local.tzinfo is None:
+                    kickoff_local = kickoff_local.replace(tzinfo=EAT)
+                kickoff_utc = kickoff_local.astimezone(timezone.utc).replace(tzinfo=None)
+            except (TypeError, ValueError):
+                continue
+            competition = str(game.get("competition") or "SportyBet competition").strip()
+            raw_sportybet = {
+                "id": f"sportybet:{game.get('event_id') or pair[0] + ':' + pair[1]}",
+                "home": home, "away": away,
+                "kickoffUtc": kickoff_utc.isoformat(),
+                "matchStatus": "Scheduled",
+                "leagueName": competition, "countryName": "",
+                "leagueShortcut": "__sportybet_discovery__",
+            }
+            fixture_sportybet = {
+                "provider_match_id": raw_sportybet["id"],
+                "home_team": home, "away_team": away,
+                "kickoff_at": kickoff_utc,
+                "competition": competition, "country": "",
+            }
+            day_fixtures.append((raw_sportybet, fixture_sportybet))
+            existing_pairs.add(pair)
+            sportybet_added += 1
         diagnostics.append(
-            f"{day.isoformat()}: {len(day_fixtures)} fixtures; {len(day_games)} SportyBet events retrieved"
+            f"{day.isoformat()}: {len(day_fixtures)} research fixtures after adding "
+            f"{sportybet_added} unmatched SportyBet-native events; {len(day_games)} SportyBet events retrieved"
         )
         matched_events = 0
         unsupported = set()
