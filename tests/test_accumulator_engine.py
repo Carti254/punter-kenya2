@@ -81,6 +81,25 @@ class AccumulatorEngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_accumulator(self.candidates, 2.0, max_legs=3, min_legs=4)
 
+    def test_permanent_market_exclusions_are_enforced(self):
+        candidates = [
+            {"home": "A", "away": "B", "odds": 1.8, "probability": 0.8, "market": "Both Teams To Score", "selection": "Yes"},
+            {"home": "C", "away": "D", "odds": 1.8, "probability": 0.8, "market": "Total Goals", "selection": "Under 2.5"},
+            {"home": "E", "away": "F", "odds": 1.8, "probability": 0.8, "market": "Total Goals", "selection": "Over 1.5"},
+        ]
+        result = build_accumulator(candidates, 1.8)
+        self.assertEqual(len(result["selections"]), 1)
+        self.assertEqual(result["selections"][0]["selection"], "Over 1.5")
+
+    def test_same_teams_on_different_dates_are_distinct_fixtures(self):
+        candidates = [
+            {"home": "A", "away": "B", "day": "2026-11-09", "odds": 1.5, "probability": 0.8},
+            {"home": "A", "away": "B", "day": "2026-11-10", "odds": 1.5, "probability": 0.8},
+        ]
+        result = build_accumulator(candidates, 2.0)
+        self.assertTrue(result["target_reached"])
+        self.assertEqual(len(result["selections"]), 2)
+
     def test_ranking_is_validated(self):
         with self.assertRaises(ValueError):
             build_accumulator(self.candidates, 2.0, ranking="random")
