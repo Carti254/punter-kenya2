@@ -85,9 +85,14 @@ def _market(provider, market, selection, price, handicap=None):
 
 
 SPORTYBET_BASE = "https://www.sportybet.com/api/ke"
+SPORTYBET_SESSION = requests.Session()
+# The public SportyBet feed is polled page-by-page during slip construction.
+# Do not inherit the generic adapter's multi-retry policy: retries on every
+# slow page can exceed the Telegram scan deadline before any candidates exist.
+SPORTYBET_SESSION.mount("https://", HTTPAdapter(max_retries=Retry(total=0, connect=0, read=0, status=0)))
 
 
-def fetch_sportybet(day: date | None = None, max_pages=30):
+def fetch_sportybet(day: date | None = None, max_pages=8):
     """Fetch all active SportyBet Kenya football markets and outcomes from its public JSON feed."""
     if day is None:
         target_days = {datetime.now(EAT).date().isoformat()}
@@ -103,7 +108,7 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
     }
     games, seen = [], set()
     for page in range(1, max_pages + 1):
-        payload = _get(
+        response = SPORTYBET_SESSION.get(
             SPORTYBET_BASE + "/factsCenter/pcUpcomingEvents",
             params={
                 "sportId": "sr:sport:1",
@@ -117,8 +122,13 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
                 "timeline": 720,
                 "_t": int(time.time() * 1000),
             },
-            headers=headers, timeout=(8, 20),
+            headers=headers, timeout=(4, 8),
         )
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError:
+            raise ValueError("SportyBet returned unreadable JSON.") from None
         if not isinstance(payload, dict) or int(payload.get("bizCode", 0) or 0) != 10000:
             code = payload.get("bizCode") if isinstance(payload, dict) else "invalid"
             raise ValueError(f"SportyBet rejected the public feed (bizCode={code}).")
