@@ -128,6 +128,8 @@ def performance_summary(rows):
 def rollover_projection(bankroll, days, daily_target):
     bank = _number(bankroll, "Starting bankroll", 0)
     target = _number(daily_target, "Daily target odds", 1.0000001)
+    if not 2.0 <= target <= 5.0:
+        raise ValueError("Daily target odds must be between 2.00 and 5.00.")
     if not isinstance(days, int) or not 1 <= days <= 365:
         raise ValueError("Days must be an integer from 1 to 365.")
     # Mathematical compounding illustration only; not a betting recommendation.
