@@ -132,9 +132,12 @@ def _recent_team_observations(team_id, before_date, api_key, session, last=5):
             "half_time_goals": ht_total,
             "events_available": isinstance(event_rows, list),
             "first_goal_minute": first_goal_minute,
+            "goal_before_5": int(first_goal_minute is not None and first_goal_minute <= 5),
             "goal_before_10": int(first_goal_minute is not None and first_goal_minute <= 10),
-            "early_goal_for": int(first_goal_minute is not None and first_goal_minute <= 10 and first_goal_team == str(team_id)),
-            "early_goal_against": int(first_goal_minute is not None and first_goal_minute <= 10 and first_goal_team != str(team_id)),
+            "early_goal_for_5": int(first_goal_minute is not None and first_goal_minute <= 5 and first_goal_team == str(team_id)),
+            "early_goal_against_5": int(first_goal_minute is not None and first_goal_minute <= 5 and first_goal_team != str(team_id)),
+            "early_goal_for_10": int(first_goal_minute is not None and first_goal_minute <= 10 and first_goal_team == str(team_id)),
+            "early_goal_against_10": int(first_goal_minute is not None and first_goal_minute <= 10 and first_goal_team != str(team_id)),
         }
         for key, aliases in STAT_ALIASES.items():
             h, a = _value(home_stats, aliases), _value(away_stats, aliases)
@@ -349,9 +352,12 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
         return {
             "provider": "API-Football goal events",
             "sample": n,
+            "goal_before_5_rate": sum(row.get("goal_before_5", 0) for row in valid) / n,
             "goal_before_10_rate": sum(row.get("goal_before_10", 0) for row in valid) / n,
-            "team_scored_first_before_10_rate": sum(row.get("early_goal_for", 0) for row in valid) / n,
-            "team_conceded_first_before_10_rate": sum(row.get("early_goal_against", 0) for row in valid) / n,
+            "team_scored_first_before_5_rate": sum(row.get("early_goal_for_5", 0) for row in valid) / n,
+            "team_conceded_first_before_5_rate": sum(row.get("early_goal_against_5", 0) for row in valid) / n,
+            "team_scored_first_before_10_rate": sum(row.get("early_goal_for_10", 0) for row in valid) / n,
+            "team_conceded_first_before_10_rate": sum(row.get("early_goal_against_10", 0) for row in valid) / n,
             "warning": "First goal within 10 minutes, based on available event timelines; not a calibrated forecast.",
         }
 
