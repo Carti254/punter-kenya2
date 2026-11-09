@@ -78,12 +78,11 @@ def elo_1x2(home: str, away: str, history: list[dict], home_advantage: float = 5
     diff = ratings[str(home).casefold()] - ratings[str(away).casefold()] + home_advantage
     expected_home_score = 1.0 / (1.0 + 10.0 ** (-diff / 400.0))
     draw_rate = min(0.38, max(0.18, draw_count / match_count if match_count >= 20 else 0.26))
-    home_share = min(0.98, max(0.02, expected_home_score))
-    return _normalise({
-        "1": (1.0 - draw_rate) * home_share,
-        "X": draw_rate,
-        "2": (1.0 - draw_rate) * (1.0 - home_share),
-    })
+    # Elo expected score equals P(home win) + 0.5 * P(draw).
+    # Given the empirical draw-rate prior, solve for the win probabilities.
+    home_win = min(1.0 - draw_rate, max(0.0, expected_home_score - draw_rate / 2.0))
+    away_win = max(0.0, 1.0 - draw_rate - home_win)
+    return _normalise({"1": home_win, "X": draw_rate, "2": away_win})
 
 
 def monte_carlo_1x2(lambda_home: float, lambda_away: float, simulations: int = 20000,
