@@ -144,6 +144,7 @@ def fetch_sportybet(day: date | None = None, max_pages=60):
                     SPORTYBET_BASE + "/factsCenter/pcUpcomingEvents",
                     params={
                         "sportId": "sr:sport:1",
+                        "marketId": "1",
                         # marketId=1 is a lightweight event index. option=2 is
                         # the complete fixture list; option=1 is highlights-only.
                         # Full markets are fetched from factsCenter/event below.
