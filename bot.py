@@ -4356,6 +4356,17 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         for fixture_index, (raw, fixture, matches) in enumerate(matched_fixtures, 1):
             home_name, away_name = fixture["home_team"], fixture["away_team"]
             progress(f"{day.isoformat()}: fixture {fixture_index}/{len(day_fixtures)} — matching {home_name} vs {away_name}…")
+            # Fuzzy matches may discover candidates but must not supply betting prices.
+            exact_matches = [
+                game for game in matches
+                if _normal_market_text(game.get("home")) == _normal_market_text(home_name)
+                and _normal_market_text(game.get("away")) == _normal_market_text(away_name)
+                and bool(game.get("event_id"))
+            ]
+            if not exact_matches:
+                diagnostics.append(f"{day.isoformat()}: rejected unverified fixture match {home_name} vs {away_name}")
+                continue
+            matches = exact_matches
             matched_events += len(matches)
             folder = str(raw.get("leagueShortcut") or "").strip()
             local_history = historical_cache.get(folder, [])
@@ -4506,6 +4517,9 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         "kickoff": game.get("kickoff_eat") or fixture.get("kickoffUtc"),
                         "url": game.get("url"),
                         "event_id": game.get("event_id"),
+                        "sportybet_event_id": game.get("event_id"),
+                        "fixture_match_verified": True,
+                        "market_probability_verified": probability is not None,
                         "market_id": row.get("market_id"),
                         "outcome_id": row.get("outcome_id"),
                         "specifier": row.get("specifier") or row.get("handicap"),
