@@ -2329,7 +2329,7 @@ async def autobuild_sportybet_command(update, context):
             if leg.get("research_checks"):
                 lines.append("   Checks: " + "; ".join(leg["research_checks"][:5]))
             if leg.get("research_gaps"):
-                lines.append("   Evidence gaps: " + ", ".join(leg["research_gaps"][:8]))
+                lines.append("   Evidence gaps: " + ", ".join(leg["research_gaps"][:12]))
             if leg.get("lineup_evidence"):
                 lines.append("   Lineup evidence: available from specialist provider; verify it is confirmed before kickoff.")
             if leg.get("team_news_evidence"):
