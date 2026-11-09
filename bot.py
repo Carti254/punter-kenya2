@@ -3734,11 +3734,11 @@ def _market_probability_for_row(prediction, row):
     draw_p = prediction.get("draw")
     away_p = prediction.get("away_win")
     if any(x in market for x in ("double chance", "1x", "12", "x2")):
-        if selection in ("1x", "home or draw", "home/draw"):
+        if selection in ("1x", "home or draw", "home/draw", "home draw", "1 or x", "1 x"):
             return home_p + draw_p, None
-        if selection in ("12", "1 or 2", "home or away", "home/away"):
+        if selection in ("12", "1 or 2", "home or away", "home/away", "home away", "1 2"):
             return home_p + away_p, None
-        if selection in ("x2", "draw or away", "draw/away"):
+        if selection in ("x2", "draw or away", "draw/away", "draw away", "x or 2", "x 2"):
             return draw_p + away_p, None
     if any(x in market for x in ("draw no bet", "dnb")):
         if selection in ("1", "home", "home win"):
