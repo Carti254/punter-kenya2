@@ -304,7 +304,7 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03, use_d
         "total goals", "over under", "goals over", "goals under",
         "total match", "goal line", "asian handicap", "handicap",
     ))
-    if push_market and re.search(r"(?<!\\d)\\d+\\.0+(?!\\d)|(?<!\\d)\\d+(?![\\d.])", market_text):
+    if push_market and re.search(r"(?<!\d)\d+\.0+(?!\d)|(?<!\d)\d+(?![\d.])", market_text):
         return None
     if "btts" in market_text or "both teams to score" in market_text:
         return "excluded_btts"
