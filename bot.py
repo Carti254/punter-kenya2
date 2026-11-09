@@ -4,7 +4,7 @@ import logging
 import asyncio
 import csv
 import io
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import unicodedata
 import re
 import math
