@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from collections import defaultdict
 from datetime import date, datetime
 
 
 def _team_key(value):
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+    raw = unicodedata.normalize("NFKD", str(value or "").casefold())
+    raw = "".join(ch for ch in raw if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]+", "", raw)
 
 
 def _match_date(value):
