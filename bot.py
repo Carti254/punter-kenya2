@@ -210,8 +210,17 @@ _RETRY = Retry(
     respect_retry_after_header=True,
 )
 
-HTTP.mount("https://", HTTPAdapter(max_retries=_RETRY))
-HTTP.mount("http://", HTTPAdapter(max_retries=_RETRY))
+# Fixture discovery can run up to 32 concurrent league downloads. Keep the
+# urllib3 connection pools large enough to reuse those connections instead of
+# discarding them when the default 10-connection pool is saturated.
+_HTTP_ADAPTER = HTTPAdapter(
+    pool_connections=40,
+    pool_maxsize=40,
+    pool_block=True,
+    max_retries=_RETRY,
+)
+HTTP.mount("https://", _HTTP_ADAPTER)
+HTTP.mount("http://", _HTTP_ADAPTER)
 
 
 # ============================================================
