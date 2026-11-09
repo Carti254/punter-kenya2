@@ -2082,305 +2082,208 @@ def enrich_with_specialist_models(rows):
 
 
 async def autobuild_sportybet_command(update, context):
-    """Build only from fully screened, model-supported SportyBet selections."""
     message_text = str(getattr(update.effective_message, "text", "") or "").strip()
     message_parts = message_text.split(maxsplit=1)
     raw_tail = message_parts[1].strip() if message_text.startswith("/") and len(message_parts) > 1 else ""
     args = raw_tail.split() if raw_tail else list(context.args or [])
     guided = context.user_data.pop("autobuild_config", None)
-
+    if guided:
+        args = []
     if not guided and not args:
         context.user_data["slip_flow"] = "autobuild_target"
-        await reply(update, "🎟️ BUILD YOUR SPORTYBET SLIP\n\nEnter only your target combined odds.\nExample: 2, 5, 10, 20 or 50.\nPUNTER will choose the number of legs automatically.\n/cancel to stop.")
+        await reply(update, "🎟️ BUILD YOUR SPORTYBET SLIP\n\nWhat target combined odds do you want?\nExample: 2, 5, 10, 20 or 50.\n/cancel to stop.")
         return
-
-    if guided:
-        try:
-            target = float(guided["target"])
-        except (KeyError, TypeError, ValueError, OverflowError):
-            await reply(update, "Invalid saved target. Please enter your target combined odds again.")
+    target = float(guided["target"]) if guided else 2.0
+    if not guided and args and re.fullmatch(r"\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
+        target = float(re.sub(r"odds$", "", str(args.pop(0)), flags=re.I))
+        if not math.isfinite(target) or target <= 1.0:
+            await reply(update, "Target odds must be greater than 1.00.")
             return
-    else:
-        if len(args) != 1 or not re.fullmatch(r"\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
-            await reply(update, "Enter only your target combined odds, for example: /build 2 or /build 50. PUNTER chooses the legs and markets automatically.")
-            return
-        target = float(re.sub(r"odds$", "", str(args[0]), flags=re.I))
 
-    if not math.isfinite(target) or not 1.0 < target <= 1000.0:
-        await reply(update, "Target odds must be greater than 1.00 and no higher than 1,000.")
-        return
-
-    # The historical target-only workflow is retained: minimum five legs for
-    # large targets, at least two for smaller targets, with an automatic cap.
     min_legs = 5 if target >= 10 else 2
     max_legs = 20
+    if target > 1000:
+        await reply(update, "Target odds cannot exceed 1,000.")
+        return
+
+    # Value-led by default. The explicit user exclusions are enforced again
+    # inside prepare_candidate_pool and accumulator_engine.
+    rank_mode = "value"
+    market_parts = []
+    for token in args:
+        lowered = token.casefold()
+        if lowered.startswith("rank="):
+            rank_mode = lowered.split("=", 1)[1]
+        elif lowered.startswith("market="):
+            market_parts.append(token.split("=", 1)[1])
+        elif lowered.startswith(("legs=", "minlegs=", "maxlegs=")):
+            await reply(update, "Leg-count controls have been removed. Enter only your target combined odds; PUNTER chooses the number of legs automatically.")
+            return
+        elif lowered in ("value", "odds", "probability", "parlay"):
+            rank_mode = lowered
+        else:
+            market_parts.append(token)
+    if rank_mode not in ("value", "odds", "probability", "parlay"):
+        await reply(update, "Ranking must be value, odds, probability or parlay.")
+        return
+
+    market_filter = ",".join(market_parts) if market_parts else "all"
     await reply(
         update,
-        f"🤖 PUNTER DEEP SPORTYBET SCAN — TARGET {target:.2f}\n"
-        f"Analysing recent form, venue splits, goals, head-to-head, Elo and scoreline probabilities; "
-        f"checking market value and available team news. Building {min_legs}–{max_legs} distinct fixtures automatically…"
+        f"🤖 PUNTER RESEARCH SCAN — TARGET {target:.2f}\n"
+        f"Automatically choosing 2–{max_legs} different matches; checking form, venue splits, "
+        "goals, H2H, Elo, model probability, specialist evidence and live SportyBet prices…"
     )
-
     try:
         rows, diagnostics = await asyncio.to_thread(
-            scan_value_candidates, ("today", "tomorrow"), "all", "SportyBet"
+            scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
+        )
+        scanned_count = len(rows)
+        specialist_stats = {"reason": "Specialist enrichment was not run."}
+        try:
+            rows, specialist_stats = await asyncio.to_thread(enrich_with_specialist_models, rows)
+        except Exception as enrichment_error:
+            logger.warning("Autobuild specialist enrichment failed: %s", enrichment_error)
+            specialist_stats = {"reason": f"Specialist enrichment unavailable: {type(enrichment_error).__name__}"}
+
+        # Same evidence/value gate as /accumulator: minimum recent and venue samples,
+        # LOW confidence rejected, BTTS/Under 2.5/2UP excluded, and at least 3% EV.
+        rows, research_stats = await asyncio.to_thread(
+            prepare_candidate_pool, rows, marginal_ev_floor=0.03, use_dixon_coles=True
         )
         if not rows:
             context.user_data.pop("pending_sportybet_booking", None)
+            note = "; ".join(str(x) for x in diagnostics[:4])
             await reply(
                 update,
-                "🚫 NO QUALIFIED SLIP\n\nNo matched SportyBet markets with usable PUNTER evidence were found.\n"
-                + ("Scan notes: " + "; ".join(diagnostics[:5]) if diagnostics else "")
+                "🚫 NO QUALIFYING SPORTYBET SLIP\n"
+                f"Target: {target:.2f}\nMarkets scanned: {scanned_count}\n"
+                f"Research/value-qualified selections: 0\n"
+                f"Rejected by research/value screen: {research_stats.get('rejected', 0)}\n"
+                "PUNTER will not pad the slip with weak, unmodelled or negative-value selections.\n"
+                f"Specialist research: {specialist_stats.get('reason', 'not available')}\n"
+                + (f"Feed notes: {note}" if note else "")
             )
             return
 
-        # Attach timestamped odds movement and exact cross-bookmaker comparisons
-        # from PUNTER's existing snapshots. Missing DB/history is reported, not guessed.
-        try:
-            snapshot_rows, price_history_stats = await asyncio.to_thread(
-                enrich_candidates_with_price_history, rows[:100]
-            )
-            rows = snapshot_rows + rows[100:]
-        except Exception as price_error:
-            price_history_stats = {
-                "reason": f"Stored odds history unavailable: {type(price_error).__name__}: {str(price_error)[:120]}"
-            }
-
-        # API-Football specialist evidence is optional and quota-limited. When
-        # configured, it enriches exact fixture/market matches; missing reports
-        # remain visible as research gaps and are never fabricated.
-        try:
-            rows, specialist_stats = await asyncio.to_thread(
-                enrich_specialist_candidates, rows, max_fixtures=10
-            )
-        except Exception as specialist_error:
-            specialist_stats = {
-                "enabled": False,
-                "reason": f"Specialist evidence unavailable: {type(specialist_error).__name__}: {str(specialist_error)[:120]}",
-            }
-
-        # This was the research gate the old builder bypassed. It now runs
-        # before any accumulator search: positive model-estimated value,
-        # minimum recent-form samples, venue samples, and permanent exclusions.
-        rows, research_stats = prepare_candidate_pool(
-            rows, marginal_ev_floor=0.03, use_dixon_coles=True
-        )
-
-        if not rows:
-            context.user_data.pop("pending_sportybet_booking", None)
-            notes = "; ".join(diagnostics[:4]) if diagnostics else "No additional feed diagnostics."
-            await reply(
-                update,
-                "🚫 NO QUALIFIED SLIP — RESEARCH GATE REJECTED THE CANDIDATES\n\n"
-                "PUNTER found no selection that passed the minimum evidence and value requirements.\n"
-                f"Markets scanned: {research_stats.get('scanned', 0)} | "
-                f"Rejected: {research_stats.get('rejected', 0)} | "
-                f"Qualified: {research_stats.get('eligible', 0)}\n"
-                "Required: at least five recent matches per team, at least three relevant home/away venue matches, "
-                "a supported market-specific probability, and at least 3% model-estimated expected value.\n"
-                "No lower-odds substitute or booking code was generated.\n\n"
-                f"Specialist data: {specialist_stats.get('reason', 'Not available')}\n"
-                f"Feed notes: {notes}"
-            )
-            return
-
-        # Odds are not the ranking objective. The engine prioritises estimated
-        # value while considering the model probability and distinct fixtures.
         build = build_accumulator(
-            rows,
-            target,
-            max_legs=max_legs,
-            min_legs=min_legs,
-            ranking="value",
+            rows, target, min_legs=min_legs, max_legs=max_legs,
+            ranking=("odds" if rank_mode in ("parlay", "odds") else rank_mode),
             max_candidates=250,
         )
-        chosen = build.get("selections") or []
-        if not build.get("target_reached") or not chosen:
+        chosen = build["selections"]
+        if not chosen or not build.get("target_reached"):
             context.user_data.pop("pending_sportybet_booking", None)
+            fixture_count = len({(x.get("day"), x.get("home"), x.get("away")) for x in rows})
             await reply(
                 update,
-                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET NOT REACHED\n\n"
-                "PUNTER will not lower your target, invent a leg, or return a partial accumulator.\n"
-                f"Research-qualified selections: {len(rows)} across "
-                f"{len({(str(x.get('day') or '')[:10], str(x.get('home') or '').casefold(), str(x.get('away') or '').casefold()) for x in rows})} distinct fixtures.\n"
-                f"Research screen: {research_stats.get('tier_a', 0)} positive-value candidates; "
-                f"{research_stats.get('rejected', 0)} rejected.\n"
-                f"Reason: {build.get('reason') or 'No combination satisfied the target and leg constraints.'}\n"
-                "No booking code was created."
+                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\n"
+                f"Research-qualified selections: {len(rows)} across {fixture_count} fixtures.\n"
+                "No combination reached the target within the permitted 20% range. "
+                "No lower-odds substitute or booking code was created."
             )
             return
 
-        # Resolve every selected leg against current SportyBet native IDs and
-        # current odds. Any missing or changed leg invalidates the whole preview.
         resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
         if len(resolved) != len(chosen):
-            raise SportyBetError(
-                f"SportyBet resolved {len(resolved)} of {len(chosen)} selected legs. "
-                "The entire preview has been rejected; no partial slip is allowed."
-            )
-
-        fixture_keys = set()
-        for model_leg in chosen:
-            fixture_keys.add((
-                str(model_leg.get("day") or model_leg.get("match_date") or "")[:10],
-                str(model_leg.get("home") or "").casefold(),
-                str(model_leg.get("away") or "").casefold(),
-            ))
-        if len(fixture_keys) != len(chosen) or len(chosen) < 2:
-            raise SportyBetError("Accumulator contains duplicate fixtures or fewer than two distinct matches.")
-
-        # The resolver verifies odds have not changed. Recalculate the final
-        # combined price from those exact live prices before allowing booking.
-        for live_leg, model_leg in zip(resolved, chosen):
-            live_leg["probability"] = float(model_leg["probability"])
-            live_leg["ev"] = float(model_leg["ev"])
-            live_leg["probability_source"] = model_leg.get("probability_source") or "PUNTER statistical model"
-            for key in (
-                "home", "away", "league", "day", "kickoff",
-                "fair_odds", "implied_probability", "edge", "value_tier", "value_label",
-                "model_confidence", "model_version", "home_form", "away_form",
-                "home_sample", "away_sample", "home_scored_avg", "home_conceded_avg",
-                "away_scored_avg", "away_conceded_avg", "home_home_sample",
-                "away_away_sample", "home_home_gf", "home_home_ga",
-                "away_away_gf", "away_away_ga", "h2h_count", "h2h_results",
-                "lambda_home", "lambda_away", "elo_home_rating", "elo_away_rating",
-                "elo_matches_used", "monte_carlo", "research_evidence",
-                "research_checks", "research_gaps", "specialist_evidence",
-                "calibration_evidence",
-            ):
-                live_leg[key] = model_leg.get(key)
-
-        combined = math.prod(float(x["odds"]) for x in resolved)
-        target_reached = target <= combined <= target * 1.20
-        if not target_reached:
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(
                 update,
-                f"🚫 NO QUALIFYING SLIP — LIVE ODDS CHANGED THE COMBINED PRICE TO {combined:.2f}.\n"
-                f"Your target is {target:.2f}. PUNTER rejected the preview; no partial slip or booking code was created."
+                f"🚫 SLIP VALIDATION FAILED\nPUNTER selected {len(chosen)} legs but SportyBet "
+                f"confirmed only {len(resolved)}. No partial slip or booking code was created."
             )
             return
 
-        combined_probability = float(build.get("combined_probability") or 0.0)
-        naive_probability = float(build.get("naive_independent_probability") or combined_probability)
-        correlation_factor = float(build.get("correlation_adjustment_factor") or 1.0)
+        protected_keys = {
+            "eventId", "marketId", "specifier", "outcomeId",
+            "fixture", "market", "selection", "odds", "startTime",
+        }
+        for live_leg, model_leg in zip(resolved, chosen):
+            live_leg.update({key: value for key, value in model_leg.items() if key not in protected_keys})
+
+        combined = math.prod(float(x["odds"]) for x in resolved)
+        if not (target <= combined <= target * 1.20):
+            context.user_data.pop("pending_sportybet_booking", None)
+            await reply(
+                update,
+                f"🚫 LIVE PRICE VALIDATION FAILED\nThe revalidated combined odds are {combined:.2f}, "
+                f"outside the permitted range for {target:.2f}. Rebuild the slip; no partial substitute."
+            )
+            return
+
+        combined_probability = float(
+            build.get("combined_probability") or
+            math.prod(float(x["probability"]) for x in resolved)
+        )
         context.user_data["pending_sportybet_booking"] = resolved
 
         lines = [
             f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET",
             f"Combined odds: {combined:.2f} — TARGET REACHED",
             f"Selections: {len(resolved)}",
-            f"Research-qualified candidates: {len(rows)} | Value screen: minimum +3% estimated EV",
+            f"Research screen: {research_stats.get('eligible', 0)} eligible; "
+            f"{research_stats.get('rejected', 0)} rejected; "
+            f"{research_stats.get('tier_a', 0)} Tier A positive-value candidates",
             "",
         ]
-
         for i, leg in enumerate(resolved, 1):
-            evidence = leg.get("research_evidence") or {}
+            lines.append(f"{i}. {leg['fixture']} — {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}")
             lines.append(
-                f"{i}. {leg['fixture']} — {leg['market']}: "
-                f"{leg['selection']} @ {leg['odds']:.2f}"
+                f"   PUNTER model estimate: {leg['probability']:.1%} | "
+                f"Fair odds: {leg.get('fair_odds', 1 / leg['probability']):.2f} | "
+                f"Estimated EV: {leg.get('ev', 0):+.1%}"
             )
             lines.append(
-                f"   PUNTER model estimate: {leg['probability']:.1%} "
-                f"({leg.get('probability_source') or 'source not specified'})"
+                f"   Recent form (oldest→newest): {leg.get('home_form') or 'N/A'} / "
+                f"{leg.get('away_form') or 'N/A'} "
+                f"(samples {leg.get('home_sample') or 0}/{leg.get('away_sample') or 0})"
             )
             lines.append(
-                f"   Value: fair odds {float(leg.get('fair_odds') or 0):.2f} | "
-                f"implied {float(leg.get('implied_probability') or 0):.1%} | "
-                f"estimated EV {leg['ev']:+.1%} | Tier {leg.get('value_tier') or '—'}"
+                f"   Goals per match — home GF/GA: {leg.get('home_scored_avg') or 0:.2f}/"
+                f"{leg.get('home_conceded_avg') or 0:.2f}; away GF/GA: "
+                f"{leg.get('away_scored_avg') or 0:.2f}/{leg.get('away_conceded_avg') or 0:.2f}"
             )
-
-            home_form = evidence.get("home_form") or leg.get("home_form") or "unavailable"
-            away_form = evidence.get("away_form") or leg.get("away_form") or "unavailable"
-            home_n = evidence.get("home_sample") or leg.get("home_sample") or 0
-            away_n = evidence.get("away_sample") or leg.get("away_sample") or 0
             lines.append(
-                f"   Recent form (last {home_n}/{away_n}): "
-                f"{leg.get('home', 'Home')} {home_form} | {leg.get('away', 'Away')} {away_form}"
+                f"   Venue samples — home at home: {leg.get('home_home_sample') or 0}; "
+                f"away away: {leg.get('away_away_sample') or 0}"
             )
-
-            hgf = evidence.get("home_scored_avg")
-            hga = evidence.get("home_conceded_avg")
-            agf = evidence.get("away_scored_avg")
-            aga = evidence.get("away_conceded_avg")
-            if None not in (hgf, hga, agf, aga):
-                lines.append(
-                    f"   Goals per match: home team GF/GA {float(hgf):.2f}/{float(hga):.2f}; "
-                    f"away team GF/GA {float(agf):.2f}/{float(aga):.2f}"
-                )
-
-            venue_n_home = evidence.get("home_home_sample") or 0
-            venue_n_away = evidence.get("away_away_sample") or 0
-            vhgf, vhga = evidence.get("home_home_gf"), evidence.get("home_home_ga")
-            vagf, vaga = evidence.get("away_away_gf"), evidence.get("away_away_ga")
-            if None not in (vhgf, vhga, vagf, vaga):
-                lines.append(
-                    f"   Venue splits ({venue_n_home}/{venue_n_away}): "
-                    f"home GF/GA {float(vhgf):.2f}/{float(vhga):.2f}; "
-                    f"away GF/GA {float(vagf):.2f}/{float(vaga):.2f}"
-                )
-
-            lines.append(f"   Head-to-head: {int(evidence.get('h2h_count') or 0)} same-competition meetings found")
-            lh, la = evidence.get("expected_home_goals"), evidence.get("expected_away_goals")
-            if lh is not None and la is not None:
-                lines.append(f"   Expected goals: {float(lh):.2f} – {float(la):.2f}")
-            elo_h, elo_a = evidence.get("elo_home_rating"), evidence.get("elo_away_rating")
-            if elo_h is not None and elo_a is not None:
-                lines.append(f"   Competition Elo: {float(elo_h):.0f} – {float(elo_a):.0f}")
-            mc = evidence.get("monte_carlo")
-            if mc:
-                lines.append("   Cross-check: 10,000-run scoreline simulation (same expected-goal inputs; not independent evidence)")
-
-            gaps = leg.get("research_gaps") or []
-            if gaps:
-                lines.append("   Evidence not verified: " + ", ".join(gaps[:5]))
-            if leg.get("calibration_evidence"):
-                lines.append("   Calibration: walk-forward evidence available")
-            else:
-                lines.append("   Calibration: not yet validated on a walk-forward holdout")
-            lines.append("")
-
+            lines.append(
+                f"   H2H: {leg.get('h2h_count') or 0} same-competition meetings; "
+                f"Elo: {leg.get('elo_home_rating') if leg.get('elo_home_rating') is not None else 'N/A'} / "
+                f"{leg.get('elo_away_rating') if leg.get('elo_away_rating') is not None else 'N/A'}"
+            )
+            if leg.get("research_checks"):
+                lines.append("   Checks: " + "; ".join(leg["research_checks"][:5]))
+            if leg.get("research_gaps"):
+                lines.append("   Evidence gaps: " + ", ".join(leg["research_gaps"][:8]))
+            if leg.get("lineup_evidence"):
+                lines.append("   Lineup evidence: available from specialist provider; verify it is confirmed before kickoff.")
+            if leg.get("team_news_evidence"):
+                lines.append("   Injury/suspension evidence: available from specialist provider.")
+            if leg.get("x_research_evidence"):
+                lines.append("   Public social leads: available but unverified; not treated as confirmed team news.")
+            if leg.get("best_other_bookmaker"):
+                best = leg["best_other_bookmaker"]
+                lines.append(f"   Other bookmaker comparison: {best.get('bookmaker')} @ {best.get('odds'):.2f}")
+            if leg.get("specialist_evidence"):
+                lines.append("   Specialist market evidence: " + str(leg["specialist_evidence"].get("model") or "available"))
         lines.extend([
-            f"Estimated accumulator probability: {combined_probability:.2%}",
-            f"Unadjusted independent product: {naive_probability:.2%}",
+            "",
+            f"Estimated accumulator hit probability: {combined_probability:.2%}",
+            "Probability is experimental and uncalibrated unless a verified walk-forward calibration is explicitly reported. "
+            "The combined estimate assumes independent fixtures; same-competition dependence may be adjusted by the engine.",
+            f"Specialist research: {specialist_stats.get('reason', 'No additional specialist evidence reported.')}",
         ])
-        if correlation_factor < 1.0:
-            lines.append(
-                "A conservative 3% same-competition/same-day dependence haircut was applied. "
-                "This is a disclosed heuristic, not an empirically measured correlation."
-            )
-        lines.append(
-            "Probabilities are experimental estimates, not guarantees. "
-            "PUNTER only creates a booking preview when every selected leg resolves and the exact target is reached."
-        )
 
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("Generate SportyBet code", callback_data="sb:confirm"),
             InlineKeyboardButton("Cancel", callback_data="sb:cancel"),
         ]])
-
-        # Keep Telegram messages below its message-size limit without dropping
-        # analysis details. Attach booking controls only to the final part.
-        chunks, current = [], ""
-        for line in lines:
-            addition = line + "\n"
-            if current and len(current) + len(addition) > 3500:
-                chunks.append(current.rstrip())
-                current = ""
-            current += addition
-        if current.strip():
-            chunks.append(current.rstrip())
-        for index, chunk in enumerate(chunks):
-            await update.effective_message.reply_text(
-                chunk,
-                reply_markup=markup if index == len(chunks) - 1 else None,
-            )
-
+        await update.effective_message.reply_text("\n".join(lines), reply_markup=markup)
     except Exception as exc:
         logger.exception("SportyBet auto-builder failed")
         context.user_data.pop("pending_sportybet_booking", None)
         await reply(update, f"SportyBet scan failed: {type(exc).__name__}: {str(exc)[:180]}")
-
 
 async def accumulator_status_command(update, context):
     """Build a cautious combination only from scanner-qualified selections."""
@@ -3557,7 +3460,10 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
     h2h_results = h2h_results[:5]
     home_venue_results = [match for match in home_results if match["venue"] == "H"]
     away_venue_results = [match for match in away_results if match["venue"] == "A"]
+    home_home_gf, home_home_ga = averages(home_venue_results) if home_venue_results else (None, None)
+    away_away_gf, away_away_ga = averages(away_venue_results) if away_venue_results else (None, None)
 
+    # Return observed evidence fields required by the accumulator research gate.
     return {
         "available": True,
         "home_results": len(home_results),
@@ -3570,6 +3476,22 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
         "away_form": "".join(match["result"] for match in reversed(away_results)),
         "home_recent_matches": home_results,
         "away_recent_matches": away_results,
+        "home_home_sample": len(home_venue_results),
+        "away_away_sample": len(away_venue_results),
+        "home_home_gf": home_home_gf,
+        "home_home_ga": home_home_ga,
+        "away_away_gf": away_away_gf,
+        "away_away_ga": away_away_ga,
+        "h2h_count": len(h2h_results),
+        "h2h_results": [
+            {"date": item["date"].date().isoformat() if item.get("date") else None,
+             "home_goals": item["home_goals"], "away_goals": item["away_goals"]}
+            for item in h2h_results
+        ],
+        "elo_home_rating": elo_home_rating,
+        "elo_away_rating": elo_away_rating,
+        "elo_matches_used": len(elo_rows),
+        "monte_carlo": monte_carlo,
         "lambda_home": lambda_home,
         "lambda_away": lambda_away,
         "home_win": home_win,
