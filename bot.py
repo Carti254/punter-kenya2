@@ -2200,10 +2200,11 @@ async def autobuild_sportybet_command(update, context):
             }
         # Odds-history lookup is supplementary; failure must not block a live scan.
         try:
-            rows, price_history_stats = await asyncio.to_thread(
-                enrich_candidates_with_price_history, rows[:100]
+            original_rows = rows
+            enriched_rows, price_history_stats = await asyncio.to_thread(
+                enrich_candidates_with_price_history, original_rows[:100]
             )
-            rows = rows + rows[100:] if len(rows) < 100 else rows + []
+            rows = list(enriched_rows or []) + original_rows[100:]
         except Exception as history_error:
             logger.warning("Autobuild price-history enrichment unavailable: %s", history_error)
             price_history_stats = {"matched": 0, "reason": f"Stored odds history unavailable: {type(history_error).__name__}"}
