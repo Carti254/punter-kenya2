@@ -198,8 +198,8 @@ def _resolve_market(event, market_text, selection_text):
 
 def prepare_slip(lines):
     """Resolve lines formatted Fixture | Market | Selection to current live IDs."""
-    if not lines or len(lines) > 20:
-        raise SportyBetError("A SportyBet slip must contain between 1 and 20 selections.")
+    if not lines or len(lines) > 50:
+        raise SportyBetError("A SportyBet slip must contain between 1 and 50 selections.")
     fixtures = _get_fixtures()
     resolved = []
     for number, raw in enumerate(lines, 1):
@@ -216,7 +216,7 @@ def prepare_slip(lines):
 
 def prepare_slip_from_candidates(candidates):
     """Resolve scanner candidates by their exact bookmaker-native IDs, never fuzzy names."""
-    if not candidates or len(candidates) > 20:
+    if not candidates or len(candidates) > 50:
         raise SportyBetError("A SportyBet slip must contain between 1 and 20 selections.")
     fixtures = _get_fixtures()
     by_id = {str(event.get("eventId")): event for event in fixtures if event.get("eventId") is not None}
