@@ -77,6 +77,18 @@ class AutobuildResearchTests(unittest.TestCase):
         self.assertFalse(row["dixon_coles_adjusted"] if "dixon_coles_adjusted" in row else False)
         self.assertEqual(row["probability"], 0.52)
 
+    def test_dixon_coles_does_not_overwrite_exact_specialist_probability(self):
+        row = self.candidate(
+            lambda_home=1.8,
+            lambda_away=0.9,
+            probability=0.52,
+            probability_source="API-Football recent-form specialist Poisson baseline (experimental)",
+        )
+        assessed = assess_candidate(row, use_dixon_coles=True)
+        self.assertFalse(assessed["dixon_coles_adjusted"])
+        self.assertEqual(assessed["probability"], 0.52)
+        self.assertTrue(assessed["probability_source"].startswith("API-Football"))
+
     def test_dixon_coles_is_not_used_without_goal_rates(self):
         row = assess_candidate(self.candidate())
         self.assertFalse(row["dixon_coles_adjusted"] if "dixon_coles_adjusted" in row else False)
