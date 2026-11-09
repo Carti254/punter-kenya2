@@ -50,7 +50,7 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.0, use_dixon_coles:
         training_n = int(row.get("training_sample") or 0)
     except (TypeError, ValueError):
         return None
-    if training_n < 60:
+    if training_n < 50:
         return None
     ev = probability * odds - 1.0
     if not math.isfinite(ev) or ev < float(marginal_ev_floor):
@@ -103,7 +103,7 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.0, use_di
     if excluded:
         return excluded
     try:
-        if int(row.get("training_sample") or 0) < 60:
+        if int(row.get("training_sample") or 0) < 50:
             return "insufficient_competition_training_history"
     except (TypeError, ValueError):
         return "missing_training_history"
