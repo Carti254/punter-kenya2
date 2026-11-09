@@ -43,7 +43,7 @@ class BookmakerOddsTests(unittest.TestCase):
         fetch_sportybet()
         params = mocked_get.call_args.kwargs["params"]
         self.assertEqual(params["sportId"], "sr:sport:1")
-        self.assertNotIn("marketId", params)
+        self.assertEqual(params["marketId"], "1")
         self.assertEqual(params["pageSize"], 100)
         self.assertEqual(params["todayGames"], "false")
         self.assertNotIn("timeline", params)
