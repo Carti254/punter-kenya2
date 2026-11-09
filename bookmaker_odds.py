@@ -471,6 +471,9 @@ def smoke_test_bookmakers():
                 "request_ok": True,
                 "events": len(games),
                 "priced_events": sum(bool(game.get("markets")) for game in games),
+                "event_detail_events": sum(game.get("market_source") == "event_detail" for game in games),
+                "index_fallback_events": sum(game.get("market_source") == "index_fallback" for game in games),
+                "market_counts": [int(game.get("market_count") or 0) for game in games[:10]],
                 "sample": [f'{g.get("home")} vs {g.get("away")}' for g in games[:3]],
             }
         except Exception as exc:
