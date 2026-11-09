@@ -50,22 +50,26 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     if external_disagreement is not None:
         if not math.isfinite(external_disagreement) or external_disagreement > 0.10:
             return None
-    # A candidate must have a real, auditable sample for both teams and
-    # venue-specific evidence. Missing data is not treated as a zero or silently
-    # accepted: the builder must wait for a better-supported fixture.
-    required_samples = {
-        "home_sample": 5,
-        "away_sample": 5,
-        "home_home_sample": 3,
-        "away_away_sample": 3,
-    }
-    for sample_key, minimum in required_samples.items():
+    # Recent form is fundamental: both teams need at least five verified
+    # matches. Venue splits are valuable supplementary evidence, but missing
+    # venue history must downgrade the research grade rather than erase an
+    # otherwise well-supported candidate.
+    for sample_key, minimum in (("home_sample", 5), ("away_sample", 5)):
         try:
             sample_size = int(row.get(sample_key))
         except (TypeError, ValueError, OverflowError):
             return None
         if sample_size < minimum:
             return None
+    try:
+        home_venue_n = int(row.get("home_home_sample") or 0)
+    except (TypeError, ValueError, OverflowError):
+        home_venue_n = 0
+    try:
+        away_venue_n = int(row.get("away_away_sample") or 0)
+    except (TypeError, ValueError, OverflowError):
+        away_venue_n = 0
+    venue_evidence_complete = home_venue_n >= 3 and away_venue_n >= 3
 
     market = str(row.get("market") or "")
     selection = str(row.get("selection") or "")
@@ -144,6 +148,7 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     away_n = int(row.get("away_sample") or 0)
     home_venue_n = int(row.get("home_home_sample") or 0)
     away_venue_n = int(row.get("away_away_sample") or 0)
+    venue_evidence_complete = home_venue_n >= 3 and away_venue_n >= 3
     h2h_n = int(row.get("h2h_count") or 0)
     standings = row.get("standings_evidence") or {}
     standings_available = bool(standings.get("home") and standings.get("away"))
@@ -194,6 +199,12 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         "base_probability": base_probability if probability != base_probability else row.get("base_probability"),
         "probability_source": probability_source,
         "dixon_coles_adjusted": probability_source.startswith("Dixon-Coles"),
+        "research_grade": "A" if venue_evidence_complete else "B",
+        "research_grade_reason": (
+            "Recent-form and venue-split minimums satisfied."
+            if venue_evidence_complete else
+            "Recent-form minimums satisfied; one or both venue-specific samples are incomplete. Venue evidence is a disclosed research gap, not an automatic rejection."
+        ),
         "implied_probability": implied,
         "fair_odds": 1.0 / probability,
         "edge": edge,
@@ -276,8 +287,7 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03) -> st
         disagreement = None
     if disagreement is not None and (not math.isfinite(disagreement) or disagreement > 0.10):
         return "external_model_disagreement_over_10pct"
-    for key, minimum in (("home_sample", 5), ("away_sample", 5),
-                         ("home_home_sample", 3), ("away_away_sample", 3)):
+    for key, minimum in (("home_sample", 5), ("away_sample", 5)):
         try:
             if int(row.get(key)) < minimum:
                 return "insufficient_" + key
@@ -332,6 +342,9 @@ def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.03, us
         "tier_a": counts.get("A", 0),
         "tier_b": counts.get("B", 0),
         "tier_c": counts.get("C", 0),
+        "research_grade_a": sum(1 for x in pool if x.get("research_grade") == "A"),
+        "research_grade_b": sum(1 for x in pool if x.get("research_grade") == "B"),
+        "venue_evidence_incomplete": sum(1 for x in pool if x.get("research_grade") == "B"),
         "rejected": rejected,
         "rejection_reasons": dict(rejection_reasons.most_common()),
         "marginal_ev_floor": marginal_ev_floor,
