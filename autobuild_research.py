@@ -12,6 +12,7 @@ import time
 from collections import Counter
 
 from dixon_coles_engine import selected_outcome_probability
+from advanced_models import elo_expected, monte_carlo_scoreline
 
 _SPECIALIST_REPORT_CACHE = {}
 _SPECIALIST_CACHE_TTL = 900
@@ -74,6 +75,31 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
             probability = dc_probability
             probability_source = "Dixon-Coles Poisson (PUNTER expected-goal rates; rho=-0.05 experimental)"
 
+    # Independent computational cross-checks from the same source-derived
+    # expected-goal rates. These do not create new factual evidence or calibration.
+    monte_carlo = None
+    mc_selected = None
+    try:
+        if row.get("lambda_home") is not None and row.get("lambda_away") is not None:
+            monte_carlo = row.get("monte_carlo") or monte_carlo_scoreline(
+                row.get("lambda_home"), row.get("lambda_away"), simulations=10000
+            )
+            selection_key = selection.casefold().strip()
+            if selection_key in {"1", "home", str(row.get("home") or "").casefold()}:
+                mc_selected = monte_carlo.get("home")
+            elif selection_key in {"x", "draw"}:
+                mc_selected = monte_carlo.get("draw")
+            elif selection_key in {"2", "away", str(row.get("away") or "").casefold()}:
+                mc_selected = monte_carlo.get("away")
+    except (TypeError, ValueError, ArithmeticError):
+        monte_carlo = None
+    elo_probability = None
+    try:
+        if row.get("elo_home_rating") is not None and row.get("elo_away_rating") is not None:
+            elo_probability = elo_expected(row["elo_home_rating"], row["elo_away_rating"], 60.0)
+    except (TypeError, ValueError):
+        elo_probability = None
+
     implied = 1.0 / odds
     edge = probability - implied
     ev = probability * odds - 1.0
@@ -103,6 +129,10 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         checks.append(f"same-competition head-to-head reviewed ({h2h_n} meetings)")
     if probability_source.startswith("Dixon-Coles"):
         checks.append("Dixon-Coles low-score correction applied to the 1X2 probability")
+    if monte_carlo:
+        checks.append(f"10,000-run Monte Carlo scoreline cross-check performed (selection estimate {mc_selected:.1%})" if mc_selected is not None else "10,000-run Monte Carlo scoreline simulation performed; exact selection mapping unavailable")
+    if elo_probability is not None:
+        checks.append(f"Chronological competition Elo ratings available (home {float(row['elo_home_rating']):.0f}; away {float(row['elo_away_rating']):.0f}); home expected score {elo_probability:.1%}")
     item.update({
         "odds": odds,
         "probability": probability,
@@ -133,12 +163,20 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
             "expected_home_goals": row.get("lambda_home"),
             "expected_away_goals": row.get("lambda_away"),
             "specialist_evidence": row.get("specialist_evidence"),
+            "elo_home_rating": row.get("elo_home_rating"),
+            "elo_away_rating": row.get("elo_away_rating"),
+            "elo_matches_used": row.get("elo_matches_used"),
+            "monte_carlo": monte_carlo,
+            "monte_carlo_selected_probability": mc_selected,
+            "elo_home_expected_score": elo_probability,
         },
         "research_gaps": [
             name for name, present in (
                 ("minimum recent-form sample", home_n >= 5 and away_n >= 5),
                 ("minimum home/away venue sample", home_venue_n >= 3 and away_venue_n >= 3),
                 ("head-to-head history", h2h_n > 0),
+                ("chronological Elo rating evidence", elo_probability is not None),
+                ("Monte Carlo scoreline cross-check", monte_carlo is not None),
                 ("verified starting lineups", bool(row.get("lineup_evidence"))),
                 ("injury and suspension evidence", bool(row.get("team_news_evidence"))),
                 ("xG and shot-quality evidence", bool(row.get("xg_evidence"))),
