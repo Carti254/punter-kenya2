@@ -68,11 +68,41 @@ def _get_fixtures():
             raise SportyBetError("SportyBet returned an unexpected fixture response.")
         if payload.get("bizCode") not in (None, 10000):
             raise SportyBetError(str(payload.get("message") or "SportyBet rejected the fixture request.")[:250])
+        # SportyBet's undocumented feed has returned more than one envelope
+        # shape across web/app variants. Accept only recognisable tournament or
+        # fixture structures; never treat an arbitrary response as an empty slate.
         data = payload.get("data")
-        if not isinstance(data, dict) or not isinstance(data.get("tournaments"), list):
-            raise SportyBetError("SportyBet fixture response did not contain a valid tournament catalogue.")
+        tournaments = None
+        if isinstance(data, dict):
+            for candidate in (
+                data.get("tournaments"),
+                (data.get("data") or {}).get("tournaments") if isinstance(data.get("data"), dict) else None,
+                payload.get("tournaments"),
+            ):
+                if isinstance(candidate, list):
+                    tournaments = candidate
+                    break
+        elif isinstance(data, list):
+            # Some variants return the tournament array directly under data.
+            if all(isinstance(item, dict) and isinstance(item.get("events"), list) for item in data):
+                tournaments = data
+            # Other variants return a flat event array directly under data.
+            elif all(isinstance(item, dict) and item.get("eventId") for item in data):
+                tournaments = [{"events": data}]
+        if tournaments is None:
+            top_level = payload.get("tournaments")
+            if isinstance(top_level, list):
+                tournaments = top_level
+        if tournaments is None:
+            envelope_keys = ",".join(sorted(str(key) for key in payload.keys()))
+            data_keys = ",".join(sorted(str(key) for key in data.keys())) if isinstance(data, dict) else type(data).__name__
+            raise SportyBetError(
+                "SportyBet fixture feed schema changed "
+                f"(response keys: {envelope_keys or 'none'}; data shape: {data_keys}). "
+                "No fixtures were used; inspect the live response before changing the parser."
+            )
         page_events = [
-            event for tournament in data["tournaments"] if isinstance(tournament, dict)
+            event for tournament in tournaments if isinstance(tournament, dict)
             for event in (tournament.get("events") or []) if isinstance(event, dict)
         ]
         added = 0
