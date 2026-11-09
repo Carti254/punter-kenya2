@@ -63,7 +63,8 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     is_1x2 = any(token in market_key for token in (
         "1x2", "match result", "full time result", "fulltime result"
     ))
-    if use_dixon_coles and is_1x2 and row.get("lambda_home") is not None and row.get("lambda_away") is not None:
+    if (use_dixon_coles and is_1x2 and row.get("lambda_home") is not None and row.get("lambda_away") is not None
+            and not probability_source.startswith("Dixon-Coles + walk-forward temperature calibration")):
         try:
             dc_probability = selected_outcome_probability(
                 row.get("lambda_home"), row.get("lambda_away"), selection,
@@ -167,6 +168,7 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
             "elo_away_rating": row.get("elo_away_rating"),
             "elo_matches_used": row.get("elo_matches_used"),
             "monte_carlo": monte_carlo,
+            "calibration_evidence": row.get("calibration_evidence"),
             "monte_carlo_selected_probability": mc_selected,
             "elo_home_expected_score": elo_probability,
         },
