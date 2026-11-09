@@ -1232,16 +1232,13 @@ async def reply(update: Update, message: str):
 # ============================================================
 
 def main_menu_keyboard():
-    """Persistent Telegram menu inspired by the reference layout."""
+    """Compact SportyBet-first menu for the rebuilt betting workflow."""
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("📅 Today's Matches"), KeyboardButton("🏆 Top Leagues")],
-            [KeyboardButton("🔎 Analyze Match"), KeyboardButton("ℹ️ iHelp")],
-            [KeyboardButton("🤖 Build a slip"), KeyboardButton("📝 Manual slip")],
-            [KeyboardButton("✏️ Edit slip"), KeyboardButton("🔗 Merge slips")],
-            [KeyboardButton("✂️ Split slip"), KeyboardButton("🎯 Trim to target odds")],
-            [KeyboardButton("📋 Bookies & regions"), KeyboardButton("🎟️ My slips")],
-            [KeyboardButton("⚽ Match intelligence"), KeyboardButton("❓ Contact support")],
+            [KeyboardButton("🎟️ Build slip (2.00–5.00)")],
+            [KeyboardButton("📅 Today's Matches"), KeyboardButton("📋 Slip History")],
+            [KeyboardButton("📊 ROI & Results"), KeyboardButton("🔁 Rollovers")],
+            [KeyboardButton("💰 Bankroll"), KeyboardButton("ℹ️ Help")],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -1254,20 +1251,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚽ PUNTER KENYA\n"
         "FOOTBALL INTELLIGENCE & BETTING CENTRE\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "Research matches, compare available bookmaker prices and review potential value.\n\n"
-        "🎟️ SLIP MANAGEMENT\n"
-        "🎟️ Generate genuine SportyBet Kenya booking codes from live fixtures and markets.\n"
-        "No bookmaker account, API key or stake is used to prepare a code.\n\n"
-        "🧠 INTELLIGENCE\n"
-        "/fullintel — all research and analysis commands\n"
-        "/deepdive HOME vs AWAY — full match report\n"
-        "/topvalue — bookmaker value scan\n"
-        "/accumulator [TARGET] — qualifying-leg accumulator scan\n"
-        "/bookies — bookmaker feed status\n"
-        "/odds HOME vs AWAY — compare retrieved prices\n"
-        "/fixtures — upcoming fixtures\n\n"
-        "🧠 AI ASSISTANT\n"
-        "Ask match questions in ordinary language, or send a betting-slip screenshot for reading and live selection validation.\n\n"
+        "One focused betting system using SportyBet fixtures, markets, selections and live prices.\n\n"
+        "🎟️ BUILD SLIP\n"
+        "/build 2 — /build 3 — /build 5\n"
+        "Allowed target combined odds: 2.00–5.00. PUNTER chooses the number of legs automatically.\n\n"
+        "📊 TRACKING\n"
+        "/results — settled betting records\n"
+        "/roi — recorded betting performance\n"
+        "/history — previous saved slips\n"
+        "/rollover — rollover plan\n"
+        "/bankroll — bankroll settings\n\n"
         "⚠️ Estimates are not guarantees. Prices must be checked with the bookmaker. "
         "PUNTER KENYA does not place bets."
     )
@@ -1346,10 +1339,10 @@ async def process_slip_flow(update, context):
             try:
                 target = float(message.lower().replace("odds", "").strip())
             except ValueError:
-                await reply(update, "Enter your target combined odds, e.g. 2, 5, 10, 20 or 50.")
+                await reply(update, "Enter target combined odds between 2.00 and 5.00.")
                 return True
-            if not math.isfinite(target) or target <= 1:
-                await reply(update, "Target odds must be greater than 1.00.")
+            if not math.isfinite(target) or not 2.0 <= target <= 5.0:
+                await reply(update, "PUNTER KENYA only builds target combined odds from 2.00 to 5.00.")
                 return True
             # Target-only flow: leg count is selected automatically by the
             # accumulator engine. Clear legacy state so old sessions cannot ask
@@ -1368,7 +1361,7 @@ async def process_slip_flow(update, context):
             context.user_data.pop("autobuild_target", None)
             context.user_data.pop("autobuild_config", None)
             context.user_data.pop("slip_flow", None)
-            if not math.isfinite(target) or target <= 1:
+            if not math.isfinite(target) or not 2.0 <= target <= 5.0:
                 await reply(update, "That old slip request expired. Press Build a slip and enter only your target combined odds.")
                 return True
             context.args = [f"{target:.12g}"]
@@ -1520,8 +1513,8 @@ async def process_slip_flow(update, context):
             except ValueError:
                 await reply(update, "Enter a valid target odds number, e.g. 10.")
                 return True
-            if not math.isfinite(target) or target <= 1:
-                await reply(update, "Target odds must be greater than 1.00.")
+            if not math.isfinite(target) or not 2.0 <= target <= 5.0:
+                await reply(update, "PUNTER KENYA only builds target combined odds from 2.00 to 5.00.")
                 return True
             kept = list(booking.get("selections") or [])
             removed = []
@@ -1817,14 +1810,14 @@ async def ai_natural_language_handler(update: Update, context: ContextTypes.DEFA
     target_match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(?:odds?)?\s*", message, re.I)
     if target_match:
         target = float(target_match.group(1))
-        if math.isfinite(target) and target > 1.0:
+        if math.isfinite(target) and 2.0 <= target <= 5.0:
             context.args = [f"{target:.12g}"]
             context.user_data.pop("slip_flow", None)
             context.user_data.pop("autobuild_target", None)
             context.user_data.pop("autobuild_config", None)
             await autobuild_sportybet_command(update, context)
             return True
-        await reply(update, "Target odds must be greater than 1.00.")
+        await reply(update, "PUNTER KENYA only builds target combined odds from 2.00 to 5.00.")
         return True
 
     if not ai_is_configured():
@@ -1912,10 +1905,8 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle home-menu navigation before treating text as slip input."""
     choice = (update.effective_message.text or "").strip()
     menu_choices = {
-        "📅 Today's Matches", "🏆 Top Leagues", "🔎 Analyze Match", "ℹ️ iHelp",
-        "🤖 Build a slip", "🧠 AI build slip", "✏️ Edit slip", "🔗 Merge slips", "✂️ Split slip", "🎯 Trim to target odds",
-        "📋 Bookies & regions", "🎟️ My slips",
-        "⚽ Match intelligence", "📅 Fixtures & leagues", "❓ Contact support",
+        "📅 Today's Matches", "🎟️ Build slip (2.00–5.00)", "📋 Slip History",
+        "📊 ROI & Results", "🔁 Rollovers", "💰 Bankroll", "ℹ️ Help",
     }
     # A menu tap must always navigate, even if the user was halfway through
     # entering slip IDs or selection details.
@@ -1933,14 +1924,22 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif choice == "🔎 Analyze Match":
         context.user_data["slip_flow"] = "analyze"
         await reply(update, "🔎 ANALYZE A MATCH\n\nSend the fixture as: HOME TEAM vs AWAY TEAM\nExample: Arsenal vs Chelsea\n\nSend /cancel to stop.")
-    elif choice == "ℹ️ iHelp":
+    elif choice == "ℹ️ Help":
         await start(update, context)
     elif choice in prompts:
         context.user_data["slip_flow"] = prompts[choice][0]
         await reply(update, prompts[choice][1] + "\n\nSend /cancel to stop.")
-    elif choice == "🧠 AI build slip" or choice == "🤖 Build a slip":
+    elif choice == "🎟️ Build slip (2.00–5.00)":
         context.args = []
         await autobuild_sportybet_command(update, context)
+    elif choice == "📋 Slip History":
+        await my_slips_command(update, context)
+    elif choice == "📊 ROI & Results":
+        await betstats_command(update, context)
+    elif choice == "🔁 Rollovers":
+        await rolloverstatus_command(update, context)
+    elif choice == "💰 Bankroll":
+        await bankroll_command(update, context)
     elif choice == "📝 Manual slip":
         context.user_data["slip_flow"] = "sportybet_build"
         await reply(update,
@@ -2077,7 +2076,7 @@ async def autobuild_sportybet_command(update, context):
         args = []
     if not guided and not args:
         context.user_data["slip_flow"] = "autobuild_target"
-        await reply(update, "🎟️ BUILD YOUR SPORTYBET SLIP\n\nWhat target combined odds do you want?\nExample: 2, 5, 10, 20 or 50.\n/cancel to stop.")
+        await reply(update, "🎟️ BUILD YOUR SPORTYBET SLIP\n\nEnter target combined odds between 2.00 and 5.00.\nExamples: /build 2, /build 3 or /build 5.\nPUNTER chooses the number of legs automatically.\n/cancel to stop.")
         return
     if guided:
         try:
@@ -2087,12 +2086,12 @@ async def autobuild_sportybet_command(update, context):
             return
     else:
         if len(args) != 1 or not re.fullmatch(r"\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
-            await reply(update, "Enter only your target combined odds, for example: /build 2 or /build 50. PUNTER chooses the markets and number of legs automatically.")
+            await reply(update, "Enter one target between 2.00 and 5.00, for example: /build 2, /build 3 or /build 5. PUNTER chooses the markets and number of legs automatically.")
             return
         target = float(re.sub(r"odds$", "", str(args[0]), flags=re.I))
 
-    if not math.isfinite(target) or not 1.0 < target <= 1000.0:
-        await reply(update, "Target odds must be greater than 1.00 and no higher than 1,000.")
+    if not math.isfinite(target) or not 2.0 <= target <= 5.0:
+        await reply(update, "PUNTER KENYA only builds target combined odds from 2.00 to 5.00.")
         return
 
     # The target changes only the accumulator search objective. Every target
@@ -5959,66 +5958,14 @@ def main():
     handlers = [
         ("start", start),
         ("help", help_command),
-        ("about", about),
-        ("leagues", leagues),
-        ("syncleagues", syncleagues),
-        ("leaguefixtures", leaguefixtures),
-        ("matchintel", matchintel),
-        ("fullintel", fullintel_command),
-        ("sources", sources_command),
-        ("form", form_command),
-        ("goals", goals_command),
-        ("homeaway", homeaway_command),
-        ("halves", halves_command),
-        ("h2h", h2h_command),
-        ("strength", strength_command),
-        ("matchup", matchup_command),
-        ("markets", markets_command),
-        ("risk", risk_command),
-        ("scenarios", scenarios_command),
-        ("deepdive", deepdive_command),
-        ("value", value_command),
-        ("topvalue", topvalue_command),
-        ("record", record_command),
-        ("calibrate", calibrate_command),
-        ("betlog", betlog_command),
-        ("betsettle", betsettle_command),
-        ("betstats", betstats_command),
-        ("performance", betstats_command),
-        ("bankroll", bankroll_command),
-        ("preferences", preferences_command),
-        ("stake", stake_command),
+        ("build", build_sportybet_command),
+        ("results", betresults_command),
+        ("roi", betstats_command),
+        ("history", my_slips_command),
         ("rollover", rollover_command),
         ("rolloverstatus", rolloverstatus_command),
         ("rolloverday", rolloverday_command),
-        ("clv", clv_command),
-        ("council", council_command),
-        ("forecastsettle", forecastsettle_command),
-        ("forecaststats", forecaststats_command),
-        ("xresearch", xresearch_command),
-        ("playerprop", playerprop_command),
-        ("marketsim", marketsim_command),
-        ("betresults", betresults_command),
-        ("marketdata", marketdata_command),
-        ("fixtures", fixtures),
-        ("syncfixtures", syncfixtures),
-        ("live", live),
-        ("dbtest", dbtest),
-        ("calculator", calculator),
-        ("bookies", bookmakers_command),
-        ("odds", bookmaker_odds_command),
-        ("oddshistory", odds_history_command),
-        ("aipicks", aipicks_status_command),
-        ("accumulator", accumulator_status_command),
-        ("myslips", my_slips_command),
-        ("build", build_sportybet_command),
-        ("manualbuild", manual_sportybet_command),
-        ("slip", build_sportybet_command),
-        ("autobuild", autobuild_sportybet_command),
-        ("edit", edit_sportybet_command),
-        ("merge", merge_sportybet_command),
-        ("split", split_sportybet_command),
-        ("trim", trim_sportybet_command),
+        ("bankroll", bankroll_command),
         ("cancel", cancel_slip_command),
     ]
 
