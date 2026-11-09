@@ -43,5 +43,29 @@ class AutobuildResearchTests(unittest.TestCase):
         self.assertEqual(stats["rejected"], 1)
 
 
+    def test_sureodds_dixon_coles_recalculates_1x2_when_rates_exist(self):
+        row = assess_candidate(self.candidate(
+            lambda_home=1.8, lambda_away=0.8, probability=0.50,
+        ))
+        self.assertTrue(row["dixon_coles_adjusted"])
+        self.assertEqual(row["probability_source"],
+                         "SureOdds Dixon-Coles Poisson (PUNTER expected-goal rates)")
+        self.assertNotEqual(row["probability"], 0.50)
+        self.assertAlmostEqual(row["base_probability"], 0.50)
+
+    def test_non_1x2_market_keeps_its_specialist_probability(self):
+        row = assess_candidate(self.candidate(
+            market="Total Goals", selection="Over 1.5",
+            lambda_home=1.8, lambda_away=0.8, probability=0.72,
+        ))
+        self.assertFalse(row["dixon_coles_adjusted"])
+        self.assertEqual(row["probability"], 0.72)
+
+    def test_1x2_without_expected_goal_rates_is_not_fabricated(self):
+        row = assess_candidate(self.candidate(probability=0.52))
+        self.assertFalse(row["dixon_coles_adjusted"])
+        self.assertEqual(row["probability"], 0.52)
+
+
 if __name__ == "__main__":
     unittest.main()

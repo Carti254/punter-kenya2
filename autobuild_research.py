@@ -11,6 +11,8 @@ import math
 import time
 from collections import Counter
 
+from dixon_coles_engine import selected_outcome_probability
+
 _SPECIALIST_REPORT_CACHE = {}
 _SPECIALIST_CACHE_TTL = 900
 
@@ -37,6 +39,25 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.0) -> dict | None:
         return None
     if "under 2.5" in combined_text or ("under" in combined_text and "2.5" in str(row.get("specifier") or "")):
         return None
+
+    # Apply SureOdds' Dixon-Coles engine to 1X2 only when this exact fixture
+    # already has valid expected-goal rates from PUNTER. Never invent rates.
+    probability_source = str(row.get("probability_source") or "PUNTER model")
+    base_probability = probability
+    market_key = " ".join(market.casefold().replace("-", " ").split())
+    is_1x2 = any(token in market_key for token in
+                 ("1x2", "match result", "full time result", "fulltime result"))
+    if is_1x2 and row.get("lambda_home") is not None and row.get("lambda_away") is not None:
+        try:
+            dc_probability = selected_outcome_probability(
+                row.get("lambda_home"), row.get("lambda_away"), selection,
+                str(row.get("home") or ""), str(row.get("away") or ""),
+            )
+        except (TypeError, ValueError, ArithmeticError):
+            dc_probability = None
+        if dc_probability is not None and 0 < dc_probability < 1:
+            probability = dc_probability
+            probability_source = "SureOdds Dixon-Coles Poisson (PUNTER expected-goal rates)"
 
     implied = 1.0 / odds
     edge = probability - implied
@@ -65,9 +86,14 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.0) -> dict | None:
         checks.append(f"home/away venue splits reviewed ({home_venue_n} home; {away_venue_n} away)")
     if h2h_n:
         checks.append(f"same-competition head-to-head reviewed ({h2h_n} meetings)")
+    if probability_source.startswith("SureOdds Dixon-Coles"):
+        checks.append("SureOdds Dixon-Coles score matrix recalculated this 1X2 selection from supplied expected-goal rates")
     item.update({
         "odds": odds,
         "probability": probability,
+        "base_probability": base_probability if probability != base_probability else row.get("base_probability"),
+        "probability_source": probability_source,
+        "dixon_coles_adjusted": probability_source.startswith("SureOdds Dixon-Coles"),
         "implied_probability": implied,
         "fair_odds": 1.0 / probability,
         "edge": edge,
