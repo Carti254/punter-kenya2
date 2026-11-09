@@ -163,6 +163,9 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
                         "bookmaker": "SportyBet", "event_id": str(event_id),
                         "home": event.get("homeTeamName"), "away": event.get("awayTeamName"),
                         "competition": tournament.get("name") or tournament.get("categoryName"),
+                        # SportyBet's category label commonly identifies the country.
+                        # Preserve it separately; the model resolver must verify it.
+                        "country": tournament.get("categoryName") or tournament.get("countryName") or tournament.get("country"),
                         "kickoff_eat": kickoff, "markets": markets,
                         "url": "https://www.sportybet.com/ke/sport/football",
                         "fetched_at": datetime.now(timezone.utc).isoformat(),
