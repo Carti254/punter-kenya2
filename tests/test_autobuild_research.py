@@ -9,6 +9,7 @@ class AutobuildResearchTests(unittest.TestCase):
             "home": "Home FC", "away": "Away FC", "market": "1X2",
             "selection": "Home", "odds": 2.10, "probability": 0.52,
             "bookmaker": "SportyBet",
+            "probability_source": "PUNTER venue-weighted Poisson scoreline model",
             "model_confidence": "MODERATE",
             "home_sample": 10, "away_sample": 10,
             "home_home_sample": 5, "away_away_sample": 5,
