@@ -5917,6 +5917,7 @@ async def set_bot_commands(application):
     """Publish only the current supported commands in Telegram's command menu."""
     await application.bot.set_my_commands([
         BotCommand("start", "Open PUNTER KENYA"),
+        BotCommand("help", "Show supported commands"),
         BotCommand("build", "Build a SportyBet slip at 2.00–5.00 odds"),
         BotCommand("logbet", "Record a placed SportyBet bet for ROI tracking"),
         BotCommand("results", "Refresh and view settled betting records"),
@@ -6001,7 +6002,6 @@ def main():
             )
         )
 
-    app.add_handler(CallbackQueryHandler(fullintel_callback, pattern=r"^fi:"))
     app.add_handler(CallbackQueryHandler(sportybet_build_callback, pattern=r"^sb:"))
     app.add_handler(MessageHandler(filters.PHOTO, ai_slip_photo_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_text_handler))
