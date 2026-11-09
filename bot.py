@@ -38,7 +38,7 @@ from user_portfolio import save_bankroll, get_settings, save_rollover, save_pref
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day, enrich_candidates_with_price_history
 from accumulator_engine import build_accumulator
 from advanced_models import build_elo_ratings, monte_carlo_scoreline
-from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models as enrich_specialist_candidates
+from autobuild_research import prepare_candidate_pool, candidate_research_summary, apply_walk_forward_calibration, enrich_with_specialist_models as enrich_specialist_candidates
 from free_football_sources import enrich_candidates as enrich_free_football_sources, fetch_provider_fixtures as fetch_free_provider_fixtures, provider_key_status
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
@@ -2167,6 +2167,22 @@ async def autobuild_sportybet_command(update, context):
             rows = base_rows
             specialist_stats = {"available": False, "reason": f"Specialist research unavailable: {type(exc).__name__}"}
             logger.warning("Optional specialist research failed; continuing with primary candidates: %s", exc)
+        # Fit temperature only on an earlier training window and require
+        # improvement on a later untouched holdout before applying it.
+        calibration_stats = {"ready": False, "reason": "Not run"}
+        calibration_apply_stats = {"applied": False, "reason": "No validated calibration"}
+        try:
+            calibration_stats = await asyncio.wait_for(
+                asyncio.to_thread(evaluate_historical_calibration), timeout=25
+            )
+            rows, calibration_apply_stats = apply_walk_forward_calibration(rows, calibration_stats)
+        except asyncio.TimeoutError:
+            calibration_stats = {"ready": False, "reason": "Walk-forward calibration timed out; raw model probabilities retained."}
+        except Exception as exc:
+            calibration_stats = {"ready": False, "reason": f"Walk-forward calibration unavailable: {type(exc).__name__}"}
+        logger.info("Autobuild calibration: validation=%s application=%s",
+                    calibration_stats, calibration_apply_stats)
+
         # Apply one auditable research/value gate. Keep non-negative-EV candidates;
         # never silently pad a requested slip with negative-EV selections.
         rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.03, use_dixon_coles=True)
@@ -2288,7 +2304,7 @@ async def autobuild_sportybet_command(update, context):
                                  "external_model_disagreement", "bsd_consensus_odds",
                                  "price_vs_bsd_consensus", "lineup_evidence",
                                  "team_news_evidence", "xg_evidence", "odds_history_evidence",
-                                 "tactical_evidence", "ai_research_review", "ai_research_provider",
+                                 "tactical_evidence", "calibration_evidence", "ai_research_review", "ai_research_provider",
                                  "other_bookmaker_evidence"):
                 live_leg[evidence_key] = model_leg.get(evidence_key)
         combined = math.prod(float(x["odds"]) for x in resolved)
