@@ -4031,7 +4031,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
 
     try:
         if str(bookmaker_only or "").casefold() == "sportybet":
-            priced_games = fetch_sportybet_odds(sorted(target_dates), max_pages=20)
+            priced_games = fetch_sportybet_odds(sorted(target_dates), max_pages=30)
             feed_errors = {}
             progress(f"Step 3/4: SportyBet returned {len(priced_games)} priced events. Matching fixtures and checking markets…")
         else:
@@ -4248,48 +4248,6 @@ async def aipicks_status_command(update, context):
     # Reuse the same transparent catalogue + price scan; no separate unverified AI claim.
     context.args = list(context.args or [])
     await topvalue_command(update, context)
-
-
-async def accumulator_status_command(update, context):
-    args = [x.casefold() for x in (context.args or [])]
-    target = 3.0
-    if args:
-        try:
-            target = float(args[0])
-            if target < 1.5 or target > 50: raise ValueError
-        except ValueError:
-            await reply(update, "Usage: /accumulator [target decimal odds, 1.50–50]. Example: /accumulator 3.00")
-            return
-    await reply(update, "🔎 Finding independent fixture candidates for a conservative accumulator...")
-    try:
-        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "safest")
-    except Exception as exc:
-        await reply(update, f"Accumulator scan failed: {type(exc).__name__}: {str(exc)[:200]}")
-        return
-    chosen, combined = [], 1.0
-    used = set()
-    for item in sorted(rows, key=lambda x: (x["probability"], x["ev"]), reverse=True):
-        fixture_key = (item["home"], item["away"])
-        if fixture_key in used:
-            continue
-        if any(x["home"] == item["home"] and x["away"] == item["away"] for x in chosen):
-            continue
-        chosen.append(item); used.add(fixture_key); combined *= item["odds"]
-        if combined >= target: break
-        if len(chosen) >= 6: break
-    if not chosen:
-        await reply(update, "⚠️ NO USABLE ACCUMULATOR CANDIDATES\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No model-supported bookmaker prices were retrieved."))
-        return
-    probability_product = math.prod(x["probability"] for x in chosen)
-    lines = ["🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR", f"Target: {target:.2f} | Combined decimal odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"), ""]
-    for i, item in enumerate(chosen, 1):
-        lines.append(f"{i}. {item['home']} vs {item['away']}")
-        lines.append(f"   {item['selection']} @ {item['odds']:.2f} — {item['bookmaker']}")
-        lines.append(f"   Model probability: {item['probability']:.1%} | Est. EV: {item['ev']:+.1%}")
-    lines.extend(["", f"Naive independent-leg probability product: {probability_product:.2%}",
-        "This product assumes independence and may be materially wrong. Selections may be correlated; this is not a calibrated accumulator probability.",
-        "All legs are experimental estimates, not guarantees. Negative-EV picks are not hidden. Check every market and price. No BTTS or Under 2.5 selections."])
-    await reply(update, "\n".join(lines))
 
 
 def ensure_prediction_records_table(cursor):
