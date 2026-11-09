@@ -235,3 +235,95 @@ def record_rollover_day(user_id, result, actual_odds=None):
         return {"day": day_number, "days": status["days"], "result": result, "status": "BROKEN" if result in {"LOST", "MISSED"} else "IN_PROGRESS"}
     finally:
         connection.close()
+
+
+def enrich_candidates_with_price_history(rows, max_snapshots=12):
+    """Attach exact-match historical bookmaker price observations to live candidates.
+
+    Uses snapshots captured by the existing scheduled read-only price job. A
+    single observation is not called movement; fewer than two is reported as
+    insufficient history. Database/table failures are non-fatal and explicit.
+    """
+    output = [dict(row) for row in (rows or [])]
+    if not output:
+        return output, {"checked": 0, "matched": 0, "reason": "No candidate rows."}
+    connection = None
+    checked = matched = 0
+    try:
+        connection = get_connection()
+        with connection.cursor() as cursor:
+            for row in output:
+                checked += 1
+                try:
+                    odds = float(row.get("odds"))
+                    day = str(row.get("day") or row.get("match_date") or "")[:10]
+                    home, away = str(row.get("home") or ""), str(row.get("away") or "")
+                    bookmaker = str(row.get("bookmaker") or "SportyBet")
+                    market = str(row.get("market") or "")
+                    selection = str(row.get("selection") or "")
+                    if not all((day, home, away, market, selection)) or odds <= 1:
+                        continue
+                    cursor.execute("""
+                        SELECT decimal_odds, fetched_at
+                        FROM punter_odds_snapshots
+                        WHERE LOWER(bookmaker)=LOWER(%s)
+                          AND LOWER(home_team)=LOWER(%s)
+                          AND LOWER(away_team)=LOWER(%s)
+                          AND LOWER(market_name)=LOWER(%s)
+                          AND LOWER(selection_name)=LOWER(%s)
+                          AND DATE(kickoff_eat)=%s
+                        ORDER BY fetched_at DESC LIMIT %s
+                    """, (bookmaker, home, away, market, selection, day,
+                          max(2, min(int(max_snapshots), 30))))
+                    snapshots = cursor.fetchall()
+                    values = []
+                    for snap in reversed(snapshots or []):
+                        try:
+                            price = float(snap["decimal_odds"])
+                            if math.isfinite(price) and price > 1:
+                                values.append({"odds": price, "captured_at": str(snap["fetched_at"])})
+                        except (TypeError, ValueError, KeyError):
+                            continue
+                    if len(values) < 2:
+                        row["odds_history_evidence"] = {
+                            "provider": "PUNTER stored bookmaker snapshots",
+                            "status": "insufficient_history",
+                            "observations": len(values),
+                            "reason": "At least two exact-match timestamped prices are required to measure movement.",
+                        }
+                        continue
+                    first, latest = values[0]["odds"], values[-1]["odds"]
+                    movement = latest / first - 1.0
+                    row["odds_history_evidence"] = {
+                        "provider": "PUNTER stored bookmaker snapshots",
+                        "status": "observed",
+                        "observations": len(values),
+                        "first_observed_odds": first,
+                        "latest_observed_odds": latest,
+                        "current_scan_odds": odds,
+                        "movement_fraction": movement,
+                        "movement_direction": "shortening" if movement < -0.001 else "drifting" if movement > 0.001 else "stable",
+                        "captured_at": [values[0]["captured_at"], values[-1]["captured_at"]],
+                        "note": "Observed snapshots, not a guaranteed market opening/closing line.",
+                    }
+                    matched += 1
+                except Exception as exc:
+                    row["odds_history_evidence"] = {
+                        "provider": "PUNTER stored bookmaker snapshots",
+                        "status": "unavailable",
+                        "reason": type(exc).__name__,
+                    }
+        return output, {"checked": checked, "matched": matched,
+                        "reason": "Exact bookmaker/fixture/market/selection history attached where at least two stored snapshots existed."}
+    except Exception as exc:
+        for row in output:
+            row["odds_history_evidence"] = {
+                "provider": "PUNTER stored bookmaker snapshots",
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+            }
+        return output, {"checked": checked, "matched": 0,
+                        "reason": f"Snapshot history unavailable: {type(exc).__name__}"}
+    finally:
+        if connection is not None:
+            connection.close()
