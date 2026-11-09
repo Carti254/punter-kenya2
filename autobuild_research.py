@@ -36,8 +36,20 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     # The live scanner labels forecasts LOW when the combined verified
     # recent-form sample is too small. Do not let a high quoted price turn
     # that weak forecast into an accumulator leg.
-    if str(row.get("model_confidence") or "").strip().upper() == "LOW":
+    confidence = str(row.get("model_confidence") or "").strip().upper()
+    if confidence not in {"MODERATE", "HIGH"}:
         return None
+
+    # An independently supplied external model is a disagreement check, not a
+    # replacement probability. Large conflicts are withheld rather than averaged
+    # into a deceptively precise number.
+    try:
+        external_disagreement = float(row.get("external_model_disagreement"))
+    except (TypeError, ValueError, OverflowError):
+        external_disagreement = None
+    if external_disagreement is not None:
+        if not math.isfinite(external_disagreement) or external_disagreement > 0.10:
+            return None
     # A candidate must have a real, auditable sample for both teams and
     # venue-specific evidence. Missing data is not treated as a zero or silently
     # accepted: the builder must wait for a better-supported fixture.
