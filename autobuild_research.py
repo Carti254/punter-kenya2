@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import math
 import time
+
+from candidate_risk import assess_candidate_risk
 from collections import Counter
 
 _SPECIALIST_REPORT_CACHE = {}
@@ -92,6 +94,9 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.0) -> dict | None:
             "expected_home_goals": row.get("lambda_home"),
             "expected_away_goals": row.get("lambda_away"),
             "specialist_evidence": row.get("specialist_evidence"),
+            "xg_evidence": row.get("xg_evidence"),
+            "lineup_evidence": row.get("lineup_evidence"),
+            "team_news_evidence": row.get("team_news_evidence"),
         },
         "research_gaps": [
             name for name, present in (
@@ -119,6 +124,11 @@ def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.0) -> 
         if item is None:
             rejected += 1
         else:
+            risk = assess_candidate_risk(item)
+            if risk["risk_rejected"]:
+                rejected += 1
+                continue
+            item.update(risk)
             assessed.append(item)
 
     assessed.sort(
@@ -146,14 +156,21 @@ def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.0) -> 
         "tier_b": counts.get("B", 0),
         "tier_c": counts.get("C", 0),
         "rejected": rejected,
+        "risk_screened": len(pool),
+        "high_risk": sum(1 for item in pool if item.get("risk_level") == "HIGH"),
+        "medium_risk": sum(1 for item in pool if item.get("risk_level") == "MEDIUM"),
         "marginal_ev_floor": marginal_ev_floor,
-        "research_scope": "Current fixture match, current bookmaker price, supported model probability and price-value calculation",
+        "research_scope": "Current fixture and SportyBet price; recent form, venue splits, H2H, Dixon-Coles/Elo/Monte Carlo disagreement, upset risk, plus API-Football xG, lineup and team-news evidence when supplied; unavailable evidence is explicitly flagged.",
         "not_verified_by_this_scan": [
-            "lineups and injury news",
-            "xG and shot-quality data",
-            "tactical video analysis",
-            "cross-bookmaker closing-line movement",
-            "cross-fixture statistical correlation",
+            label for key, label in (
+                ("lineup_evidence", "confirmed lineups"),
+                ("team_news_evidence", "injury and suspension news"),
+                ("xg_evidence", "xG and shot-quality data"),
+                ("odds_history_evidence", "cross-bookmaker closing-line movement"),
+                ("tactical_evidence", "tactical matchup evidence"),
+                ("correlation_evidence", "cross-fixture statistical correlation"),
+            )
+            if not any(row.get(key) for row in pool or [])
         ],
     }
 
@@ -237,7 +254,9 @@ def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None, 
                 row["lineup_evidence"] = report["lineup_evidence"]
             if report.get("team_news_evidence"):
                 row["team_news_evidence"] = report["team_news_evidence"]
-            if report.get("lineup_evidence") or report.get("team_news_evidence"):
+            if report.get("xg_evidence"):
+                row["xg_evidence"] = report["xg_evidence"]
+            if report.get("lineup_evidence") or report.get("team_news_evidence") or report.get("xg_evidence"):
                 providers = set(row.get("external_evidence_sources") or [])
                 providers.add("api-football")
                 row["external_evidence_sources"] = sorted(providers)

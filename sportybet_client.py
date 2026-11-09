@@ -5,6 +5,7 @@ The only write operation is /orders/share; it does not place a wager.
 """
 import re
 import time
+import math
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -18,6 +19,10 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; PunterKenya/1.0)",
 }
 MARKET_IDS = "1,18,10,29,11,26,36,14,60100"
+# SportyBet Kenya's published FAQ allows up to 50 selections on a normal
+# betslip (System bets are separately capped at 15). PUNTER creates normal
+# multiple slips, not System bets. Recheck the live endpoint response at booking.
+MAX_SELECTIONS = 50
 SESSION = requests.Session()
 # Retry idempotent fixture reads only; a booking POST must never be retried.
 SESSION.mount("https://", HTTPAdapter(max_retries=Retry(
@@ -37,14 +42,14 @@ def _norm(value):
 
 def _get_fixtures():
     fixtures = []
-    for page in range(1, 11):
+    for page in range(1, 61):
         params = {
             "sportId": "sr:sport:1",
             "marketId": MARKET_IDS,
             "pageSize": 100,
             "pageNum": page,
+            "option": "2",
             "todayGames": "false",
-            "timeline": 720,
             "_t": int(time.time() * 1000),
         }
         try:
@@ -66,6 +71,37 @@ def _get_fixtures():
         if len(page_events) < 100:
             break
     return fixtures
+
+
+def _hydrate_event_markets(event):
+    """Fetch the event-detail catalogue so validation is not limited to index market IDs."""
+    event_id = str(event.get("eventId") or "").strip()
+    if not event_id:
+        raise SportyBetError("SportyBet event is missing its native event ID.")
+    try:
+        response = SESSION.get(
+            f"{BASE}/factsCenter/event",
+            params={"eventId": event_id, "productId": "3", "_t": int(time.time() * 1000)},
+            headers=HEADERS, timeout=(6, 18),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        # Use index markets only as a strict fallback. If the exact native market
+        # is absent there, the caller will reject the candidate rather than guess.
+        if isinstance(event.get("markets"), list) and event["markets"]:
+            return event
+        raise SportyBetError(f"Could not refresh SportyBet event markets: {type(exc).__name__}.") from None
+    if not isinstance(payload, dict) or payload.get("bizCode") not in (None, 10000):
+        raise SportyBetError("SportyBet rejected the event-market detail request.")
+    data = payload.get("data") or {}
+    if isinstance(data, list):
+        data = data[0] if data and isinstance(data[0], dict) else {}
+    if isinstance(data, dict) and isinstance(data.get("event"), dict):
+        data = data["event"]
+    if not isinstance(data, dict) or not isinstance(data.get("markets"), list) or not data["markets"]:
+        raise SportyBetError("SportyBet event detail did not contain a full market catalogue.")
+    return {**event, **data}
 
 
 def _find_fixture(fixtures, fixture_text):
@@ -180,7 +216,7 @@ def _resolve_market(event, market_text, selection_text):
         current_odds = float(outcome.get("odds"))
     except (TypeError, ValueError, OverflowError):
         current_odds = 0.0
-    if not (current_odds > 1.0 and current_odds < 10000):
+    if not (math.isfinite(current_odds) and current_odds > 1.0):
         raise SportyBetError(f'Selection "{selection_text}" has no valid current decimal price.')
     return {
         "eventId": str(event.get("eventId")),
@@ -198,16 +234,20 @@ def _resolve_market(event, market_text, selection_text):
 
 def prepare_slip(lines):
     """Resolve lines formatted Fixture | Market | Selection to current live IDs."""
-    if not lines or len(lines) > 20:
-        raise SportyBetError("A SportyBet slip must contain between 1 and 20 selections.")
+    if not lines or len(lines) > MAX_SELECTIONS:
+        raise SportyBetError(f"A SportyBet slip must contain between 1 and {MAX_SELECTIONS} selections.")
     fixtures = _get_fixtures()
     resolved = []
+    hydrated = {}
     for number, raw in enumerate(lines, 1):
         parts = [part.strip() for part in raw.split("|")]
         if len(parts) != 3 or not all(parts):
             raise SportyBetError(f"Line {number}: use Fixture | Market | Selection.")
         event = _find_fixture(fixtures, parts[0])
-        item = _resolve_market(event, parts[1], parts[2])
+        event_id = str(event.get("eventId") or "")
+        if event_id not in hydrated:
+            hydrated[event_id] = _hydrate_event_markets(event)
+        item = _resolve_market(hydrated[event_id], parts[1], parts[2])
         if any(x["eventId"] == item["eventId"] and x["marketId"] == item["marketId"] and x["outcomeId"] == item["outcomeId"] for x in resolved):
             raise SportyBetError(f"Line {number}: duplicate selection.")
         resolved.append(item)
@@ -216,11 +256,12 @@ def prepare_slip(lines):
 
 def prepare_slip_from_candidates(candidates):
     """Resolve scanner candidates by their exact bookmaker-native IDs, never fuzzy names."""
-    if not candidates or len(candidates) > 20:
-        raise SportyBetError("A SportyBet slip must contain between 1 and 20 selections.")
+    if not candidates or len(candidates) > MAX_SELECTIONS:
+        raise SportyBetError(f"A SportyBet slip must contain between 1 and {MAX_SELECTIONS} selections.")
     fixtures = _get_fixtures()
     by_id = {str(event.get("eventId")): event for event in fixtures if event.get("eventId") is not None}
     resolved, seen = [], set()
+    hydrated = {}
     now_ms = int(time.time() * 1000)
     for number, candidate in enumerate(candidates, 1):
         event_id = str(candidate.get("event_id") or "")
@@ -231,6 +272,9 @@ def prepare_slip_from_candidates(candidates):
         event = by_id.get(event_id)
         if not event:
             raise SportyBetError(f"Leg {number}: fixture disappeared from the current SportyBet feed.")
+        if event_id not in hydrated:
+            hydrated[event_id] = _hydrate_event_markets(event)
+        event = hydrated[event_id]
         try:
             start_ms = int(event.get("estimateStartTime") or 0)
         except (TypeError, ValueError):
@@ -285,10 +329,15 @@ def _revalidate_selections(resolved):
     fixtures = _get_fixtures()
     by_id = {str(event.get("eventId")): event for event in fixtures if event.get("eventId") is not None}
     refreshed = []
+    hydrated = {}
     for index, item in enumerate(resolved, 1):
-        event = by_id.get(str(item.get("eventId")))
+        event_id = str(item.get("eventId"))
+        event = by_id.get(event_id)
         if not event:
             raise SportyBetError(f"Leg {index}: fixture is no longer available on SportyBet.")
+        if event_id not in hydrated:
+            hydrated[event_id] = _hydrate_event_markets(event)
+        event = hydrated[event_id]
         try:
             start_ms = int(event.get("estimateStartTime") or 0)
         except (TypeError, ValueError):

@@ -84,10 +84,23 @@ jobs:
               ]
               successful = [
                   item for item in observations
-                  if item.get("request_ok") and item.get("priced_events", 0) >= 1
+                  if item.get("request_ok")
               ]
               if not successful:
-                  raise SystemExit(f"{provider} returned no successful priced football events across checked dates.")
+                  raise SystemExit(f"{provider} public feed could not be reached successfully on either checked date.")
+              priced_total = sum(int(item.get("priced_events", 0) or 0) for item in successful)
+              if priced_total == 0:
+                  raise SystemExit(
+                      f"{provider} endpoint responded but returned zero priced fixtures across the checked dates; "
+                      "fixture/market retrieval is NOT validated."
+                  )
+              if provider == "SportyBet":
+                  detail_total = sum(int(item.get("event_detail_events", 0) or 0) for item in successful)
+                  if detail_total == 0:
+                      raise SystemExit(
+                          "SportyBet index returned prices, but no event-detail market catalogue was retrieved; "
+                          "full-market retrieval is NOT validated."
+                      )
           PY
 
   historical-calibration:

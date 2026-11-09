@@ -32,7 +32,12 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
             continue
         item = dict(row)
         item["odds"], item["probability"] = odds, probability
-        item["_fixture_key"] = (home.casefold(), away.casefold())
+        event_id = str(row.get("event_id") or row.get("fixture_id") or "").strip()
+        day = str(row.get("day") or row.get("match_date") or "").strip()
+        item["_fixture_key"] = (
+            ("event", event_id) if event_id
+            else ("fixture", day, home.casefold(), away.casefold())
+        )
         item["_expected_factor"] = odds * probability
         # Aggressive target building may include high-variance, negative-EV legs.
         # Keep the model probability and expected factor visible to ranking/reporting;

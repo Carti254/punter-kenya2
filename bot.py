@@ -14,7 +14,7 @@ import json
 import time
 import copy
 import uuid
-from sportybet_client import SportyBetError, prepare_slip as prepare_sportybet_slip, prepare_slip_from_candidates as prepare_sportybet_candidates, create_booking as create_sportybet_booking, get_booking as get_sportybet_booking
+from sportybet_client import MAX_SELECTIONS as SPORTYBET_MAX_SELECTIONS, SportyBetError, prepare_slip as prepare_sportybet_slip, prepare_slip_from_candidates as prepare_sportybet_candidates, create_booking as create_sportybet_booking, get_booking as get_sportybet_booking
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -37,6 +37,7 @@ from premium_intelligence import market_probabilities, assess_price, rollover_pr
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
 from accumulator_engine import build_accumulator
+from advanced_prediction import build_ensemble as build_advanced_prediction_ensemble
 from autobuild_research import prepare_candidate_pool, candidate_research_summary, enrich_with_specialist_models as enrich_specialist_candidates
 from free_football_sources import enrich_candidates as enrich_free_football_sources, fetch_provider_fixtures as fetch_free_provider_fixtures, provider_key_status
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
@@ -1267,36 +1268,18 @@ async def process_slip_flow(update, context):
     try:
         if state == "autobuild_target":
             try:
-                target = float(message.lower().replace("odds", "").strip())
+                target = float(message.lower().replace("odds", "").replace(",", "").strip())
             except ValueError:
                 await reply(update, "Enter your target combined odds, e.g. 2, 5, 10, 20 or 50.")
                 return True
             if not math.isfinite(target) or target <= 1:
                 await reply(update, "Target odds must be greater than 1.00.")
                 return True
-            context.user_data["autobuild_target"] = target
-            context.user_data["slip_flow"] = "autobuild_legs"
-            await reply(update, f"Target set to {target:.2f}. How many legs do you want? Enter an exact number.")
-            return True
-
-        if state == "autobuild_legs":
-            try:
-                legs = int(message)
-            except ValueError:
-                await reply(update, "Enter an exact whole number of legs, e.g. 2, 5, 8 or 12.")
-                return True
-            target = float(context.user_data.get("autobuild_target") or 0)
-            if legs < 1 or legs > 100:
-                await reply(update, "Choose between 1 and 100 legs.")
-                return True
-            if target <= 1:
-                context.user_data.pop("slip_flow", None)
-                await reply(update, "Your target odds expired. Start the build again.")
-                return True
-            context.user_data["autobuild_config"] = {"target": target, "legs": legs}
             context.user_data.pop("autobuild_target", None)
+            context.user_data.pop("autobuild_config", None)
             context.user_data.pop("slip_flow", None)
-            context.args = []
+            context.args = [f"{target:.12g}"]
+            await reply(update, f"Target accepted: {target:.2f}. Researching the available fixtures and markets.")
             await autobuild_sportybet_command(update, context)
             return True
 
@@ -2069,20 +2052,19 @@ async def autobuild_sportybet_command(update, context):
         return
     target = float(guided["target"]) if guided else 2.0
     # Accept decimal odds and shorthand such as /autobuild 50odds.
-    if not guided and args and re.fullmatch(r"\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
-        target = float(re.sub(r"odds$", "", str(args.pop(0)), flags=re.I))
+    if not guided and args and re.fullmatch(r"\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:odds)?|\d+(?:\.\d+)?(?:odds)?", str(args[0]), re.I):
+        target = float(re.sub(r"odds$", "", str(args.pop(0)).replace(",", ""), flags=re.I))
         if not math.isfinite(target) or target <= 1.0:
             await reply(update, "Target odds must be greater than 1.00.")
             return
 
-    # No fixed leg ceiling: use the available distinct fixtures unless the user
-    # explicitly requests a maxlegs/legs value.
-    min_legs = int(guided["legs"]) if guided else 1
-    max_legs = int(guided["legs"]) if guided else None
-    explicit_max_legs = bool(guided)
+    # The user controls only target combined odds. PUNTER determines the
+    # number of legs automatically from qualified, distinct fixtures.
+    min_legs = 1
+    max_legs = None
+    explicit_max_legs = False
 
-    # Scan all fixtures and every retrieved market the scoreline model supports.
-    # Default parlay excludes BTTS and Under 2.5 per the user's standing preferences.
+    # Automatic market discovery; standing exclusions are enforced downstream.
     rank_mode = "value"
     market_parts = []
     for token in args:
@@ -2091,26 +2073,9 @@ async def autobuild_sportybet_command(update, context):
             rank_mode = lowered.split("=", 1)[1]
         elif lowered.startswith("market="):
             market_parts.append(token.split("=", 1)[1])
-        elif lowered.startswith("legs="):
-            try:
-                min_legs = max_legs = int(lowered.split("=", 1)[1])
-            except ValueError:
-                await reply(update, "Use a positive whole number for legs, for example /autobuild 50 legs=8.")
-                return
-            explicit_max_legs = True
-        elif lowered.startswith("minlegs="):
-            try:
-                min_legs = int(lowered.split("=", 1)[1])
-            except ValueError:
-                await reply(update, "Use a positive whole number for minlegs.")
-                return
-        elif lowered.startswith("maxlegs="):
-            try:
-                max_legs = int(lowered.split("=", 1)[1])
-            except ValueError:
-                await reply(update, "Use a positive whole number for maxlegs.")
-                return
-            explicit_max_legs = True
+        elif lowered.startswith(("legs=", "minlegs=", "maxlegs=")):
+            await reply(update, "Leg-count controls have been removed. PUNTER KENYA determines the number of selections automatically.")
+            return
         elif lowered in ("value", "odds", "probability", "parlay"):
             rank_mode = lowered
         else:
@@ -2118,18 +2083,8 @@ async def autobuild_sportybet_command(update, context):
     if rank_mode not in ("value", "odds", "probability", "parlay"):
         await reply(update, "Ranking must be parlay, value, odds or probability.")
         return
-    if min_legs < 1 or (max_legs is not None and (max_legs < 1 or min_legs > max_legs)):
-        await reply(update, "Leg count must use positive whole numbers and minimum cannot exceed maximum.")
-        return
-
-    if not guided and not explicit_max_legs:
-        context.user_data["autobuild_target"] = target
-        context.user_data["slip_flow"] = "autobuild_legs"
-        await reply(update, f"Target combined odds: {target:.2f}.\nHow many legs do you want? Enter an exact number.")
-        return
 
     market_filter = ",".join(market_parts) if market_parts else "all"
-    leg_plan = f"exactly {min_legs} legs"
     try:
         # Keep all feed scanning, matching and model research internal. Telegram receives
         # only the resulting fixture shortlist and the completed slip.
@@ -2147,7 +2102,7 @@ async def autobuild_sportybet_command(update, context):
         rows, specialist_stats = await asyncio.to_thread(enrich_with_specialist_models, rows)
         # Apply one auditable research/value gate. Keep non-negative-EV candidates;
         # never silently pad a requested slip with negative-EV selections.
-        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=-1.0)
+        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.0)
 
         # Present a clean shortlist after the silent scan. Group alternative markets
         # under their fixture so users can see the actual match coverage at a glance.
@@ -2203,11 +2158,38 @@ async def autobuild_sportybet_command(update, context):
 
         if not rows:
             context.user_data.pop("pending_sportybet_booking", None)
-            await reply(
-                update,
-                "NO BET: no usable, correctly matched SportyBet market candidates were produced after fixture, market and price validation. "
-                "No matched fixture produced a usable model-backed market. Please try again when more SportyBet fixtures are available."
-            )
+            day_counts = [
+                (int(match.group(1)), int(match.group(2)))
+                for item in diagnostics
+                if (match := re.search(r": (\d+) fixtures; (\d+) SportyBet events retrieved", str(item)))
+            ]
+            fixture_count = sum(item[0] for item in day_counts)
+            sportybet_count = sum(item[1] for item in day_counts)
+            matched_names = [
+                item for item in diagnostics
+                if "matched SportyBet fixture" in str(item)
+            ]
+            unmatched_names = [
+                item for item in diagnostics
+                if "fixture not matched to SportyBet" in str(item)
+            ]
+            if fixture_count == 0:
+                failure = "FIXTURE RETRIEVAL FAILURE: no upcoming fixtures were available from the connected catalogues or SportyBet fallback."
+            elif sportybet_count == 0:
+                failure = f"NO SPORTYBET PRICED EVENTS FOR REQUESTED DATES: {fixture_count} fixtures were found from the connected catalogues, but the reachable SportyBet feed returned no priced events for those dates. This may mean SportyBet has no listed fixtures on the requested dates; it is not automatically an API outage."
+            elif not matched_names:
+                failure = f"FIXTURE MATCHING FAILURE: {fixture_count} fixtures and {sportybet_count} SportyBet events were retrieved, but no teams could be confidently matched."
+            else:
+                failure = f"RESEARCH / MARKET FAILURE: {len(matched_names)} SportyBet fixtures were matched, but none produced a supported, evidence-backed market with a valid probability."
+            detail_lines = (matched_names + unmatched_names)[:8]
+            detail_text = "\n".join(detail_lines)
+            diagnostic_text = "\n".join(str(item) for item in diagnostics[-5:])
+            message = "NO BET — " + failure
+            if detail_text:
+                message += "\n\nFixture matching details:\n" + detail_text
+            if diagnostic_text:
+                message += "\n\nTechnical diagnosis:\n" + diagnostic_text
+            await reply(update, message[:3900])
             return
 
         if rank_mode in ("parlay", "odds"):
@@ -2217,26 +2199,35 @@ async def autobuild_sportybet_command(update, context):
         else:
             rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
 
-        available_fixtures = len({(str(x.get("home") or "").casefold(), str(x.get("away") or "").casefold()) for x in rows})
-        effective_max_legs = max_legs if explicit_max_legs else available_fixtures
-        if effective_max_legs is None:
-            effective_max_legs = available_fixtures
-        if effective_max_legs < min_legs:
-            await reply(update, f"Only {available_fixtures} distinct eligible fixtures are available; cannot satisfy minlegs={min_legs}.")
+        available_fixtures = len({
+            ("event", str(x.get("event_id")))
+            if x.get("event_id") not in (None, "")
+            else ("fixture", str(x.get("day") or x.get("match_date") or ""),
+                  str(x.get("home") or "").casefold(), str(x.get("away") or "").casefold())
+            for x in rows
+        })
+        effective_max_legs = min(available_fixtures, SPORTYBET_MAX_SELECTIONS)
+        if effective_max_legs < 1:
+            await reply(update, "Fixtures were retrieved, but none produced a distinct eligible SportyBet selection.")
             return
         build = build_accumulator(
-            rows, target, min_legs=min_legs, max_legs=effective_max_legs,
+            rows, target, min_legs=1, max_legs=effective_max_legs,
             ranking=("value" if rank_mode == "parlay" else rank_mode),
             max_candidates=None,
         )
         chosen = build["selections"]
-        if len(chosen) < min_legs or (max_legs is not None and len(chosen) > max_legs):
+        if not chosen or not build.get("target_reached"):
             context.user_data.pop("pending_sportybet_booking", None)
-            await reply(update, f"NO SLIP: I could not find a qualifying combination with exactly {min_legs} legs near your {target:.2f} target. I will not silently change your requested leg count or fill it with negative-value picks.")
-            return
-        if not chosen:
-            context.user_data.pop("pending_sportybet_booking", None)
-            await reply(update, "No qualifying SportyBet selections were found.")
+            best_available = float(build.get("combined_odds") or 1.0)
+            if chosen:
+                await reply(
+                    update,
+                    f"NO BET: the researched candidates could not reach your {target:.2f} target within the permitted target range. "
+                    f"Best available partial combination was {best_available:.2f} from {len(chosen)} selections. "
+                    "No slip or booking code has been prepared."
+                )
+            else:
+                await reply(update, "NO BET: no qualifying SportyBet selections were found after research and value screening.")
             return
 
         # Keep the exact fixture, market and outcome IDs returned by the odds scan.
@@ -2251,6 +2242,11 @@ async def autobuild_sportybet_command(update, context):
             live_leg["research_evidence"] = model_leg.get("research_evidence") or {}
             live_leg["research_checks"] = model_leg.get("research_checks") or []
             live_leg["research_gaps"] = model_leg.get("research_gaps") or []
+            live_leg["risk_score"] = model_leg.get("risk_score", 0)
+            live_leg["risk_level"] = model_leg.get("risk_level") or "UNKNOWN"
+            live_leg["risk_flags"] = model_leg.get("risk_flags") or []
+            live_leg["risk_gaps"] = model_leg.get("risk_gaps") or []
+            live_leg["risk_method"] = model_leg.get("risk_method")
             live_leg["probability_source"] = model_leg.get("probability_source") or "PUNTER statistical model"
             for evidence_key in ("specialist_evidence", "specialist_panels", "x_research_evidence",
                                  "x_research_warning", "other_bookmaker_prices",
@@ -2268,10 +2264,14 @@ async def autobuild_sportybet_command(update, context):
         else:
             context.user_data.pop("pending_sportybet_booking", None)
 
+        combined_expected_roi = combined * combined_probability - 1.0
         lines = [
             f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET",
             f"Combined odds: {combined:.2f} — " + ("TARGET REACHED" if target_reached else "TARGET NOT REACHED"),
             f"Selections: {len(resolved)}",
+            f"Combined probability (independence estimate): {combined_probability:.2%}",
+            f"Combined expected ROI estimate (independence): {combined_expected_roi:+.2%}",
+            "Combined probability is experimental; cross-fixture dependencies are not fully modelled.",
             "",
         ]
         for i, leg in enumerate(resolved, 1):
@@ -2285,6 +2285,14 @@ async def autobuild_sportybet_command(update, context):
                 f"   Model probability: {float(leg['probability']):.1%} "
                 f"| Source: {leg.get('probability_source') or 'PUNTER statistical model'}"
             )
+            lines.append(
+                f"   Risk screen: {leg.get('risk_level', 'UNKNOWN')} "
+                f"(score {int(leg.get('risk_score') or 0)})"
+            )
+            if leg.get("risk_flags"):
+                lines.append("   Risk flags: " + "; ".join(leg["risk_flags"][:3]))
+            if leg.get("risk_gaps"):
+                lines.append("   Missing risk evidence: " + "; ".join(leg["risk_gaps"][:3]))
             if leg.get("bsd_consensus_odds"):
                 lines.append(
                     f"   BSD consensus reference: {float(leg['bsd_consensus_odds']):.2f} "
@@ -2353,7 +2361,9 @@ async def autobuild_sportybet_command(update, context):
              f"X public leads: {specialist_stats.get('x_posts', 0)}. "
              f"{specialist_stats.get('reason', '')}"),
             f"Research checks: {research_stats['research_scope']}.",
+            f"Risk screening: {research_stats.get('high_risk', 0)} high-risk and {research_stats.get('medium_risk', 0)} medium-risk candidates retained with visible warnings; severe independent-model disagreement was rejected.",
             "Correlation review: " + (", ".join(build.get("correlation_warnings") or []) if build.get("correlation_warnings") else "no same-competition/date cluster detected; other dependencies are not quantified."),
+            (f"SportyBet integration selection limit: {SPORTYBET_MAX_SELECTIONS}; {available_fixtures} distinct eligible fixtures were available." if available_fixtures > SPORTYBET_MAX_SELECTIONS else ""),
             "Unsupported markets are not guessed. Verified lineups, injuries, xG, tactics and true closing-line movement remain gaps unless their sources are actually available.",
             "Model probabilities and estimated value are experimental, not calibrated guarantees of profit.",
         ])
@@ -2376,51 +2386,8 @@ async def autobuild_sportybet_command(update, context):
 
 
 async def accumulator_status_command(update, context):
-    """Build a cautious combination only from scanner-qualified selections."""
-    args = [str(x).strip() for x in (context.args or [])]
-    target = 3.0
-    if args:
-        try:
-            target = float(args[0])
-            if not 1.50 <= target <= 50:
-                raise ValueError
-        except ValueError:
-            await reply(update, "Usage: /accumulator [target decimal odds, 1.50–50]. Example: /accumulator 3.00")
-            return
-
-    try:
-        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "safest")
-    except Exception as exc:
-        logger.exception("Accumulator scan failed")
-        await reply(update, f"❌ ACCUMULATOR SCAN FAILED: {type(exc).__name__}: {str(exc)[:250]}")
-        return
-
-    build = build_accumulator(rows, target, max_legs=6, ranking="probability")
-    chosen, combined = build["selections"], build["combined_odds"]
-
-    if not chosen:
-        await reply(update, "⚠️ NO USABLE ACCUMULATOR CANDIDATES\n" + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No model-supported bookmaker prices were retrieved."))
-        return
-
-    probability_product = math.prod(item["probability"] for item in chosen)
-    lines = [
-        "🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR",
-        f"Target: {target:.2f} | Combined decimal odds: {combined:.2f} | " + ("TARGET REACHED" if combined >= target else "BEST AVAILABLE — TARGET NOT REACHED"),
-        "",
-    ]
-    for number, item in enumerate(chosen, 1):
-        lines.extend([
-            f"{number}. {item['home']} vs {item['away']} — {item['league']}",
-            f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item['bookmaker']})",
-            f"   Model probability: {item['probability']:.1%} | Estimated EV: {item['ev']:+.1%}",
-        ])
-    lines.extend([
-        "",
-        f"Naive independent-leg probability product: {probability_product:.2%}",
-        "This assumes independence. Correlation is not modelled, so this is NOT a calibrated accumulator probability.",
-        "Experimental estimates only. Confirm every price and market with the bookmaker. No BTTS or Under 2.5.",
-    ])
-    await reply(update, "\n".join(lines))
+    """Use the same target-only automatic builder as the SportyBet slip workflow."""
+    await autobuild_sportybet_command(update, context)
 
 
 async def fullintel_callback(update, context):
@@ -3299,7 +3266,7 @@ def build_pre_match_prediction(raw_fixture, fixture):
 
 
 
-def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None, model_variant="current"):
+def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None, model_variant="current", ensemble_simulations=20000):
     """Forecast from competition results strictly before as_of_date when supplied."""
     folder = str(raw_fixture.get("leagueShortcut") or "").strip()
     if not folder:
@@ -3444,6 +3411,20 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
     top_outcome = max(probabilities, key=probabilities.get)
     confidence = "LOW" if len(home_results) + len(away_results) < 14 else "MODERATE"
 
+    # Independent pre-match ensemble: Dixon-Coles low-score correction, Elo replay
+    # and reproducible Monte Carlo. Historical rows are already cutoff-filtered above.
+    advanced_ensemble = build_advanced_prediction_ensemble(
+        fixture["home_team"], fixture["away_team"], lambda_home, lambda_away, rows,
+        simulations=ensemble_simulations,
+    )
+    home_win = advanced_ensemble["probabilities"]["1"]
+    draw = advanced_ensemble["probabilities"]["X"]
+    away_win = advanced_ensemble["probabilities"]["2"]
+    probabilities = {"1": home_win, "X": draw, "2": away_win}
+    top_outcome = max(probabilities, key=probabilities.get)
+    if advanced_ensemble["model_disagreement"] >= 0.15:
+        confidence = "LOW"
+
     # Same-competition head-to-head sample, restricted to completed results
     # already available before this fixture's forecast cutoff.
     h2h_results = []
@@ -3497,6 +3478,11 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
         "score": (most_likely[1], most_likely[2]),
         "top_outcome": top_outcome,
         "confidence": confidence,
+        "model_components": advanced_ensemble["components"],
+        "external_model_disagreement": advanced_ensemble["model_disagreement"],
+        "upset_risk": advanced_ensemble["upset_risk"],
+        "model_method": advanced_ensemble["method"],
+        "monte_carlo_simulations": advanced_ensemble["simulations"],
     }
 
 
@@ -3961,56 +3947,61 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     if not target_dates:
         return [], ["No scan dates were requested."]
 
-    # The previous implementation downloaded every competition CSV and paged
-    # through SportyBet separately for each date. That doubled the slowest
-    # network work for the normal today+tomorrow autobuild.
+    # Each fixture source is independent: one provider failing must not prevent
+    # SportyBet or another source from supplying the match catalogue.
+    all_fixtures = []
     try:
         raw_fixtures = fetch_openmatchday_fixture_rows(14, None, None)
         all_fixtures = upcoming_fixtures(raw_fixtures)
-        # Union in fixtures from the optional free BSD/PitchAPI catalogues.
-        # Deduplicate by EAT day and home/away identity, preserving open-matchday
-        # history rows where both sources list the same match.
-        try:
-            free_fixture_rows = fetch_free_provider_fixtures(sorted(target_dates))
-            existing_fixture_keys = set()
-            for _, item in all_fixtures:
-                kickoff = item.get("kickoff_at")
-                if not kickoff:
-                    continue
-                local_day = kickoff.replace(tzinfo=timezone.utc).astimezone(EAT).date()
-                existing_fixture_keys.add((
-                    local_day.isoformat(),
-                    canonical_team_key(item.get("home_team")),
-                    canonical_team_key(item.get("away_team")),
-                ))
-            added_free_fixtures = 0
-            for raw_free in free_fixture_rows:
-                item = normalise_fixture(raw_free)
-                if not item or not item.get("kickoff_at"):
-                    continue
-                local_day = item["kickoff_at"].replace(tzinfo=timezone.utc).astimezone(EAT).date()
-                if local_day not in target_dates:
-                    continue
-                fixture_key = (
-                    local_day.isoformat(),
-                    canonical_team_key(item.get("home_team")),
-                    canonical_team_key(item.get("away_team")),
-                )
-                if fixture_key in existing_fixture_keys:
-                    continue
-                existing_fixture_keys.add(fixture_key)
-                all_fixtures.append((raw_free, item))
-                added_free_fixtures += 1
-            all_fixtures.sort(key=lambda pair: pair[1].get("kickoff_at") or datetime.max)
-            logger.info(
-                "Free fixture catalogues added %s unique upcoming fixtures (BSD/PitchAPI).",
-                added_free_fixtures,
+        logger.info("Open-matchday supplied %s upcoming fixture records.", len(all_fixtures))
+    except Exception as openmatchday_error:
+        diagnostics.append(
+            f"Open-matchday fixture catalogue failed: {type(openmatchday_error).__name__}: {str(openmatchday_error)[:140]}"
+        )
+        logger.warning("Open-matchday fixture discovery failed; continuing with other sources: %s", openmatchday_error)
+
+    # Union in fixtures from the optional free BSD/PitchAPI catalogues, even
+    # when Open-matchday is unavailable.
+    try:
+        free_fixture_rows = fetch_free_provider_fixtures(sorted(target_dates))
+        existing_fixture_keys = set()
+        for _, item in all_fixtures:
+            kickoff = item.get("kickoff_at")
+            if not kickoff:
+                continue
+            local_day = kickoff.replace(tzinfo=timezone.utc).astimezone(EAT).date()
+            existing_fixture_keys.add((
+                local_day.isoformat(),
+                canonical_team_key(item.get("home_team")),
+                canonical_team_key(item.get("away_team")),
+            ))
+        added_free_fixtures = 0
+        for raw_free in free_fixture_rows:
+            item = normalise_fixture(raw_free)
+            if not item or not item.get("kickoff_at"):
+                continue
+            local_day = item["kickoff_at"].replace(tzinfo=timezone.utc).astimezone(EAT).date()
+            if local_day not in target_dates:
+                continue
+            fixture_key = (
+                local_day.isoformat(),
+                canonical_team_key(item.get("home_team")),
+                canonical_team_key(item.get("away_team")),
             )
-        except Exception as free_fixture_error:
-            logger.warning("Optional free fixture discovery failed: %s", free_fixture_error)
-        progress(f"Step 2/4: fixture catalogue ready ({len(all_fixtures)} upcoming fixtures). Fetching SportyBet prices…")
-    except Exception as exc:
-        raise RuntimeError(f"Fixture catalogue failed: {type(exc).__name__}: {str(exc)[:180]}") from exc
+            if fixture_key in existing_fixture_keys:
+                continue
+            existing_fixture_keys.add(fixture_key)
+            all_fixtures.append((raw_free, item))
+            added_free_fixtures += 1
+        logger.info("Free fixture catalogues added %s unique fixtures (BSD/PitchAPI).", added_free_fixtures)
+    except Exception as free_fixture_error:
+        diagnostics.append(
+            f"BSD/PitchAPI fixture catalogue unavailable: {type(free_fixture_error).__name__}: {str(free_fixture_error)[:140]}"
+        )
+        logger.warning("Optional free fixture discovery failed; continuing with SportyBet: %s", free_fixture_error)
+
+    all_fixtures.sort(key=lambda pair: pair[1].get("kickoff_at") or datetime.max)
+    progress(f"Step 2/4: fixture catalogue ready ({len(all_fixtures)} external fixtures). Fetching SportyBet prices…")
 
     fixtures_by_day = {day: [] for day in target_dates}
     for raw, fixture in all_fixtures:
@@ -4048,6 +4039,63 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     except Exception as exc:
         raise RuntimeError(f"Bookmaker feed failed: {type(exc).__name__}: {str(exc)[:180]}") from exc
 
+    # SportyBet is also a fixture source. Do not discard an event merely because
+    # the external fixture catalogues omitted it: add a clearly marked fallback
+    # record so its live markets can still be evaluated by independent sources.
+    sportybet_only_added = 0
+    existing_fixture_keys = set()
+    for day, day_rows in fixtures_by_day.items():
+        for _, known in day_rows:
+            existing_fixture_keys.add((
+                day.isoformat(),
+                canonical_team_key(known.get("home_team")),
+                canonical_team_key(known.get("away_team")),
+            ))
+    for game in priced_games:
+        home_name = str(game.get("home") or "").strip()
+        away_name = str(game.get("away") or "").strip()
+        kickoff_text = str(game.get("kickoff_eat") or "").strip()
+        if not home_name or not away_name or not kickoff_text:
+            continue
+        try:
+            kickoff_local = datetime.strptime(kickoff_text, "%Y-%m-%d %H:%M").replace(tzinfo=EAT)
+            kickoff_utc = kickoff_local.astimezone(timezone.utc)
+            local_day = kickoff_local.date()
+        except ValueError:
+            continue
+        if local_day not in target_dates or kickoff_utc <= datetime.now(timezone.utc):
+            continue
+        fixture_key = (
+            local_day.isoformat(),
+            canonical_team_key(home_name),
+            canonical_team_key(away_name),
+        )
+        if fixture_key in existing_fixture_keys:
+            continue
+        existing_fixture_keys.add(fixture_key)
+        raw_fallback = {
+            "id": f"sportybet:{game.get('event_id') or fixture_key}",
+            "home": home_name,
+            "away": away_name,
+            "kickoffUtc": kickoff_utc.isoformat(),
+            "leagueName": game.get("competition") or "SportyBet fixture catalogue",
+            "leagueShortcut": "",
+        }
+        fixture_fallback = {
+            "provider_match_id": f"sportybet:{game.get('event_id') or fixture_key}",
+            "home_team": home_name,
+            "away_team": away_name,
+            "kickoff_at": kickoff_utc.astimezone(timezone.utc).replace(tzinfo=None),
+            "competition": game.get("competition") or "SportyBet fixture catalogue",
+        }
+        fixtures_by_day[local_day].append((raw_fallback, fixture_fallback))
+        sportybet_only_added += 1
+    if sportybet_only_added:
+        logger.info(
+            "Added %s upcoming SportyBet-only fixtures missing from external fixture catalogues.",
+            sportybet_only_added,
+        )
+
     for day in sorted(target_dates):
         day_fixtures = fixtures_by_day[day]
         day_games = []
@@ -4058,6 +4106,13 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         diagnostics.append(
             f"{day.isoformat()}: {len(day_fixtures)} fixtures; {len(day_games)} SportyBet events retrieved"
         )
+        for game in day_games:
+            if game.get("market_source") == "index_fallback":
+                diagnostics.append(
+                    f"{day.isoformat()}: full market detail failed for "
+                    f"{game.get('home')} vs {game.get('away')}; index-market fallback used "
+                    f"({game.get('detail_error') or 'no detail reason supplied'})"
+                )
         matched_events = 0
         unsupported = set()
         prediction_unavailable = 0
@@ -4071,8 +4126,10 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             # This avoids needless network calls for fixtures absent from SportyBet.
             matches = find_bookmaker_event(day_games, home_name, away_name)
             if not matches:
+                diagnostics.append(f"{day.isoformat()}: fixture not matched to SportyBet — {home_name} vs {away_name}")
                 progress(f"{day.isoformat()}: no SportyBet match for {home_name} vs {away_name}.")
                 continue
+            diagnostics.append(f"{day.isoformat()}: matched SportyBet fixture — {home_name} vs {away_name}")
             matched_events += len(matches)
             folder = str(raw.get("leagueShortcut") or "").strip()
             if folder not in historical_cache:
@@ -4149,6 +4206,11 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         "odds": odds, "probability": probability, "ev": ev,
                         "fair_odds": (1 / probability) if probability is not None else None,
                         "model_confidence": prediction.get("confidence"),
+                        "model_components": prediction.get("model_components"),
+                        "external_model_disagreement": prediction.get("external_model_disagreement"),
+                        "upset_risk": prediction.get("upset_risk"),
+                        "model_method": prediction.get("model_method"),
+                        "monte_carlo_simulations": prediction.get("monte_carlo_simulations"),
                         "home_form": prediction.get("home_form"),
                         "away_form": prediction.get("away_form"),
                         "home_sample": prediction.get("home_results"),
@@ -5322,6 +5384,7 @@ def collect_walk_forward_forecasts(max_matches=2000):
                 {"home_team": home, "away_team": away},
                 historical_rows=rows,
                 as_of_date=match_date,
+                ensemble_simulations=1000,
             )
             candidate = build_openmatchday_prediction(
                 {"leagueShortcut": folder},
@@ -5329,6 +5392,7 @@ def collect_walk_forward_forecasts(max_matches=2000):
                 historical_rows=rows,
                 as_of_date=match_date,
                 model_variant="venue_weighted",
+                ensemble_simulations=1000,
             )
             if not prediction.get("available") or not candidate.get("available"):
                 continue

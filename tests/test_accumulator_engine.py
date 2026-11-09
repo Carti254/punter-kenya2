@@ -19,6 +19,18 @@ class AccumulatorEngineTests(unittest.TestCase):
         self.assertEqual(len(fixtures), len(set(fixtures)))
         self.assertGreaterEqual(result["combined_odds"], 3.0)
 
+    def test_automatic_leg_count_when_maximum_is_not_supplied(self):
+        candidates = [
+            {"home": f"Auto {i}", "away": f"Opponent {i}", "odds": 2.0, "probability": 0.60, "market": "1X2"}
+            for i in range(1, 7)
+        ]
+        result = build_accumulator(candidates, 16.0)
+        self.assertTrue(result["target_reached"])
+        self.assertEqual(len(result["selections"]), 4)
+        self.assertAlmostEqual(result["combined_odds"], 16.0)
+        fixtures = [(x["home"], x["away"]) for x in result["selections"]]
+        self.assertEqual(len(fixtures), len(set(fixtures)))
+
     def test_best_available_is_not_misreported_as_target_reached(self):
         result = build_accumulator([self.candidates[0]], 5.0, max_legs=2)
         self.assertFalse(result["target_reached"])
