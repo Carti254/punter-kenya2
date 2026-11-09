@@ -2188,9 +2188,13 @@ async def autobuild_sportybet_command(update, context):
             rows.sort(key=lambda x: (x["ev"], x["odds"]), reverse=True)
 
         available_fixtures = len({(str(x.get("home") or "").casefold(), str(x.get("away") or "").casefold()) for x in rows})
-        effective_max_legs = max_legs if explicit_max_legs else available_fixtures
-        if effective_max_legs is None:
-            effective_max_legs = available_fixtures
+        # Leg count is fully automatic; no explicit_max_legs flag exists or is needed.
+        # Count distinct fixtures by date and canonical home/away identity.
+        effective_max_legs = len({
+            (str(x.get("day") or ""), canonical_team_key(x.get("home")), canonical_team_key(x.get("away")))
+            for x in rows
+            if x.get("home") and x.get("away")
+        })
         if effective_max_legs < min_legs:
             await reply(update, f"Only {available_fixtures} distinct eligible fixtures are available; cannot satisfy minlegs={min_legs}.")
             return
