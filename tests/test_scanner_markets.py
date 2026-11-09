@@ -33,7 +33,7 @@ class ScannerMarketTests(unittest.TestCase):
         self.assertEqual(_market_probability(self.model, "over15"), .80)
 
 
-    def test_scanner_does_not_hide_btts_or_under_25(self):
+    def test_scanner_excludes_btts_and_under_25_from_slip_candidates(self):
         raw = {"id": "fixture-1"}
         today_eat = datetime.now(timezone.utc).astimezone(ZoneInfo("Africa/Nairobi")).date().isoformat()
         fixture = {
@@ -48,6 +48,8 @@ class ScannerMarketTests(unittest.TestCase):
                  "market_id": "btts", "outcome_id": "yes"},
                 {"market": "Total Goals Over/Under", "selection": "Under 2.5", "odds": 2.10,
                  "market_id": "totals", "outcome_id": "under25", "specifier": "total=2.5"},
+                {"market": "Total Goals Over/Under", "selection": "Over 1.5", "odds": 1.55,
+                 "market_id": "totals", "outcome_id": "over15", "specifier": "total=1.5"},
             ],
         }
         prediction = {
@@ -61,10 +63,11 @@ class ScannerMarketTests(unittest.TestCase):
                  "bookmakers": {"SportyBet": {"games": [game]}}, "errors": {}
              }), \
              patch("bot.find_bookmaker_event", return_value=[game]):
-            rows, _ = scan_value_candidates(("today",), "BTTS,Under 2.5")
+            rows, _ = scan_value_candidates(("today",), "all")
         labels = {(row["market"], row["selection"]) for row in rows}
-        self.assertIn(("Both Teams To Score", "Yes"), labels)
-        self.assertIn(("Total Goals Over/Under", "Under 2.5"), labels)
+        self.assertNotIn(("Both Teams To Score", "Yes"), labels)
+        self.assertNotIn(("Total Goals Over/Under", "Under 2.5"), labels)
+        self.assertIn(("Total Goals Over/Under", "Over 1.5"), labels)
 
     def test_scoreline_derived_markets(self):
         cases = [
