@@ -52,7 +52,10 @@ def save_preferences(user_id, preferences):
 
 
 def save_rollover(user_id, days, target):
-    projection = rollover_projection(1, int(days), float(target))
+    target = float(target)
+    if not 2.0 <= target <= 5.0:
+        raise ValueError("Rollover target odds must be between 2.00 and 5.00.")
+    projection = rollover_projection(1, int(days), target)
     connection = get_connection()
     try:
         with connection.cursor() as cursor:
