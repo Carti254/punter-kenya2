@@ -15,6 +15,14 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
         raise ValueError("Target odds must be finite and greater than 1.")
     if not isinstance(max_legs, int) or not 1 <= max_legs <= 50:
         raise ValueError("max_legs must be an integer from 1 to 50.")
+    if max_legs == 1 and min_legs == 2:
+        return {
+            "selections": [], "combined_odds": 1.0, "combined_probability": 0.0,
+            "naive_independent_probability": 0.0, "correlation_adjustment_factor": 1.0,
+            "expected_return_factor": 0.0, "expected_roi": -1.0,
+            "target_reached": False, "independence_assumption": True,
+            "reason": "An accumulator requires at least two distinct fixtures. No single-selection substitute was generated.",
+        }
     if not isinstance(min_legs, int) or not 1 <= min_legs <= max_legs:
         raise ValueError("min_legs must be an integer from 1 to max_legs.")
     clean = []
