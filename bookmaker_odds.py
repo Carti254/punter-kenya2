@@ -461,7 +461,9 @@ def smoke_test_bookmakers():
     for name, fetcher in (
         ("Betika", lambda: fetch_betika(day, max_pages=1, max_details=3)),
         ("Betika tomorrow", lambda: fetch_betika(day + timedelta(days=1), max_pages=1, max_details=3)),
-        ("SportyBet", lambda: fetch_sportybet(day, max_pages=1)),
+        # SportyBet's fixture index is paginated; page 1 is not a complete
+        # catalogue. Check today and tomorrow across the normal index window.
+        ("SportyBet", lambda: fetch_sportybet([day, day + timedelta(days=1)], max_pages=60)),
     ):
         try:
             games = fetcher()
