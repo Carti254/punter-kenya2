@@ -2275,7 +2275,9 @@ async def autobuild_sportybet_command(update, context):
                                  "external_evidence_sources", "external_market_probability",
                                  "external_model_disagreement", "bsd_consensus_odds",
                                  "price_vs_bsd_consensus", "lineup_evidence",
-                                 "team_news_evidence", "xg_evidence", "odds_history_evidence",\n                                 "tactical_evidence", "ai_research_review", "ai_research_provider",\n                                 "other_bookmaker_evidence"):
+                                 "team_news_evidence", "xg_evidence", "odds_history_evidence",
+                                 "tactical_evidence", "ai_research_review", "ai_research_provider",
+                                 "other_bookmaker_evidence"):
                 live_leg[evidence_key] = model_leg.get(evidence_key)
         combined = math.prod(float(x["odds"]) for x in resolved)
         combined_probability = math.prod(float(x["probability"]) for x in resolved)
