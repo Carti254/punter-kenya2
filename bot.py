@@ -16,7 +16,7 @@ import copy
 from collections import Counter
 import uuid
 from sportybet_client import SportyBetError, prepare_slip as prepare_sportybet_slip, prepare_slip_from_candidates as prepare_sportybet_candidates, create_booking as create_sportybet_booking, get_booking as get_sportybet_booking
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
