@@ -2198,38 +2198,16 @@ async def autobuild_sportybet_command(update, context):
     min_legs = 2
     max_legs = 20
     market_filter = "all"
-    await reply(
-        update,
-        f"🤖 PUNTER RESEARCH SCAN — TARGET {target:.2f}\n"
-        f"Using the same full research pipeline for every target; automatically choosing "
-        f"2–{max_legs} different matches based on qualified prices, probability, value and risk…"
-    )
+    await reply(update, f"🔎 Finding matches for target odds {target:.2f}…")
     try:
-        # Stream scan progress to Telegram while the synchronous provider work runs
-        # in a worker thread. Throttle fixture-level updates to avoid flooding chat.
-        loop = asyncio.get_running_loop()
-        progress_lock = threading.Lock()
-        last_progress_at = [0.0]
-        def scan_progress(message):
-            now = time.monotonic()
-            with progress_lock:
-                if now - last_progress_at[0] < 5.0:
-                    return
-                last_progress_at[0] = now
-            safe_message = str(message)[:700]
-            def send_progress():
-                asyncio.create_task(reply(update, "🔎 " + safe_message))
-            loop.call_soon_threadsafe(send_progress)
-
+        # Keep research and diagnostics internal; Telegram receives only the final slip.
         rows, diagnostics = await asyncio.wait_for(
             asyncio.to_thread(
                 scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet",
-                progress_callback=scan_progress,
             ),
             timeout=90,
         )
         scanned_count = len(rows)
-        await reply(update, f"✅ Fixture and odds scan complete: {scanned_count} priced/modelled market rows. Applying research filters…")
 
         # User preference: exclude the Big-Five domestic top divisions.
         # Cup competitions remain eligible; the filter is country + competition aware.
@@ -2266,7 +2244,6 @@ async def autobuild_sportybet_command(update, context):
         # match panels, but do not launch secondary X searches or a second full
         # bookmaker-feed download for every build. Those optional sources must not
         # prevent the primary SportyBet research scan from returning.
-        await reply(update, "🧠 Primary scan complete. Checking specialist match evidence (up to 20 distinct fixtures; same cap for every target)…")
         specialist_stats = {"reason": "Specialist research not configured or unavailable."}
         price_history_stats = {"matched": 0, "reason": "Stored odds history not checked."}
         try:
@@ -2299,7 +2276,6 @@ async def autobuild_sportybet_command(update, context):
         cached_at = globals().get("_WALK_FORWARD_CALIBRATION_CACHE", {}).get("timestamp", 0)
         if cached_validation and time.time() - cached_at < 21600:
             rows, calibration_stats = apply_walk_forward_calibration(rows, cached_validation)
-        await reply(update, "📊 Research enrichment complete. Applying evidence, probability and value filters…")
 
         # Same evidence/value gate as /accumulator: minimum recent and venue samples,
         # LOW confidence rejected, BTTS/Under 2.5/2UP excluded, and at least 3% EV.
@@ -2414,124 +2390,18 @@ async def autobuild_sportybet_command(update, context):
         correlation_factor = float(build.get("correlation_adjustment_factor") or 1.0)
         context.user_data["pending_sportybet_booking"] = resolved
 
+        # Research remains active internally; Telegram shows only the match and selection.
         lines = [
             f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET",
-            f"Combined odds: {combined:.2f} — TARGET REACHED",
+            f"Combined odds: {combined:.2f}",
             f"Selections: {len(resolved)}",
-            f"Research screen: {research_stats.get('eligible', 0)} eligible; "
-            f"{research_stats.get('rejected', 0)} rejected; "
-            f"{research_stats.get('tier_a', 0)} Tier A positive-value candidates; "
-            f"{big_five_excluded} Big-Five top-flight fixtures excluded; "
-            f"exact odds-history matches: {price_history_stats.get('matched', 0)}",
             "",
         ]
         for i, leg in enumerate(resolved, 1):
-            lines.append(f"{i}. {leg['fixture']} — {leg['market']}: {leg['selection']} @ {leg['odds']:.2f}")
             lines.append(
-                f"   Competition: {leg.get('league') or 'N/A'}"
-                + (f" | {leg.get('country')}" if leg.get("country") else "")
+                f"{i}. {leg['fixture']} — {leg['market']}: "
+                f"{leg['selection']} @ {leg['odds']:.2f}"
             )
-            lines.append(
-                f"   PUNTER model estimate: {leg['probability']:.1%} | "
-                f"Fair odds: {leg.get('fair_odds', 1 / leg['probability']):.2f} | "
-                f"Estimated EV: {leg.get('ev', 0):+.1%}"
-            )
-            lines.append(
-                f"   Recent form (oldest→newest): {leg.get('home_form') or 'N/A'} / "
-                f"{leg.get('away_form') or 'N/A'} "
-                f"(samples {leg.get('home_sample') or 0}/{leg.get('away_sample') or 0})"
-            )
-            lines.append(
-                f"   Goals per match — home GF/GA: {leg.get('home_scored_avg') or 0:.2f}/"
-                f"{leg.get('home_conceded_avg') or 0:.2f}; away GF/GA: "
-                f"{leg.get('away_scored_avg') or 0:.2f}/{leg.get('away_conceded_avg') or 0:.2f}"
-            )
-            lines.append(
-                f"   Venue splits — home at home GF/GA: "
-                f"{leg.get('home_home_gf') if leg.get('home_home_gf') is not None else 'N/A'}/"
-                f"{leg.get('home_home_ga') if leg.get('home_home_ga') is not None else 'N/A'} "
-                f"({leg.get('home_home_sample') or 0} matches); away away GF/GA: "
-                f"{leg.get('away_away_gf') if leg.get('away_away_gf') is not None else 'N/A'}/"
-                f"{leg.get('away_away_ga') if leg.get('away_away_ga') is not None else 'N/A'} "
-                f"({leg.get('away_away_sample') or 0} matches)"
-            )
-            h2h_rows = leg.get("h2h_results") or []
-            h2h_scores = [
-                f"{int(x.get('home_goals', 0))}-{int(x.get('away_goals', 0))}"
-                for x in h2h_rows[:3]
-            ]
-            lines.append(
-                f"   H2H: {leg.get('h2h_count') or 0} same-competition meetings"
-                + (f" (latest: {', '.join(h2h_scores)})" if h2h_scores else " (no prior meeting found)")
-                + f"; Elo: {leg.get('elo_home_rating') if leg.get('elo_home_rating') is not None else 'N/A'} / "
-                f"{leg.get('elo_away_rating') if leg.get('elo_away_rating') is not None else 'N/A'}"
-            )
-            if leg.get("lambda_home") is not None and leg.get("lambda_away") is not None:
-                lines.append(
-                    f"   Expected goals: {float(leg['lambda_home']):.2f} – {float(leg['lambda_away']):.2f}"
-                )
-            if leg.get("monte_carlo"):
-                lines.append("   Monte Carlo: 10,000 scoreline simulations from the same expected-goal inputs (not independent evidence)")
-            lines.append(f"   Probability source: {leg.get('probability_source') or 'not specified'}")
-            if leg.get("research_checks"):
-                lines.append("   Checks: " + "; ".join(leg["research_checks"][:5]))
-            if leg.get("research_gaps"):
-                lines.append("   Evidence gaps: " + ", ".join(leg["research_gaps"][:12]))
-            if leg.get("lineup_evidence"):
-                lines.append("   Lineup evidence: available from specialist provider; verify it is confirmed before kickoff.")
-            if leg.get("team_news_evidence"):
-                lines.append("   Injury/suspension evidence: available from specialist provider.")
-            if leg.get("xg_evidence"):
-                lines.append("   xG/shot-quality evidence: available from specialist provider.")
-            if leg.get("tactical_evidence"):
-                lines.append("   Tactical matchup evidence: available from specialist provider.")
-            if leg.get("standings_evidence"):
-                table = leg["standings_evidence"]
-                home_table, away_table = table.get("home") or {}, table.get("away") or {}
-                lines.append(
-                    f"   League standings ({table.get('league') or 'competition'}): "
-                    f"home rank {home_table.get('rank', 'N/A')} / {home_table.get('points', 'N/A')} pts; "
-                    f"away rank {away_table.get('rank', 'N/A')} / {away_table.get('points', 'N/A')} pts."
-                )
-            if leg.get("early_goal_evidence"):
-                early = leg["early_goal_evidence"]
-                home_early, away_early = early.get("home") or {}, early.get("away") or {}
-                lines.append(
-                    "   Team scores first within 5/10 min — "
-                    f"home: {home_early.get('team_scored_first_before_5_rate', 0):.0%}/"
-                    f"{home_early.get('team_scored_first_before_10_rate', 0):.0%} "
-                    f"(n={home_early.get('sample', 0)}); away: "
-                    f"{away_early.get('team_scored_first_before_5_rate', 0):.0%}/"
-                    f"{away_early.get('team_scored_first_before_10_rate', 0):.0%} "
-                    f"(n={away_early.get('sample', 0)})."
-                )
-            if leg.get("odds_history_evidence"):
-                history = leg["odds_history_evidence"]
-                lines.append(
-                    f"   Odds movement: {history.get('status', 'not verified')} "
-                    f"({history.get('observations', 0)} exact-match snapshots)"
-                )
-            if leg.get("x_research_evidence"):
-                lines.append("   Public social leads: available but unverified; not treated as confirmed team news.")
-            if leg.get("best_other_bookmaker"):
-                best = leg["best_other_bookmaker"]
-                lines.append(f"   Other bookmaker comparison: {best.get('bookmaker')} @ {best.get('odds'):.2f}")
-            if leg.get("specialist_evidence"):
-                lines.append("   Specialist market evidence: " + str(leg["specialist_evidence"].get("model") or "available"))
-        lines.extend([
-            "",
-            f"Estimated accumulator hit probability: {combined_probability:.2%}",
-            f"Unadjusted independent product: {naive_probability:.2%}",
-            (
-                "A conservative 3% same-competition/same-day dependence haircut was applied (heuristic, not measured correlation)."
-                if correlation_factor < 1.0 else
-                "No same-competition/same-day dependence haircut was triggered; the base calculation assumes fixture independence."
-            ),
-            "Probabilities remain experimental unless the walk-forward holdout explicitly confirms calibration.",
-            f"Specialist research: {specialist_stats.get('reason', 'No additional specialist evidence reported.')}",
-            f"Walk-forward calibration: {calibration_stats.get('reason', 'not available')}",
-            f"Stored odds history: {price_history_stats.get('reason', str(price_history_stats.get('matched', 0)) + ' exact matches')}",
-        ])
 
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("Generate SportyBet code", callback_data="sb:confirm"),
