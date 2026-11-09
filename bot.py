@@ -2138,19 +2138,38 @@ async def autobuild_sportybet_command(update, context):
         rows, diagnostics = await asyncio.to_thread(
             scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
         )
-        rows = [
-            x for x in rows
-            if str(x.get("bookmaker", "")).casefold() == "sportybet"
-            and 1.01 <= float(x.get("odds") or 0) <= 4.50
-            and "btts" not in str(x.get("market", "")).casefold()
-            and "both teams" not in str(x.get("market", "")).casefold()
-            and not (
-                "under" in str(x.get("selection", "")).casefold()
-                and "2.5" in (
-                    str(x.get("selection", "")) + " " + str(x.get("specifier", ""))
-                )
-            )
-        ]
+        # Only model-priced selections can enter an accumulator. The scanner
+        # deliberately retains some externally-supported markets with probability=None
+        # for research; those must not be sorted or treated as betting candidates.
+        qualified_rows = []
+        for candidate in rows:
+            try:
+                candidate_odds = float(candidate.get("odds"))
+                candidate_probability = float(candidate.get("probability"))
+            except (TypeError, ValueError):
+                continue
+            if not (math.isfinite(candidate_odds) and 1.01 <= candidate_odds <= 4.50):
+                continue
+            if not (math.isfinite(candidate_probability) and 0 < candidate_probability < 1):
+                continue
+            market_text = (
+                str(candidate.get("market", "")) + " " +
+                str(candidate.get("selection", "")) + " " +
+                str(candidate.get("specifier", ""))
+            ).casefold()
+            if "btts" in market_text or "both teams" in market_text:
+                continue
+            if "under 2.5" in market_text:
+                continue
+            candidate = dict(candidate)
+            candidate["odds"] = candidate_odds
+            candidate["probability"] = candidate_probability
+            try:
+                candidate["ev"] = float(candidate.get("ev"))
+            except (TypeError, ValueError):
+                candidate["ev"] = candidate_probability * candidate_odds - 1
+            qualified_rows.append(candidate)
+        rows = qualified_rows
 
         if rank_mode in ("parlay", "odds"):
             rows.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
