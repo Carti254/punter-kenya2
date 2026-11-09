@@ -936,7 +936,9 @@ def fetch_openmatchday_fixture_rows(days=14, league_id=None, day_filter=None):
 
     # The index contains 75 competitions. Consume whichever request completes
     # first so one slow league cannot block already completed fixture feeds.
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    # Fetch league fixture files concurrently: the index covers many competitions,
+    # and a small worker pool can make a cold scan exceed the Telegram timeout.
+    with ThreadPoolExecutor(max_workers=min(24, max(1, len(leagues)))) as pool:
         futures = [pool.submit(fetch_one, league) for league in leagues]
         for future in as_completed(futures):
             try:
@@ -4019,7 +4021,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     # Those sources still enrich matched candidates later, but cannot block
     # primary fixture retrieval and SportyBet price matching.
     try:
-        raw_fixtures = fetch_openmatchday_fixture_rows(14, None, None)
+        raw_fixtures = fetch_openmatchday_fixture_rows(2, None, None)
         all_fixtures = upcoming_fixtures(raw_fixtures)
         progress(f"Step 2/4: fixture catalogue ready ({len(all_fixtures)} upcoming fixtures). Fetching SportyBet prices…")
     except Exception as exc:
@@ -4075,25 +4077,41 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         unsupported = set()
         prediction_unavailable = 0
         market_rows_seen = 0
+        # Resolve live SportyBet matches first, then prefetch history only for
+        # the leagues that actually have matched events. Do this concurrently:
+        # serial per-league HTTP requests were a major cold-start bottleneck.
         historical_cache = {}
-        progress(f"Step 4/4: checking {len(day_fixtures)} fixtures against {len(day_games)} SportyBet events for {day.isoformat()}…")
-        for fixture_index, (raw, fixture) in enumerate(day_fixtures, 1):
+        matched_fixtures = []
+        history_folders = set()
+        for raw, fixture in day_fixtures:
+            matches = find_bookmaker_event(day_games, fixture["home_team"], fixture["away_team"])
+            if not matches:
+                continue
+            matched_fixtures.append((raw, fixture, matches))
+            folder = str(raw.get("leagueShortcut") or "").strip()
+            if folder:
+                history_folders.add(folder)
+
+        def fetch_history(folder):
+            try:
+                return folder, fetch_openmatchday_csv(folder, "results")
+            except Exception as exc:
+                logger.warning("Autobuild history fetch failed for %s: %s", folder, exc)
+                return folder, []
+
+        if history_folders:
+            with ThreadPoolExecutor(max_workers=min(12, len(history_folders))) as history_pool:
+                history_futures = [history_pool.submit(fetch_history, folder) for folder in sorted(history_folders)]
+                for future in as_completed(history_futures):
+                    folder, history_rows = future.result()
+                    historical_cache[folder] = history_rows
+
+        progress(f"Step 4/4: checking {len(matched_fixtures)} SportyBet-matched fixtures against {len(day_games)} priced events for {day.isoformat()}…")
+        for fixture_index, (raw, fixture, matches) in enumerate(matched_fixtures, 1):
             home_name, away_name = fixture["home_team"], fixture["away_team"]
             progress(f"{day.isoformat()}: fixture {fixture_index}/{len(day_fixtures)} — matching {home_name} vs {away_name}…")
-            # Match the live bookmaker event before downloading historical results.
-            # This avoids needless network calls for fixtures absent from SportyBet.
-            matches = find_bookmaker_event(day_games, home_name, away_name)
-            if not matches:
-                progress(f"{day.isoformat()}: no SportyBet match for {home_name} vs {away_name}.")
-                continue
             matched_events += len(matches)
             folder = str(raw.get("leagueShortcut") or "").strip()
-            if folder not in historical_cache:
-                try:
-                    historical_cache[folder] = fetch_openmatchday_csv(folder, "results") if folder else []
-                except Exception as exc:
-                    historical_cache[folder] = []
-                    logger.warning("Autobuild history fetch failed for %s: %s", folder, exc)
             try:
                 prediction = build_openmatchday_prediction(raw, fixture, historical_rows=historical_cache[folder])
             except Exception as exc:
