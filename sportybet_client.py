@@ -35,13 +35,19 @@ def _norm(value):
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
+FIXTURE_PAGE_SIZE = 100
+FIXTURE_MAX_PAGES = 30
+
+
 def _get_fixtures():
+    """Fetch the full upcoming football catalogue with validated pagination."""
     fixtures = []
-    for page in range(1, 21):
+    seen = set()
+    for page in range(1, FIXTURE_MAX_PAGES + 1):
         params = {
             "sportId": "sr:sport:1",
             "marketId": MARKET_IDS,
-            "pageSize": 100,
+            "pageSize": FIXTURE_PAGE_SIZE,
             "pageNum": page,
             "todayGames": "false",
             "timeline": 720,
@@ -58,15 +64,30 @@ def _get_fixtures():
             raise SportyBetError(f"Could not reach SportyBet Kenya: {type(exc).__name__}.") from None
         except ValueError:
             raise SportyBetError("SportyBet returned an unreadable fixture response.") from None
+        if not isinstance(payload, dict):
+            raise SportyBetError("SportyBet returned an unexpected fixture response.")
         if payload.get("bizCode") not in (None, 10000):
             raise SportyBetError(str(payload.get("message") or "SportyBet rejected the fixture request.")[:250])
-        tournaments = (payload.get("data") or {}).get("tournaments") or []
-        page_events = [event for tournament in tournaments for event in (tournament.get("events") or [])]
-        fixtures.extend(page_events)
-        if len(page_events) < 100:
+        data = payload.get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("tournaments"), list):
+            raise SportyBetError("SportyBet fixture response did not contain a valid tournament catalogue.")
+        page_events = [
+            event for tournament in data["tournaments"] if isinstance(tournament, dict)
+            for event in (tournament.get("events") or []) if isinstance(event, dict)
+        ]
+        added = 0
+        for event in page_events:
+            event_id = event.get("eventId")
+            key = str(event_id) if event_id is not None else None
+            if key is not None and key in seen:
+                continue
+            if key is not None:
+                seen.add(key)
+            fixtures.append(event)
+            added += 1
+        if len(page_events) < FIXTURE_PAGE_SIZE or added == 0:
             break
     return fixtures
-
 
 def _find_fixture(fixtures, fixture_text):
     sides = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", fixture_text.strip(), maxsplit=1, flags=re.I)
