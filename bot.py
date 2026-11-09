@@ -883,7 +883,7 @@ def fetch_openmatchday_team_history_rows(max_age_seconds=1800):
     with OPENMATCHDAY_TEAM_HISTORY_LOCK:
         cached_at = float(OPENMATCHDAY_TEAM_HISTORY_CACHE.get("saved_at") or 0)
         cached_rows = OPENMATCHDAY_TEAM_HISTORY_CACHE.get("rows") or []
-        if cached_rows and time.time() - cached_at < max_age_seconds:
+        if cached_at and time.time() - cached_at < max_age_seconds:
             return list(cached_rows)
 
     leagues = fetch_all_leagues()
@@ -4306,6 +4306,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             try:
                 prediction = build_openmatchday_prediction(
                     raw, fixture, historical_rows=local_history,
+                    as_of_date=fixture.get("kickoff_at"),
                     model_variant="venue_weighted"
                 )
                 # Cup fixtures and teams crossing competition boundaries often
@@ -4318,6 +4319,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                     cross_competition_rows = fetch_openmatchday_team_history_rows()
                     prediction = build_openmatchday_prediction(
                         raw, fixture, historical_rows=local_history,
+                        as_of_date=fixture.get("kickoff_at"),
                         team_history_rows=cross_competition_rows,
                         model_variant="venue_weighted"
                     )
