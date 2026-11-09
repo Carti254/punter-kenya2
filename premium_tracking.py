@@ -212,7 +212,7 @@ def record_rollover_day(user_id, result, actual_odds=None):
     if result not in {"WON", "LOST", "MISSED"}:
         raise ValueError("Result must be WON, LOST or MISSED.")
     odds = None if actual_odds is None else float(actual_odds)
-    if odds is not None and (odds < 2.0 or odds > 5.0):
+    if odds is not None and (not math.isfinite(odds) or not 2.0 <= odds <= 5.0):
         raise ValueError("Actual rollover odds must be between 2.00 and 5.00.")
     status = rollover_status(user_id)
     if not status["configured"]:
