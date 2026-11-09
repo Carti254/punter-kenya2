@@ -26,8 +26,15 @@ def _generate(parts: list[dict[str, Any]], max_tokens: int = 1200) -> str:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("AI is not configured. Add GEMINI_API_KEY to the hosting environment.")
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
-    url = GEMINI_API_URL.format(model=model)
+    # Gemini 2.5 Flash is unavailable to some new API projects. Keep old
+    # Railway environment values from silently pinning the bot to that model.
+    configured_model = os.getenv("GEMINI_MODEL", "").strip()
+    retired_model_aliases = {
+        "gemini-2.5-flash": "gemini-3.8-flash",
+        "models/gemini-2.5-flash": "gemini-3.8-flash",
+    }
+    model = retired_model_aliases.get(configured_model, configured_model) or "gemini-3.8-flash"
+    url = GEMINI_API_URL.format(model=model.removeprefix("models/"))
     payload = {
         "system_instruction": {"parts": [{"text":
             "You are the request router and slip-image reader for PUNTER KENYA, a Kenyan football research Telegram bot. "
