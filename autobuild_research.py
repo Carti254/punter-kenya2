@@ -33,14 +33,24 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     if not (math.isfinite(odds) and odds > 1 and math.isfinite(probability) and 0 < probability < 1):
         return None
 
-    # The live scanner labels forecasts LOW when the combined verified
-    # recent-form sample is too small. Do not let a high quoted price turn
-    # that weak forecast into an accumulator leg.
+    # Check the underlying sample before its derived confidence label. This
+    # makes rejection diagnostics identify missing/short team history instead
+    # of masking the root cause as a generic LOW or missing confidence.
+    for sample_key, minimum in (("home_sample", 5), ("away_sample", 5)):
+        try:
+            sample_size = int(row.get(sample_key))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if sample_size < minimum:
+            return None
+
+    # Confidence remains a separate gate after the minimum sample check.
+    # A high quoted price must never turn a weak forecast into an accumulator leg.
     confidence = str(row.get("model_confidence") or "").strip().upper()
     if confidence not in {"MODERATE", "HIGH"}:
         return None
 
-    # An independently supplied external model is a disagreement check, not a
+    # An independently supplied external model is a
     # replacement probability. Large conflicts are withheld rather than averaged
     # into a deceptively precise number.
     try:
@@ -50,17 +60,9 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     if external_disagreement is not None:
         if not math.isfinite(external_disagreement) or external_disagreement > 0.10:
             return None
-    # Recent form is fundamental: both teams need at least five verified
-    # matches. Venue splits are valuable supplementary evidence, but missing
-    # venue history must downgrade the research grade rather than erase an
-    # otherwise well-supported candidate.
-    for sample_key, minimum in (("home_sample", 5), ("away_sample", 5)):
-        try:
-            sample_size = int(row.get(sample_key))
-        except (TypeError, ValueError, OverflowError):
-            return None
-        if sample_size < minimum:
-            return None
+    # Venue splits are valuable supplementary evidence, but missing venue
+    # history must downgrade the research grade rather than erase an otherwise
+    # well-supported candidate.
     try:
         home_venue_n = int(row.get("home_home_sample") or 0)
     except (TypeError, ValueError, OverflowError):
@@ -279,6 +281,14 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03, use_d
         return "missing_probability_or_price"
     if not (math.isfinite(odds) and odds > 1 and math.isfinite(probability) and 0 < probability < 1):
         return "invalid_probability_or_price"
+    # Report missing/insufficient underlying samples before the confidence
+    # label derived from those same samples, so diagnostics expose root causes.
+    for key, minimum in (("home_sample", 5), ("away_sample", 5)):
+        try:
+            if int(row.get(key)) < minimum:
+                return "insufficient_" + key
+        except (TypeError, ValueError, OverflowError):
+            return "missing_" + key
     if str(row.get("model_confidence") or "").strip().upper() not in {"MODERATE", "HIGH"}:
         return "low_or_missing_model_confidence"
     try:
@@ -287,12 +297,6 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03, use_d
         disagreement = None
     if disagreement is not None and (not math.isfinite(disagreement) or disagreement > 0.10):
         return "external_model_disagreement_over_10pct"
-    for key, minimum in (("home_sample", 5), ("away_sample", 5)):
-        try:
-            if int(row.get(key)) < minimum:
-                return "insufficient_" + key
-        except (TypeError, ValueError, OverflowError):
-            return "missing_" + key
     market_text = " ".join(str(row.get(k) or "") for k in ("market", "selection", "specifier")).casefold()
     if "btts" in market_text or "both teams to score" in market_text:
         return "excluded_btts"
