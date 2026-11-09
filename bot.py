@@ -2109,8 +2109,14 @@ async def autobuild_sportybet_command(update, context):
     try:
         # Keep all feed scanning, matching and model research internal. Telegram receives
         # only the resulting fixture shortlist and the completed slip.
-        rows, diagnostics = await asyncio.to_thread(
-            scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
+        # Bound each expensive stage so a slow upstream feed cannot leave the
+        # Telegram handler waiting indefinitely. The worker thread may finish in
+        # the background, but this request returns a controlled result to Telegram.
+        rows, diagnostics = await asyncio.wait_for(
+            asyncio.to_thread(
+                scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
+            ),
+            timeout=150,
         )
         rows = [
             x for x in rows
@@ -2120,7 +2126,10 @@ async def autobuild_sportybet_command(update, context):
         # Run optional API-Football specialist research (corners, cards, shots,
         # shots on target and first-half goals) against exact fixture/date/price matches.
         # If the provider key or a reliable exact match is absent, base candidates remain unchanged.
-        rows, specialist_stats = await asyncio.to_thread(enrich_with_specialist_models, rows)
+        rows, specialist_stats = await asyncio.wait_for(
+            asyncio.to_thread(enrich_with_specialist_models, rows),
+            timeout=45,
+        )
         # Apply one auditable research/value gate. Keep non-negative-EV candidates;
         # never silently pad a requested slip with negative-EV selections.
         rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.0)
@@ -2214,7 +2223,10 @@ async def autobuild_sportybet_command(update, context):
             return
 
         # Keep the exact fixture, market and outcome IDs returned by the odds scan.
-        resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
+        resolved = await asyncio.wait_for(
+            asyncio.to_thread(prepare_sportybet_candidates, chosen),
+            timeout=30,
+        )
         # The live SportyBet resolver returns booking fields only. Reattach the
         # exact scanner probabilities in the same order for transparent reporting.
         for live_leg, model_leg in zip(resolved, chosen):
@@ -2337,10 +2349,22 @@ async def autobuild_sportybet_command(update, context):
             if target_reached else None
         )
         await update.effective_message.reply_text("\n".join(lines), reply_markup=markup)
+    except asyncio.TimeoutError:
+        logger.error("SportyBet auto-builder timed out during fixture scan, research or price resolution.")
+        context.user_data.pop("pending_sportybet_booking", None)
+        await reply(
+            update,
+            "⏱️ The SportyBet search took too long because a fixture or odds feed did not respond in time. "
+            "No slip or booking code was created. Please try again shortly."
+        )
     except Exception as exc:
         logger.exception("SportyBet auto-builder failed")
         context.user_data.pop("pending_sportybet_booking", None)
-        await reply(update, f"SportyBet scan failed: {type(exc).__name__}: {str(exc)[:180]}")
+        await reply(
+            update,
+            "⚠️ I couldn't complete the SportyBet search because a data or price check failed. "
+            "No slip or booking code was created. Please try again shortly."
+        )
 
 
 async def accumulator_status_command(update, context):
