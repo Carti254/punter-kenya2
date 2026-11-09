@@ -59,9 +59,38 @@ def _country_key(value):
     }
     return aliases.get(raw, raw)
 
-def competition_code(competition, country):
+def _split_competition_country(competition, country):
     country_name = _country_key(country)
     league_name = _key(competition)
+    # SportyBet frequently embeds the country in the competition label rather
+    # than supplying a separate country field, e.g. "Spain - La Liga".
+    if not country_name:
+        prefixes = {
+            "england": ("england", "english"),
+            "scotland": ("scotland", "scottish"),
+            "germany": ("germany", "german", "deutschland"),
+            "italy": ("italy", "italian"),
+            "spain": ("spain", "spanish", "espana"),
+            "france": ("france", "french"),
+            "netherlands": ("netherlands", "dutch", "holland"),
+            "belgium": ("belgium", "belgian"),
+            "portugal": ("portugal", "portuguese"),
+            "turkey": ("turkey", "turkish"),
+            "greece": ("greece", "greek"),
+        }
+        for country_key, names in prefixes.items():
+            for name in names:
+                match = re.match(r"^" + re.escape(name) + r"\\s*(?:[-:|>]\\s*)", league_name)
+                if match:
+                    country_name = country_key
+                    league_name = league_name[match.end():].strip()
+                    break
+            if country_name:
+                break
+    return country_name, league_name
+
+def competition_code(competition, country):
+    country_name, league_name = _split_competition_country(competition, country)
     divisions = COMPETITIONS.get(country_name, {})
     # Exact alias matching only: avoid mapping a cup/youth/reserve event to a
     # similarly named senior league.
