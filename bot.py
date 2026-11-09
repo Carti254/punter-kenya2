@@ -2161,7 +2161,14 @@ async def autobuild_sportybet_command(update, context):
                 scanned_count, research_stats.get("rejected", 0),
                 big_five_excluded, specialist_stats.get("reason"), diagnostics,
             )
-            await reply(update, f"🚫 NO QUALIFYING SPORTYBET SLIP — {target:.2f} TARGET")
+            await reply(
+                update,
+                f"🚫 NO MODEL-QUALIFIED SPORTYBET SELECTIONS — {target:.2f} TARGET\\n"
+                f"SportyBet/model candidates scanned: {scanned_count}\\n"
+                f"Rejected by research checks: {research_stats.get('rejected', 0)}\\n"
+                f"Big-Five top-flight exclusions: {big_five_excluded}\\n"
+                "No selections passed the historical-data, exact-market and value checks."
+            )
             return
 
         # Research every eligible row first; the target is used only by the
@@ -2177,7 +2184,12 @@ async def autobuild_sportybet_command(update, context):
                 "SportyBet autobuild: only %s qualifying fixture(s); rows=%s stats=%s diagnostics=%s",
                 len(qualified_fixture_keys), len(rows), research_stats, diagnostics,
             )
-            await reply(update, f"🚫 NO QUALIFYING SPORTYBET SLIP — {target:.2f} TARGET")
+            await reply(
+                update,
+                f"🚫 NOT ENOUGH QUALIFIED FIXTURES — {target:.2f} TARGET\\n"
+                f"Qualified fixtures: {len(qualified_fixture_keys)}; at least 2 distinct fixtures are required.\\n"
+                f"Qualified market selections: {len(rows)}."
+            )
             return
 
         build = build_accumulator(
@@ -2196,7 +2208,13 @@ async def autobuild_sportybet_command(update, context):
                 "SportyBet autobuild: no target-reaching combination; rows=%s fixtures=%s stats=%s",
                 len(rows), fixture_count, research_stats,
             )
-            await reply(update, f"🚫 NO QUALIFYING SPORTYBET SLIP — {target:.2f} TARGET")
+            await reply(
+                update,
+                f"🚫 NO  {target:.2f} COMBINATION FOUND\\n"
+                f"Qualified fixtures: {fixture_count}; eligible selections: {len(rows)}.\\n"
+                f"Reason: no combination of distinct fixtures reached the target within the permitted odds range.\\n"
+                "No weak filler selections were added."
+            )
             return
 
         resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
