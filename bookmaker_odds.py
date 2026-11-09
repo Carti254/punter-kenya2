@@ -152,9 +152,6 @@ def fetch_sportybet(day: date | None = None, max_pages=60):
                         "pageNum": page,
                         "option": "2",
                         "todayGames": "false",
-                        # Include the full today/tomorrow request horizon; 720 minutes
-                        # silently omitted fixtures later tomorrow and often returned empty slates.
-                        "timeline": 2880,
                         "_t": int(time.time() * 1000),
                     },
                     headers=headers,
