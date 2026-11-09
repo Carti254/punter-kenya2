@@ -83,7 +83,16 @@ def _json_from_response(raw: str) -> dict[str, Any]:
 
 
 def _plain_fixture_request(message: str) -> dict[str, Any] | None:
-    """Route an unambiguous 'Home vs Away' message without depending on Gemini."""
+    """Route only a bare 'Home vs Away' message without depending on Gemini."""
+    # Requests with an instruction prefix (e.g. "Analyse Arsenal vs Chelsea")
+    # need intent extraction; do not mistake the verb for part of the home team.
+    if re.match(
+        r"^(?:analyse|analyze|show|check|predict|research|deep\s+dive|"
+        r"tell\s+me\s+about|odds\s+for|find|compare)\b",
+        message.strip(),
+        flags=re.IGNORECASE,
+    ):
+        return None
     match = re.fullmatch(r"\s*(.+?)\s+(?:vs?\.?|v)\s+(.+?)\s*", message, flags=re.IGNORECASE)
     if not match:
         return None
