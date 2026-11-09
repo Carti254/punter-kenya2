@@ -3315,53 +3315,66 @@ async def live(
 
 def team_name_matches_query(query_name, actual_name):
     """
-    Match full and abbreviated provider team names.
-    Examples: Atletico Madrid <-> Atl. Madrid; Athletic Bilbao <-> Ath Bilbao.
+    Match provider variants conservatively but more flexibly across competitions.
+    Handles accents, punctuation, club suffixes, common abbreviations and reordered
+    names without accepting a match based on a single generic token.
     """
+    from difflib import SequenceMatcher
+
+    ignored = {
+        "fc", "cf", "sc", "afc", "club", "football", "soccer", "the",
+        "de", "del", "da", "do", "dos", "la", "el", "ud", "cd", "ac",
+        "as", "sv", "fk", "sk", "bk", "if", "ik", "ks", "calcio",
+    }
+    aliases = {
+        "atl": "atletico", "ath": "athletic", "dep": "deportivo",
+        "man utd": "manchester united", "man city": "manchester city",
+        "inter": "internazionale", "psv eindhoven": "psv",
+        "sporting lisbon": "sporting cp", "red star": "crvena zvezda",
+        "bayern munich": "bayern munchen", "paris saint germain": "paris sg",
+    }
+
     def normalised(value):
         value = unicodedata.normalize("NFKD", str(value or ""))
         value = "".join(ch for ch in value if not unicodedata.combining(ch))
-        words = re.findall(r"[a-z0-9]+", value.casefold())
-        phrase = " ".join(words)
-
-        aliases = {
-            "atl madrid": "atletico madrid",
-            "atletico de madrid": "atletico madrid",
-            "ath bilbao": "athletic bilbao",
-            "athletic club": "athletic bilbao",
-            "dep la coruna": "deportivo la coruna",
-            "deportivo coruna": "deportivo la coruna",
-        }
+        phrase = " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
         phrase = aliases.get(phrase, phrase)
-        return phrase
+        tokens = [token for token in phrase.split() if token not in ignored]
+        return " ".join(tokens)
 
     wanted_phrase = normalised(query_name)
     actual_phrase = normalised(actual_name)
     if not wanted_phrase or not actual_phrase:
         return False
+    if wanted_phrase == actual_phrase:
+        return True
+
     wanted = set(wanted_phrase.split())
     actual = set(actual_phrase.split())
+    if not wanted or not actual:
+        return False
+    overlap = len(wanted & actual)
+    if overlap == 0:
+        return False
+
+    # A complete shorter name contained in the longer name is a strong match.
     if wanted.issubset(actual) or actual.issubset(wanted):
         return True
 
-    # Tolerate small spelling errors such as Brenford/Brentford while still
-    # requiring both sides of the fixture to match independently.
-    if min(len(wanted_phrase), len(actual_phrase)) >= 6:
-        if SequenceMatcher(None, wanted_phrase, actual_phrase).ratio() >= 0.88:
-            return True
+    # Token overlap helps when one provider adds a city/club word or reverses
+    # a multi-word name. Require at least two shared meaningful tokens.
+    containment = overlap / min(len(wanted), len(actual))
+    jaccard = overlap / len(wanted | actual)
+    if overlap >= 2 and containment >= 0.80 and jaccard >= 0.50:
+        return True
 
-    # Allow common provider short forms when all remaining words agree.
-    abbreviations = {
-        "atletico": {"atl"},
-        "athletic": {"ath"},
-        "deportivo": {"dep"},
-    }
-    for full, short_forms in abbreviations.items():
-        if full in wanted and (short_forms & actual):
-            wanted = (wanted - {full}) | (short_forms & actual)
-        if full in actual and (short_forms & wanted):
-            actual = (actual - {full}) | (short_forms & wanted)
-    return wanted == actual
+    # Allow moderate spelling/abbreviation variation, but never fuzzy-match
+    # short single-word clubs or names sharing only one token.
+    if min(len(wanted_phrase), len(actual_phrase)) >= 8 and overlap >= 1:
+        ratio = SequenceMatcher(None, wanted_phrase, actual_phrase).ratio()
+        if ratio >= 0.82 and containment >= 0.50:
+            return True
+    return False
 
 
 # ============================================================
