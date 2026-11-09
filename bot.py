@@ -2118,24 +2118,9 @@ async def autobuild_sportybet_command(update, context):
             rank_mode = lowered.split("=", 1)[1]
         elif lowered.startswith("market="):
             market_parts.append(token.split("=", 1)[1])
-        elif lowered.startswith("legs="):
-            try:
-                min_legs = max_legs = int(lowered.split("=", 1)[1])
-            except ValueError:
-                await reply(update, "Use legs=1 to 20, for example /autobuild 50 legs=8.")
-                return
-        elif lowered.startswith("minlegs="):
-            try:
-                min_legs = int(lowered.split("=", 1)[1])
-            except ValueError:
-                await reply(update, "Use minlegs=1 to 20.")
-                return
-        elif lowered.startswith("maxlegs="):
-            try:
-                max_legs = int(lowered.split("=", 1)[1])
-            except ValueError:
-                await reply(update, "Use maxlegs=1 to 20.")
-                return
+        elif lowered.startswith(("legs=", "minlegs=", "maxlegs=")):
+            await reply(update, "Leg-count controls have been removed. Enter only your target combined odds; PUNTER chooses the number of legs automatically.")
+            return
         elif lowered in ("value", "odds", "probability", "parlay"):
             rank_mode = lowered
         else:
