@@ -278,6 +278,50 @@ def enrich_candidates_with_price_history(rows, max_snapshots=12):
                     """, (bookmaker, home, away, market, selection, day,
                           max(2, min(int(max_snapshots), 30))))
                     snapshots = cursor.fetchall()
+                    cursor.execute("""
+                        SELECT bookmaker, decimal_odds, fetched_at
+                        FROM punter_odds_snapshots
+                        WHERE LOWER(home_team)=LOWER(%s)
+                          AND LOWER(away_team)=LOWER(%s)
+                          AND LOWER(market_name)=LOWER(%s)
+                          AND LOWER(selection_name)=LOWER(%s)
+                          AND LOWER(bookmaker)<>LOWER(%s)
+                          AND DATE(kickoff_eat)=%s
+                        ORDER BY fetched_at DESC LIMIT 30
+                    """, (home, away, market, selection, bookmaker, day))
+                    cross_rows = cursor.fetchall()
+                    latest_by_bookmaker = {}
+                    for cross in cross_rows or []:
+                        name = str(cross.get("bookmaker") or "Unknown")
+                        if name.casefold() in latest_by_bookmaker:
+                            continue
+                        try:
+                            price = float(cross["decimal_odds"])
+                            if math.isfinite(price) and price > 1:
+                                latest_by_bookmaker[name.casefold()] = {
+                                    "bookmaker": name, "odds": price,
+                                    "captured_at": str(cross["fetched_at"]),
+                                }
+                        except (TypeError, ValueError, KeyError):
+                            continue
+                    other_prices = sorted(latest_by_bookmaker.values(), key=lambda x: x["odds"], reverse=True)
+                    if other_prices:
+                        row["other_bookmaker_prices"] = other_prices
+                        row["best_other_bookmaker"] = other_prices[0]
+                        row["cross_bookmaker_edge"] = other_prices[0]["odds"] / odds - 1.0
+                        row["other_bookmaker_evidence"] = {
+                            "provider": "PUNTER multi-bookmaker snapshots",
+                            "status": "observed",
+                            "bookmakers_compared": len(other_prices),
+                            "best_reference": other_prices[0],
+                            "note": "Exact fixture/market/selection snapshot comparison; quotes may not be simultaneous.",
+                        }
+                    else:
+                        row["other_bookmaker_evidence"] = {
+                            "provider": "PUNTER multi-bookmaker snapshots",
+                            "status": "insufficient_history",
+                            "bookmakers_compared": 0,
+                        }
                     values = []
                     for snap in reversed(snapshots or []):
                         try:
