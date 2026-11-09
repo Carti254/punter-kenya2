@@ -24,6 +24,19 @@ class AutobuildResearchTests(unittest.TestCase):
         self.assertEqual(row["value_tier"], "B")
         self.assertIn("not established", row["value_label"])
 
+    def test_dixon_coles_recalculates_1x2_when_goal_rates_exist(self):
+        from dixon_coles_engine import selected_outcome_probability
+        row = assess_candidate(self.candidate(lambda_home=1.8, lambda_away=0.9))
+        expected = selected_outcome_probability(1.8, 0.9, "Home", "Home FC", "Away FC")
+        self.assertTrue(row["dixon_coles_adjusted"])
+        self.assertEqual(row["probability_source"].split(" (")[0], "Dixon-Coles Poisson")
+        self.assertAlmostEqual(row["probability"], expected)
+
+    def test_dixon_coles_is_not_used_without_goal_rates(self):
+        row = assess_candidate(self.candidate())
+        self.assertFalse(row["dixon_coles_adjusted"] if "dixon_coles_adjusted" in row else False)
+        self.assertEqual(row["probability"], 0.52)
+
     def test_negative_ev_is_rejected_by_zero_floor(self):
         self.assertIsNone(assess_candidate(self.candidate(odds=2.0, probability=0.49)))
 
