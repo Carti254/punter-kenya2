@@ -119,7 +119,11 @@ def assess_candidate_risk(row: dict) -> dict:
         except (KeyError, TypeError, ValueError, OverflowError):
             gaps.append("xG evidence could not be compared with goal-model expectations")
 
-    level = "HIGH" if reject or score >= 3 else "MEDIUM" if score >= 1 else "LOW"
+    # Several independent warning signs together are enough to exclude a leg,
+    # even when no single signal crosses the hard-stop threshold.
+    if score >= 3:
+        reject = True
+    level = "HIGH" if reject else "MEDIUM" if score >= 1 else "LOW"
     return {
         "risk_score": score,
         "risk_level": level,
