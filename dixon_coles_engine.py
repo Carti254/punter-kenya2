@@ -38,9 +38,15 @@ def _valid_results(rows, before_date=None):
             continue
         day = _match_date(row.get("date") or row.get("match_date"))
         home, away = _team_key(row.get("home")), _team_key(row.get("away"))
+        def score_value(*keys):
+            for key in keys:
+                value = row.get(key)
+                if value is not None and str(value).strip() != "":
+                    return value
+            return None
         try:
-            hg = int(row.get("ft_home", row.get("home_goals")))
-            ag = int(row.get("ft_away", row.get("away_goals")))
+            hg = int(score_value("ft_home", "home_goals", "homeGoals", "home_score", "homeScore"))
+            ag = int(score_value("ft_away", "away_goals", "awayGoals", "away_score", "awayScore"))
         except (TypeError, ValueError, OverflowError):
             continue
         if not day or (cutoff and day >= cutoff) or not home or not away:
