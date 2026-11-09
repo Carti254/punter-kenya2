@@ -934,9 +934,11 @@ def fetch_openmatchday_fixture_rows(days=14, league_id=None, day_filter=None):
             })
         return output
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    # The index contains 75 competitions. Consume whichever request completes
+    # first so one slow league cannot block already completed fixture feeds.
+    with ThreadPoolExecutor(max_workers=min(32, max(8, len(leagues)))) as pool:
         futures = [pool.submit(fetch_one, league) for league in leagues]
-        for future in futures:
+        for future in as_completed(futures):
             try:
                 collected.extend(future.result())
             except Exception as exc:
@@ -3953,53 +3955,12 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     if not target_dates:
         return [], ["No scan dates were requested."]
 
-    # The previous implementation downloaded every competition CSV and paged
-    # through SportyBet separately for each date. That doubled the slowest
-    # network work for the normal today+tomorrow autobuild.
+    # Keep optional BSD/PitchAPI discovery out of the critical scan path.
+    # Those sources still enrich matched candidates later, but cannot block
+    # primary fixture retrieval and SportyBet price matching.
     try:
         raw_fixtures = fetch_openmatchday_fixture_rows(14, None, None)
         all_fixtures = upcoming_fixtures(raw_fixtures)
-        # Union in fixtures from the optional free BSD/PitchAPI catalogues.
-        # Deduplicate by EAT day and home/away identity, preserving open-matchday
-        # history rows where both sources list the same match.
-        try:
-            free_fixture_rows = fetch_free_provider_fixtures(sorted(target_dates))
-            existing_fixture_keys = set()
-            for _, item in all_fixtures:
-                kickoff = item.get("kickoff_at")
-                if not kickoff:
-                    continue
-                local_day = kickoff.replace(tzinfo=timezone.utc).astimezone(EAT).date()
-                existing_fixture_keys.add((
-                    local_day.isoformat(),
-                    canonical_team_key(item.get("home_team")),
-                    canonical_team_key(item.get("away_team")),
-                ))
-            added_free_fixtures = 0
-            for raw_free in free_fixture_rows:
-                item = normalise_fixture(raw_free)
-                if not item or not item.get("kickoff_at"):
-                    continue
-                local_day = item["kickoff_at"].replace(tzinfo=timezone.utc).astimezone(EAT).date()
-                if local_day not in target_dates:
-                    continue
-                fixture_key = (
-                    local_day.isoformat(),
-                    canonical_team_key(item.get("home_team")),
-                    canonical_team_key(item.get("away_team")),
-                )
-                if fixture_key in existing_fixture_keys:
-                    continue
-                existing_fixture_keys.add(fixture_key)
-                all_fixtures.append((raw_free, item))
-                added_free_fixtures += 1
-            all_fixtures.sort(key=lambda pair: pair[1].get("kickoff_at") or datetime.max)
-            logger.info(
-                "Free fixture catalogues added %s unique upcoming fixtures (BSD/PitchAPI).",
-                added_free_fixtures,
-            )
-        except Exception as free_fixture_error:
-            logger.warning("Optional free fixture discovery failed: %s", free_fixture_error)
         progress(f"Step 2/4: fixture catalogue ready ({len(all_fixtures)} upcoming fixtures). Fetching SportyBet prices…")
     except Exception as exc:
         raise RuntimeError(f"Fixture catalogue failed: {type(exc).__name__}: {str(exc)[:180]}") from exc
@@ -4024,7 +3985,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
 
     try:
         if str(bookmaker_only or "").casefold() == "sportybet":
-            priced_games = fetch_sportybet_odds(sorted(target_dates))
+            priced_games = fetch_sportybet_odds(sorted(target_dates), max_pages=12)
             feed_errors = {}
             progress(f"Step 3/4: SportyBet returned {len(priced_games)} priced events. Matching fixtures and checking markets…")
         else:
