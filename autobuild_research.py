@@ -298,6 +298,8 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03, use_d
     if disagreement is not None and (not math.isfinite(disagreement) or disagreement > 0.10):
         return "external_model_disagreement_over_10pct"
     market_text = " ".join(str(row.get(k) or "") for k in ("market", "selection", "specifier")).casefold()
+    if "draw no bet" in market_text or re.search(r"(?<![a-z])dnb(?![a-z])", market_text):
+        return None
     if "btts" in market_text or "both teams to score" in market_text:
         return "excluded_btts"
     if "under 2.5" in market_text or ("under" in market_text and "2.5" in str(row.get("specifier") or "")):
