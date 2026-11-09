@@ -94,6 +94,13 @@ jobs:
                       f"{provider} endpoint responded but returned zero priced fixtures across the checked dates; "
                       "fixture/market retrieval is NOT validated."
                   )
+              if provider == "SportyBet":
+                  detail_total = sum(int(item.get("event_detail_events", 0) or 0) for item in successful)
+                  if detail_total == 0:
+                      raise SystemExit(
+                          "SportyBet index returned prices, but no event-detail market catalogue was retrieved; "
+                          "full-market retrieval is NOT validated."
+                      )
           PY
 
   historical-calibration:
