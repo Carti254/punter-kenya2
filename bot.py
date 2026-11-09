@@ -2308,15 +2308,17 @@ async def autobuild_sportybet_command(update, context):
                                  "other_bookmaker_evidence"):
                 live_leg[evidence_key] = model_leg.get(evidence_key)
         combined = math.prod(float(x["odds"]) for x in resolved)
-        combined_probability = math.prod(float(x["probability"]) for x in resolved)
+        # Preserve the accumulator engine's dependence adjustment. Recomputing
+        # this as a plain product here would silently discard that adjustment.
+        naive_probability = float(build.get("naive_independent_probability") or
+                                  math.prod(float(x["probability"]) for x in resolved))
+        combined_probability = float(build.get("combined_probability") or naive_probability)
         target_reached = target <= combined <= target * 1.20
         if target_reached:
             context.user_data["pending_sportybet_booking"] = resolved
         else:
             context.user_data.pop("pending_sportybet_booking", None)
 
-        # Keep the Telegram response focused on the finished slip. All evidence,
-        # model checks and risk screening happen internally before this point.
         lines = [
             (f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET" if target_reached
              else f"⚠️ BEST AVAILABLE SLIP — {target:.2f} TARGET NOT REACHED"),
@@ -2325,36 +2327,59 @@ async def autobuild_sportybet_command(update, context):
             "",
         ]
         for i, leg in enumerate(resolved, 1):
-            lines.append(
-                f"{i}. {leg['fixture']} — {leg['market']}: "
-                f"{leg['selection']} @ {float(leg['odds']):.2f}"
-            )
+            lines.append(f"{i}. {leg['fixture']} — {leg['market']}: {leg['selection']} @ {float(leg['odds']):.2f}")
         lines.append("")
         if not target_reached:
-            lines.append(f"Target not reached. This is the closest valid construction from {available_fixtures} fixtures and {len(rows)} eligible selections; no booking code is available.")
-        # Report the actual evidence attached to each selected candidate. Missing
-        # feeds are never represented as completed checks.
-        for i, leg in enumerate(resolved, 1):
+            lines.append(f"Target not reached. Best available construction from {available_fixtures} fixtures and {len(rows)} eligible selections; no booking code is available.")
+        for leg in resolved:
             checks = leg.get("research_checks") or []
-            gaps = leg.get("research_gaps") or []
+            gaps = list(leg.get("research_gaps") or [])
             ai_review = leg.get("ai_research_review") or {}
             source = leg.get("probability_source") or "PUNTER statistical model"
-            lines.append(f"   Model: {source}; estimated probability {float(leg.get('probability') or 0):.1%}; EV {float(leg.get('ev') or 0):+.1%}.")
+            lines.append(f"Model: {source}; single-leg estimate {float(leg.get('probability') or 0):.1%}; EV {float(leg.get('ev') or 0):+.1%}.")
             if checks:
-                lines.append("   Verified inputs: " + "; ".join(checks[:4]) + ".")
+                lines.append("Verified inputs: " + "; ".join(checks[:5]) + ".")
+            lineup = leg.get("lineup_evidence") or {}
+            sides = lineup.get("sides") or []
+            if sides:
+                lines.append("Confirmed starting lineups: " + ", ".join(str(x.get("team") or "Team") for x in sides) + ".")
+            news = leg.get("team_news_evidence") or {}
+            absences = news.get("reported_absences") or []
+            if absences:
+                lines.append(f"Reported injury/suspension entries: {len(absences)} (provider feed; verify names/status).")
+            xg = leg.get("xg_evidence") or {}
+            if xg:
+                lines.append(f"xG sample: home {xg.get('home_sample')} matches, avg {float(xg.get('home_xg_average') or 0):.2f}; away {xg.get('away_sample')} matches, avg {float(xg.get('away_xg_average') or 0):.2f}.")
+            tactical = leg.get("tactical_evidence") or {}
+            if tactical:
+                for side in ("home", "away"):
+                    profile = tactical.get(side) or {}
+                    if profile:
+                        lines.append(f"{side.title()} recent-stat profile: {profile.get('descriptive_style','no clear signal')}; sample {profile.get('matches_sampled',0)}.")
+            history = leg.get("odds_history_evidence") or {}
+            if history.get("status") == "observed":
+                lines.append(f"Observed odds movement: {history.get('movement_direction')} {float(history.get('movement_fraction') or 0):+.1%} across {history.get('observations')} snapshots.")
+            else:
+                lines.append("Odds movement: not established (fewer than two exact historical snapshots or feed unavailable).")
+            other = leg.get("best_other_bookmaker")
+            if other:
+                lines.append(f"Other bookmaker reference: {other.get('bookmaker')} @ {float(other.get('odds') or 0):.2f} (quotes may not be simultaneous).")
+            calibration = leg.get("calibration_evidence") or {}
+            if calibration:
+                lines.append(f"Calibration evidence: holdout n={calibration.get('holdout')}; temperature={calibration.get('temperature')}.")
             if ai_review.get("assessment"):
-                lines.append("   AI evidence review: " + str(ai_review["assessment"])[:220])
+                lines.append("Gemini evidence review: " + str(ai_review["assessment"])[:220])
             if ai_review.get("risk_flags"):
-                lines.append("   AI risk flags: " + "; ".join(ai_review["risk_flags"][:2]))
-            missing = list(gaps)
+                lines.append("AI risk flags: " + "; ".join(ai_review["risk_flags"][:3]))
             if not leg.get("ai_research_review"):
-                missing.append("Gemini evidence review not completed for this fixture")
-            if missing:
-                lines.append("   Not verified: " + "; ".join(dict.fromkeys(missing)) + ".")
+                gaps.append("Gemini evidence review not completed for this fixture")
+            if gaps:
+                lines.append("Not verified: " + "; ".join(dict.fromkeys(gaps)) + ".")
         if ai_research_stats.get("reason"):
             lines.append("AI research status: " + str(ai_research_stats["reason"])[:220])
-        lines.append("Accumulator probability is a product under an independence assumption; cross-fixture dependence is not fully modelled.")
-        lines.append("Model estimates are not guarantees; odds can change.")
+        lines.append(f"Naive independent-leg probability product: {naive_probability:.2%}.")
+        lines.append(f"Dependence-adjusted model estimate: {combined_probability:.2%} (factor {float(build.get('correlation_adjustment_factor') or 1.0):.3f}).")
+        lines.append(str(build.get("correlation_note") or "Cross-fixture dependence is not fully measured; accumulator probability is experimental."))
         lines.append("Model estimates are not guarantees; odds can change.")
         markup = (
             InlineKeyboardMarkup([[
