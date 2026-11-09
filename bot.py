@@ -2518,7 +2518,7 @@ async def accumulator_status_command(update, context):
         "",
         f"Naive independent-leg probability product: {naive_probability_product:.2%}",
         f"Dependence-adjusted model estimate: {probability_product:.2%} (factor {build.get('correlation_adjustment_factor', 1.0):.3f}).",
-        "Same-competition/date dependence uses a conservative heuristic haircut, not measured pairwise correlation; this is not a calibrated accumulator probability.",
+        "Combined probability is the product of leg probabilities under an independence assumption; actual cross-match dependence is not measured.",
     ])
     if build.get("correlation_warnings"):
         lines.append("Correlation warning: " + "; ".join(build["correlation_warnings"]))
