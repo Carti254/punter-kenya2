@@ -150,22 +150,32 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
             return (-((odds_now / target) - 1.0), secondary, probability_now, -len(picks))
         best = max(completed, key=completion_score)
     else:
-        # Return the best available partial construction, never pretend target was met.
-        all_states = eligible_partials or states
-        if not all_states:
-            all_states = [([], 1.0, 1.0, frozenset(), 0)]
-        # A fallback is meant to be the closest sensible slip to the requested
-        # target, not merely the single leg with the largest expected-return
-        # factor. Only partials within the existing 20% tolerance are eligible;
-        # this prevents a small target from being "filled" with an extreme longshot.
-        def fallback_score(state):
-            _, odds_now, probability_now, _, _ = state
-            distance = -abs(math.log(target / odds_now))
-            value = odds_now * probability_now
-            if ranking == "probability":
-                return (distance, probability_now, value, -len(state[0]))
-            return (distance, value, probability_now, -len(state[0]))
-        best = max(all_states, key=fallback_score)
+        # A target-only accumulator must never be silently downgraded to a
+        # lower-odds single or partial selection. If no distinct-fixture
+        # combination reaches the requested target within the allowed
+        # overshoot, return NO QUALIFYING SLIP and let the caller explain why.
+        # In particular, do not label a below-target partial as "best available".
+        return {
+            "selections": [],
+            "combined_odds": 1.0,
+            "combined_probability": 0.0,
+            "naive_independent_probability": 0.0,
+            "correlation_adjustment_factor": 1.0,
+            "expected_return_factor": 0.0,
+            "expected_roi": 0.0,
+            "target_reached": False,
+            "independence_assumption": True,
+            "correlation_warnings": [],
+            "correlation_note": (
+                "No accumulator was generated because no valid combination "
+                "reached the requested target."
+            ),
+            "reason": (
+                f"No qualifying combination found between {target:.2f} and "
+                f"{target * 1.20:.2f} from {fixture_count} distinct eligible fixtures. "
+                "No lower-odds substitute was generated."
+            ),
+        }
     picks, odds_product, probability_product, _, _ = best
     naive_probability_product = math.prod(item["probability"] for item in picks)
     correlation_adjustment_factor = (
