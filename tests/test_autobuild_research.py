@@ -124,6 +124,16 @@ class AutobuildResearchTests(unittest.TestCase):
         row = self.candidate(model_confidence="MODERATE", home_sample=4, away_sample=10)
         self.assertIsNone(assess_candidate(row))
 
+    def test_missing_model_confidence_is_rejected(self):
+        self.assertIsNone(assess_candidate(self.candidate(model_confidence=None)))
+
+    def test_material_external_model_disagreement_is_rejected(self):
+        self.assertIsNone(assess_candidate(self.candidate(external_model_disagreement=0.1313)))
+
+    def test_small_external_model_disagreement_is_retained(self):
+        row = assess_candidate(self.candidate(external_model_disagreement=0.05))
+        self.assertIsNotNone(row)
+
     def test_missing_venue_samples_are_rejected(self):
         row = self.candidate(home_home_sample=None, away_away_sample=5)
         self.assertIsNone(assess_candidate(row))
