@@ -58,6 +58,24 @@ class AutobuildResearchTests(unittest.TestCase):
         self.assertTrue(audited["probability_source"].startswith("Dixon-Coles + walk-forward"))
         self.assertTrue(audited["research_evidence"]["calibration_evidence"]["applied"])
 
+    def test_walk_forward_calibration_does_not_overwrite_specialist_probability(self):
+        rows = [self.candidate(
+            lambda_home=1.8, lambda_away=0.9, probability=0.52,
+            probability_source="API-Football recent-form specialist Poisson baseline (experimental)",
+        )]
+        validation = {
+            "ready": True, "temperature": 1.2, "train": 100, "holdout": 40,
+            "raw_brier": 0.20, "raw_logloss": 0.60,
+            "candidate_brier": 0.18, "candidate_logloss": 0.58,
+            "candidate_calibrated_brier": 0.17, "candidate_calibrated_logloss": 0.56,
+            "baseline_brier": 0.22, "baseline_logloss": 0.65,
+            "source": "unit test",
+        }
+        result, status = apply_walk_forward_calibration(rows, validation)
+        self.assertFalse(status["applied"])
+        self.assertEqual(result[0]["probability"], 0.52)
+        self.assertTrue(result[0]["probability_source"].startswith("API-Football"))
+
     def test_walk_forward_calibration_requires_both_candidate_metrics_to_improve(self):
         rows = [self.candidate(lambda_home=1.8, lambda_away=0.9)]
         validation = {
