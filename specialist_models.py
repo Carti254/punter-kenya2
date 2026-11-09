@@ -20,6 +20,11 @@ STAT_ALIASES = {
     "yellow_cards": ("yellow cards",),
     "red_cards": ("red cards",),
     "xg": ("expected goals", "expected_goals", "xg"),
+    "possession": ("ball possession", "possession"),
+    "passes": ("total passes", "passes"),
+    "tackles": ("total tackles", "tackles"),
+    "fouls": ("fouls",),
+    "offsides": ("offsides",),
 }
 
 
@@ -91,9 +96,12 @@ def _recent_team_observations(team_id, before_date, api_key, session, last=5):
         except (TypeError, ValueError):
             pass
         obs = {"half_time_goals": ht_total}
+        home_id = (teams.get("home") or {}).get("id")
+        own_stats = home_stats if str(home_id) == str(team_id) else away_stats
         for key, aliases in STAT_ALIASES.items():
             h, a = _value(home_stats, aliases), _value(away_stats, aliases)
             obs[key] = (h + a) if h is not None and a is not None else None
+            obs["team_" + key] = _value(own_stats, aliases)
         observations.append(obs)
     return observations
 
@@ -183,6 +191,31 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
     home_rows = _recent_team_observations(home_team["id"], target, key, session, last)
     away_rows = _recent_team_observations(away_team["id"], target, key, session, last)
 
+    def tactical_profile(team_rows):
+        fields = ("team_possession", "team_shots", "team_shots_on_target",
+                  "team_corners", "team_passes", "team_tackles", "team_fouls", "team_offsides")
+        profile = {}
+        for field in fields:
+            values = [float(r[field]) for r in team_rows if r.get(field) is not None]
+            if len(values) >= 3:
+                profile[field.removeprefix("team_") + "_average"] = round(sum(values) / len(values), 2)
+        sample_counts = [len([r for r in team_rows if r.get(field) is not None]) for field in fields]
+        profile["matches_sampled"] = max(sample_counts, default=0)
+        if "possession_average" in profile and profile["possession_average"] >= 55:
+            profile["descriptive_style"] = "higher-possession profile in this sample"
+        elif "possession_average" in profile and profile["possession_average"] <= 45:
+            profile["descriptive_style"] = "lower-possession profile in this sample"
+        else:
+            profile["descriptive_style"] = "no clear possession-style signal in this sample"
+        profile["provider"] = "API-Football fixture statistics"
+        profile["warning"] = "Descriptive recent-stat profile only; not video scouting or proof of tactical intent."
+        return profile if profile["matches_sampled"] >= 3 else None
+
+    tactical_evidence = {
+        "home": tactical_profile(home_rows),
+        "away": tactical_profile(away_rows),
+    }
+
     panels = []
     specs = [
         ("corners", "Corners analyst", "corners", 8.5),
@@ -225,6 +258,7 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
         "lineup_evidence": lineup_evidence,
         "team_news_evidence": team_news_evidence,
         "xg_evidence": xg_evidence,
+        "tactical_evidence": tactical_evidence,
         "provider_warnings": provider_warnings,
         "council": {
             "available_panels": len(available),
