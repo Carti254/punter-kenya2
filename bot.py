@@ -2123,7 +2123,7 @@ async def autobuild_sportybet_command(update, context):
         rows, specialist_stats = await asyncio.to_thread(enrich_with_specialist_models, rows)
         # Apply one auditable research/value gate. Keep non-negative-EV candidates;
         # never silently pad a requested slip with negative-EV selections.
-        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=-1.0)
+        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.0)
 
         # Present a clean shortlist after the silent scan. Group alternative markets
         # under their fixture so users can see the actual match coverage at a glance.
@@ -2255,8 +2255,6 @@ async def autobuild_sportybet_command(update, context):
                 f"{i}. {leg['fixture']} — {leg['market']}: "
                 f"{leg['selection']} @ {leg['odds']:.2f}"
             )
-            assessment = "Positive estimated value" if float(leg.get("ev") or 0) > 0 else "Break-even estimate; no positive edge established"
-            lines.append(f"   Internal price assessment: {assessment}")
             lines.append(
                 f"   Model probability: {float(leg['probability']):.1%} "
                 f"| Source: {leg.get('probability_source') or 'PUNTER statistical model'}"
@@ -2290,14 +2288,20 @@ async def autobuild_sportybet_command(update, context):
                     f"| {specialist.get('model') or 'experimental'}"
                 )
             evidence = leg.get("research_evidence") or {}
-            lines.append(
-                f"   Form: {evidence.get('home_form') or 'n/a'} / {evidence.get('away_form') or 'n/a'} "
-                f"({evidence.get('home_sample') or 0}/{evidence.get('away_sample') or 0} matches)"
-            )
-            lines.append(
-                f"   Venue samples: home {evidence.get('home_home_sample') or 0}; "
-                f"away {evidence.get('away_away_sample') or 0}; H2H {evidence.get('h2h_count') or 0}"
-            )
+            home_n, away_n = int(evidence.get("home_sample") or 0), int(evidence.get("away_sample") or 0)
+            if home_n and away_n:
+                lines.append(
+                    f"   Recent form: {evidence.get('home_form') or 'available'} / "
+                    f"{evidence.get('away_form') or 'available'} ({home_n}/{away_n} matches)"
+                )
+            venue_n = int(evidence.get("home_home_sample") or 0) + int(evidence.get("away_away_sample") or 0)
+            if venue_n:
+                lines.append(
+                    f"   Venue evidence: home {int(evidence.get('home_home_sample') or 0)}; "
+                    f"away {int(evidence.get('away_away_sample') or 0)}"
+                )
+            if evidence.get("h2h_count"):
+                lines.append(f"   Head-to-head sample: {int(evidence.get('h2h_count'))} matches")
             if evidence.get("expected_home_goals") is not None and evidence.get("expected_away_goals") is not None:
                 lines.append(
                     f"   Model goal rates: {float(evidence['expected_home_goals']):.2f}–"
@@ -2319,20 +2323,10 @@ async def autobuild_sportybet_command(update, context):
             if social_leads:
                 lines.append(f"   X research: {len(social_leads)} public-post leads; unverified, not confirmed team news")
 
-        lines.extend([
-            "",
-            candidate_research_summary(rows),
-            (f"Specialist research: {specialist_stats.get('fixtures_checked', 0)} fixtures checked; "
-             f"{specialist_stats.get('matched_prices', 0)} exact specialist prices enriched. "
-             f"Cross-book comparisons: {specialist_stats.get('cross_bookmaker_matches', 0)}; "
-             f"odds snapshots stored: {specialist_stats.get('odds_snapshots_saved', 0)}; "
-             f"X public leads: {specialist_stats.get('x_posts', 0)}. "
-             f"{specialist_stats.get('reason', '')}"),
-            f"Research checks: {research_stats['research_scope']}.",
-            "Correlation review: " + (", ".join(build.get("correlation_warnings") or []) if build.get("correlation_warnings") else "no same-competition/date cluster detected; other dependencies are not quantified."),
-            "Unsupported markets are not guessed. Verified lineups, injuries, xG, tactics and true closing-line movement remain gaps unless their sources are actually available.",
-            "Model probabilities and estimated value are experimental, not calibrated guarantees of profit.",
-        ])
+        lines.extend([""])
+        if build.get("correlation_warnings"):
+            lines.append("Risk note: " + "; ".join(build["correlation_warnings"]))
+        lines.append("Probability estimates are experimental, not guaranteed; bookmaker prices and team information can change.")
         if not target_reached:
             lines.append("")
             lines.append("No booking code available because the target was not reached.")
