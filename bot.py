@@ -1274,29 +1274,29 @@ async def process_slip_flow(update, context):
             if not math.isfinite(target) or target <= 1:
                 await reply(update, "Target odds must be greater than 1.00.")
                 return True
-            context.user_data["autobuild_target"] = target
-            context.user_data["slip_flow"] = "autobuild_legs"
-            await reply(update, f"Target set to {target:.2f}. How many legs do you want? Enter an exact number.")
+            # Target-only flow: leg count is selected automatically by the
+            # accumulator engine. Clear legacy state so old sessions cannot ask
+            # the user for an exact number of legs.
+            context.user_data.pop("autobuild_target", None)
+            context.user_data.pop("autobuild_config", None)
+            context.user_data.pop("slip_flow", None)
+            context.args = [f"{target:.12g}"]
+            await reply(update, f"Target accepted: {target:.2f}. Researching available fixtures and markets.")
+            await autobuild_sportybet_command(update, context)
             return True
 
         if state == "autobuild_legs":
-            try:
-                legs = int(message)
-            except ValueError:
-                await reply(update, "Enter an exact whole number of legs, e.g. 2, 5, 8 or 12.")
-                return True
+            # Compatibility for users who were left on the old exact-leg prompt:
+            # ignore the submitted leg count and continue using their saved target.
             target = float(context.user_data.get("autobuild_target") or 0)
-            if legs < 1 or legs > 100:
-                await reply(update, "Choose between 1 and 100 legs.")
-                return True
-            if target <= 1:
-                context.user_data.pop("slip_flow", None)
-                await reply(update, "Your target odds expired. Start the build again.")
-                return True
-            context.user_data["autobuild_config"] = {"target": target, "legs": legs}
             context.user_data.pop("autobuild_target", None)
+            context.user_data.pop("autobuild_config", None)
             context.user_data.pop("slip_flow", None)
-            context.args = []
+            if not math.isfinite(target) or target <= 1:
+                await reply(update, "That old slip request expired. Press Build a slip and enter only your target combined odds.")
+                return True
+            context.args = [f"{target:.12g}"]
+            await reply(update, f"Target accepted: {target:.2f}. Selecting the number of legs automatically and researching fixtures.")
             await autobuild_sportybet_command(update, context)
             return True
 
@@ -2075,11 +2075,10 @@ async def autobuild_sportybet_command(update, context):
             await reply(update, "Target odds must be greater than 1.00.")
             return
 
-    # No fixed leg ceiling: use the available distinct fixtures unless the user
-    # explicitly requests a maxlegs/legs value.
-    min_legs = int(guided["legs"]) if guided else 1
-    max_legs = int(guided["legs"]) if guided else None
-    explicit_max_legs = bool(guided)
+    # User supplies target odds only. PUNTER automatically chooses the
+    # number of legs from qualified, distinct fixtures and risk/value constraints.
+    min_legs = 1
+    max_legs = None
 
     # Scan all fixtures and every retrieved market the scoreline model supports.
     # Default parlay excludes BTTS and Under 2.5 per the user's standing preferences.
@@ -2091,26 +2090,9 @@ async def autobuild_sportybet_command(update, context):
             rank_mode = lowered.split("=", 1)[1]
         elif lowered.startswith("market="):
             market_parts.append(token.split("=", 1)[1])
-        elif lowered.startswith("legs="):
-            try:
-                min_legs = max_legs = int(lowered.split("=", 1)[1])
-            except ValueError:
-                await reply(update, "Use a positive whole number for legs, for example /autobuild 50 legs=8.")
-                return
-            explicit_max_legs = True
-        elif lowered.startswith("minlegs="):
-            try:
-                min_legs = int(lowered.split("=", 1)[1])
-            except ValueError:
-                await reply(update, "Use a positive whole number for minlegs.")
-                return
-        elif lowered.startswith("maxlegs="):
-            try:
-                max_legs = int(lowered.split("=", 1)[1])
-            except ValueError:
-                await reply(update, "Use a positive whole number for maxlegs.")
-                return
-            explicit_max_legs = True
+        elif lowered.startswith(("legs=", "minlegs=", "maxlegs=")):
+            await reply(update, "Leg-count controls have been removed. Enter only your target combined odds; PUNTER chooses the number of legs automatically.")
+            return
         elif lowered in ("value", "odds", "probability", "parlay"):
             rank_mode = lowered
         else:
@@ -2122,14 +2104,8 @@ async def autobuild_sportybet_command(update, context):
         await reply(update, "Leg count must use positive whole numbers and minimum cannot exceed maximum.")
         return
 
-    if not guided and not explicit_max_legs:
-        context.user_data["autobuild_target"] = target
-        context.user_data["slip_flow"] = "autobuild_legs"
-        await reply(update, f"Target combined odds: {target:.2f}.\nHow many legs do you want? Enter an exact number.")
-        return
-
     market_filter = ",".join(market_parts) if market_parts else "all"
-    leg_plan = f"exactly {min_legs} legs"
+    leg_plan = "automatic leg count"
     try:
         # Keep all feed scanning, matching and model research internal. Telegram receives
         # only the resulting fixture shortlist and the completed slip.
