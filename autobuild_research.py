@@ -160,13 +160,17 @@ def prepare_candidate_pool(rows: list[dict], marginal_ev_floor: float = 0.0) -> 
         "high_risk": sum(1 for item in pool if item.get("risk_level") == "HIGH"),
         "medium_risk": sum(1 for item in pool if item.get("risk_level") == "MEDIUM"),
         "marginal_ev_floor": marginal_ev_floor,
-        "research_scope": "Current fixture match, current bookmaker price, supported model probability and price-value calculation",
+        "research_scope": "Current fixture and SportyBet price; recent form, venue splits, H2H, Dixon-Coles/Elo/Monte Carlo disagreement, upset risk, plus API-Football xG, lineup and team-news evidence when supplied; unavailable evidence is explicitly flagged.",
         "not_verified_by_this_scan": [
-            "lineups and injury news",
-            "xG and shot-quality data",
-            "tactical video analysis",
-            "cross-bookmaker closing-line movement",
-            "cross-fixture statistical correlation",
+            label for key, label in (
+                ("lineup_evidence", "confirmed lineups"),
+                ("team_news_evidence", "injury and suspension news"),
+                ("xg_evidence", "xG and shot-quality data"),
+                ("odds_history_evidence", "cross-bookmaker closing-line movement"),
+                ("tactical_evidence", "tactical matchup evidence"),
+                ("correlation_evidence", "cross-fixture statistical correlation"),
+            )
+            if not any(row.get(key) for row in pool or [])
         ],
     }
 
