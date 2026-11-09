@@ -1,6 +1,6 @@
 import unittest
 
-from autobuild_research import assess_candidate, prepare_candidate_pool
+from autobuild_research import assess_candidate, prepare_candidate_pool, apply_walk_forward_calibration
 
 
 class AutobuildResearchTests(unittest.TestCase):
@@ -31,6 +31,27 @@ class AutobuildResearchTests(unittest.TestCase):
         self.assertTrue(row["dixon_coles_adjusted"])
         self.assertEqual(row["probability_source"].split(" (")[0], "Dixon-Coles Poisson")
         self.assertAlmostEqual(row["probability"], expected)
+
+    def test_walk_forward_calibration_is_not_applied_without_ready_holdout(self):
+        rows = [self.candidate(lambda_home=1.8, lambda_away=0.9)]
+        result, status = apply_walk_forward_calibration(rows, {"ready": False})
+        self.assertFalse(status["applied"])
+        self.assertEqual(result[0]["probability"], rows[0]["probability"])
+
+    def test_walk_forward_calibration_requires_both_holdout_metrics_to_improve(self):
+        rows = [self.candidate(lambda_home=1.8, lambda_away=0.9)]
+        validation = {
+            "ready": True, "temperature": 1.2, "train": 100, "holdout": 40,
+            "raw_brier": 0.20, "calibrated_brier": 0.19,
+            "raw_logloss": 0.60, "calibrated_logloss": 0.59,
+            "source": "unit test",
+        }
+        result, status = apply_walk_forward_calibration(rows, validation)
+        self.assertTrue(status["applied"])
+        self.assertTrue(result[0]["probability_source"].startswith("Dixon-Coles + walk-forward"))
+        audited = assess_candidate(result[0], use_dixon_coles=True)
+        self.assertTrue(audited["probability_source"].startswith("Dixon-Coles + walk-forward"))
+        self.assertTrue(audited["research_evidence"]["calibration_evidence"]["applied"])
 
     def test_dixon_coles_is_not_applied_to_default_production_candidates(self):
         row = assess_candidate(self.candidate(lambda_home=1.8, lambda_away=0.9))
