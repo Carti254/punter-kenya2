@@ -4192,14 +4192,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                             "early payout" in market_text_for_sources):
                         continue
                     probability, reason = _market_probability_for_row(prediction, row)
-                    specialist_market = any(term in market_text_for_sources
-                        for term in ("corner", "card", "booking", "total shots", "shots on target",
-                                     "shots on goal", "first half", "half time", "1st half"))
-                    external_market_supported = any(term in market_text_for_sources
-                        for term in ("1x2", "match result", "full time result", "double chance",
-                                     "draw no bet", "dnb", "total goals", "over under", "goals over",
-                                     "goals under", "total corners", "corner"))
-                    if probability is None and not specialist_market and not external_market_supported:
+                    if probability is None:
                         if reason:
                             unsupported.add(market_name)
                         continue
@@ -4240,7 +4233,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                         "odds": odds, "probability": probability, "ev": ev,
                         "fair_odds": (1 / probability) if probability is not None else None,
                         "model_confidence": prediction.get("confidence"),
-                        "model_version": prediction.get("model_version") or "venue-weighted-poisson-elo-mc-v1",
+                        "model_version": prediction.get("model_version") or "dixon-coles-fitted-v1",
                         "probability_source": "Fitted time-decayed Dixon-Coles" if probability is not None else None,
                         "home_form": prediction.get("home_form"),
                         "away_form": prediction.get("away_form"),
