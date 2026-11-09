@@ -1641,6 +1641,15 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer()
     action = (query.data or "").split(":", 1)[-1]
+    if action == "proof":
+        legs = context.user_data.get("pending_sportybet_research") or []
+        if not legs:
+            await query.message.reply_text("The research report has expired. Build the slip again to regenerate its evidence.")
+            return
+        report = _format_autobuild_research_report(legs)
+        for offset in range(0, len(report), 3500):
+            await query.message.reply_text(report[offset:offset + 3500])
+        return
     if action == "manage_cancel":
         context.user_data.pop("pending_sportybet_groups", None)
         await query.edit_message_text("Operation cancelled. Original SportyBet booking codes remain unchanged.")
@@ -1679,6 +1688,7 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
     pending = context.user_data.get("pending_sportybet_booking")
     if action == "cancel":
         context.user_data.pop("pending_sportybet_booking", None)
+        context.user_data.pop("pending_sportybet_research", None)
         await query.edit_message_text("Slip generation cancelled. No booking code was created.")
         return
     if action != "confirm" or not pending:
@@ -1716,6 +1726,7 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
             lines.extend(["", f"⚠️ SportyBet reported {len(result['unavailable'])} unavailable selection(s). Check the loaded code carefully."])
         await query.edit_message_text("\n".join(lines))
         context.user_data.pop("pending_sportybet_booking", None)
+        context.user_data.pop("pending_sportybet_research", None)
     except SportyBetError as exc:
         logger.warning("SportyBet booking creation failed: %s", exc)
         await query.edit_message_text(
@@ -1724,6 +1735,7 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
             + "\n\nThe request was not automatically repeated. Refresh fixtures and rebuild if no code appears."
         )
         context.user_data.pop("pending_sportybet_booking", None)
+        context.user_data.pop("pending_sportybet_research", None)
     except Exception as exc:
         logger.exception("Unexpected SportyBet booking error")
         await query.edit_message_text(
@@ -2163,6 +2175,45 @@ def enrich_with_specialist_models(rows):
     return rows, stats
 
 
+def _format_autobuild_research_report(legs):
+    """Render the evidence actually attached to the selected candidate rows."""
+    lines = ["📊 PUNTER — SELECTION RESEARCH EVIDENCE", "Each figure below is a model/provider output, not a guarantee.", ""]
+    for index, leg in enumerate(legs or [], 1):
+        evidence = leg.get("research_evidence") or {}
+        checks = leg.get("research_checks") or []
+        gaps = leg.get("research_gaps") or []
+        odds = float(leg.get("odds") or 0)
+        probability = float(leg.get("probability") or 0)
+        implied = float(leg.get("implied_probability") or (1 / odds if odds > 1 else 0))
+        lines.extend([
+            f"{index}. {leg.get('fixture') or (str(leg.get('home') or '') + ' vs ' + str(leg.get('away') or ''))}",
+            f"Competition: {leg.get('league') or 'Not supplied'} | Kick-off: {leg.get('kickoff') or 'Not supplied'}",
+            f"Market: {leg.get('market') or 'Not supplied'} — {leg.get('selection') or 'Not supplied'} @ {odds:.2f}",
+            f"Model estimate: {probability:.1%} | Odds-implied: {implied:.1%} | Edge: {float(leg.get('edge') or 0):+.1%} | Estimated EV: {float(leg.get('ev') or 0):+.1%}",
+            f"Evidence grade: {leg.get('research_grade') or 'Unassigned'} — {leg.get('research_grade_reason') or 'No grade explanation'}",
+            f"Model confidence/source: {leg.get('model_confidence') or 'Not supplied'} / {leg.get('probability_source') or 'Not supplied'}",
+            f"Recent form: {evidence.get('home_form') or 'Unavailable'} vs {evidence.get('away_form') or 'Unavailable'}",
+            f"Recent sample: {evidence.get('home_sample') or 0} home-team matches; {evidence.get('away_sample') or 0} away-team matches",
+            f"Goals per match: home team {evidence.get('home_scored_avg') if evidence.get('home_scored_avg') is not None else 'N/A'} scored / {evidence.get('home_conceded_avg') if evidence.get('home_conceded_avg') is not None else 'N/A'} conceded; away team {evidence.get('away_scored_avg') if evidence.get('away_scored_avg') is not None else 'N/A'} scored / {evidence.get('away_conceded_avg') if evidence.get('away_conceded_avg') is not None else 'N/A'} conceded",
+            f"Venue splits: home sample {evidence.get('home_home_sample') or 0} (GF {evidence.get('home_home_gf') if evidence.get('home_home_gf') is not None else 'N/A'}, GA {evidence.get('home_home_ga') if evidence.get('home_home_ga') is not None else 'N/A'}); away sample {evidence.get('away_away_sample') or 0} (GF {evidence.get('away_away_gf') if evidence.get('away_away_gf') is not None else 'N/A'}, GA {evidence.get('away_away_ga') if evidence.get('away_away_ga') is not None else 'N/A'})",
+            f"H2H: {evidence.get('h2h_count') or 0} same-competition meetings",
+            f"Expected goals: home {evidence.get('expected_home_goals') if evidence.get('expected_home_goals') is not None else 'N/A'}; away {evidence.get('expected_away_goals') if evidence.get('expected_away_goals') is not None else 'N/A'}",
+        ])
+        if checks:
+            lines.append("Checks actually completed: " + "; ".join(str(x) for x in checks))
+        else:
+            lines.append("Checks actually completed: none recorded")
+        if gaps:
+            lines.append("Evidence NOT available: " + "; ".join(str(x) for x in gaps))
+        else:
+            lines.append("Evidence gaps: none recorded by the current assessment")
+        lines.append("Recent home-team results: " + (", ".join(str(x) for x in (evidence.get("home_recent_matches") or [])[:5]) or "Not supplied"))
+        lines.append("Recent away-team results: " + (", ".join(str(x) for x in (evidence.get("away_recent_matches") or [])[:5]) or "Not supplied"))
+        lines.append("")
+    lines.append("Important: PUNTER's probability and EV are model estimates, not independently proven winning chances. Missing evidence is shown as unavailable; it is never treated as verified.")
+    return "\n".join(lines)
+
+
 async def autobuild_sportybet_command(update, context):
     message_text = str(getattr(update.effective_message, "text", "") or "").strip()
     message_parts = message_text.split(maxsplit=1)
@@ -2394,6 +2445,9 @@ async def autobuild_sportybet_command(update, context):
         )
         correlation_factor = float(build.get("correlation_adjustment_factor") or 1.0)
         context.user_data["pending_sportybet_booking"] = resolved
+        # Keep the exact assessed rows alongside the clean preview so the user can
+        # inspect the source evidence for every selected leg before creating a code.
+        context.user_data["pending_sportybet_research"] = [dict(x) for x in resolved]
 
         # Research remains active internally; Telegram shows only the match and selection.
         lines = [
@@ -2408,10 +2462,11 @@ async def autobuild_sportybet_command(update, context):
                 f"{leg['selection']} @ {leg['odds']:.2f}"
             )
 
-        markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Generate SportyBet code", callback_data="sb:confirm"),
-            InlineKeyboardButton("Cancel", callback_data="sb:cancel"),
-        ]])
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 Show research evidence", callback_data="sb:proof")],
+            [InlineKeyboardButton("Generate SportyBet code", callback_data="sb:confirm"),
+             InlineKeyboardButton("Cancel", callback_data="sb:cancel")],
+        ])
         # Split long high-leg-count reports into Telegram-safe messages.
         chunks, current = [], ""
         for line in lines:
@@ -4358,6 +4413,8 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                     if ("btts" in market_text_for_sources or
                             "both teams to score" in market_text_for_sources or
                             ("under" in market_text_for_sources and "2.5" in market_text_for_sources) or
+                            "draw no bet" in market_text_for_sources or
+                            re.search(r"(?<![a-z])dnb(?![a-z])", market_text_for_sources) or
                             "2up" in market_text_for_sources or
                             "early payout" in market_text_for_sources):
                         continue
