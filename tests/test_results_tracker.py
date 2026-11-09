@@ -105,6 +105,42 @@ class MySQLMigrationIntegrationTests(unittest.TestCase):
 
 
 
+    def test_missing_last_synced_at_is_repaired_even_when_migrations_are_marked_applied(self):
+        connection = get_connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("DROP TABLE IF EXISTS matches")
+                cursor.execute("DROP TABLE IF EXISTS punter_schema_migrations")
+                cursor.execute("CREATE TABLE matches (id BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB")
+                cursor.execute("""
+                    CREATE TABLE punter_schema_migrations (
+                        version INT NOT NULL PRIMARY KEY,
+                        applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                cursor.executemany(
+                    "INSERT INTO punter_schema_migrations (version) VALUES (%s)",
+                    [(1,), (2,), (3,), (4,), (5,)],
+                )
+        finally:
+            connection.close()
+
+        result = run_migrations()
+        self.assertEqual(result["applied"], [])
+
+        connection = get_connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT COUNT(*) AS n FROM information_schema.columns
+                    WHERE table_schema=DATABASE() AND table_name='matches'
+                      AND column_name='last_synced_at'
+                """)
+                self.assertEqual(int(cursor.fetchone()["n"]), 1)
+        finally:
+            connection.close()
+
+
 
 if __name__ == "__main__":
     unittest.main()
