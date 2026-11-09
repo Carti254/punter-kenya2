@@ -19,20 +19,35 @@ class AccumulatorEngineTests(unittest.TestCase):
         self.assertEqual(len(fixtures), len(set(fixtures)))
         self.assertGreaterEqual(result["combined_odds"], 3.0)
 
-    def test_best_available_is_not_misreported_as_target_reached(self):
+    def test_below_target_partial_is_not_returned_as_a_slip(self):
         result = build_accumulator([self.candidates[0]], 5.0, max_legs=2)
         self.assertFalse(result["target_reached"])
-        self.assertLess(result["combined_odds"], 5.0)
+        self.assertEqual(result["selections"], [])
+        self.assertEqual(result["combined_odds"], 1.0)
+        self.assertIn("No lower-odds substitute", result["reason"])
 
-    def test_best_available_prefers_closest_safe_odds_to_target(self):
+    def test_closest_below_target_candidate_is_not_returned(self):
         candidates = [
             {"home": "Safe", "away": "Choice", "odds": 1.50, "probability": 0.99, "market": "1X2"},
             {"home": "Closer", "away": "Choice", "odds": 2.20, "probability": 0.60, "market": "1X2"},
         ]
         result = build_accumulator(candidates, 2.50, max_legs=2)
         self.assertFalse(result["target_reached"])
-        self.assertEqual(len(result["selections"]), 1)
-        self.assertAlmostEqual(result["combined_odds"], 2.20)
+        self.assertEqual(result["selections"], [])
+        self.assertEqual(result["combined_odds"], 1.0)
+
+    def test_eight_eligible_markets_cannot_fall_back_to_one_1_67_selection(self):
+        candidates = []
+        for fixture in range(4):
+            for market in ("1X2", "Double Chance"):
+                candidates.append({
+                    "home": f"Home {fixture}", "away": f"Away {fixture}",
+                    "odds": 1.67, "probability": 0.644, "market": market,
+                })
+        result = build_accumulator(candidates, 2.00, max_legs=4)
+        self.assertFalse(result["target_reached"])
+        self.assertEqual(result["selections"], [])
+        self.assertEqual(result["combined_odds"], 1.0)
 
     def test_invalid_candidates_are_ignored(self):
         result = build_accumulator([{"home": "X", "away": "Y", "odds": 1.0, "probability": 0.8}], 2.0)
