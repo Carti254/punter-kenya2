@@ -422,9 +422,23 @@ def apply_walk_forward_calibration(rows: list[dict], validation: dict) -> tuple[
     if not validation or not validation.get("ready"):
         return output, {"applied": False, "reason": "Insufficient walk-forward history; calibration not applied."}
     try:
-        if not (float(validation["calibrated_brier"]) < float(validation["raw_brier"])
-                and float(validation["calibrated_logloss"]) < float(validation["raw_logloss"])):
-            return output, {"applied": False, "reason": "Temperature calibration did not improve both holdout metrics."}
+        # Calibration is valid only for the exact venue-weighted Dixon-Coles
+        # candidate being deployed. It must first beat both the current model
+        # and prevalence baseline, then improve its own raw Brier and log loss.
+        candidate_is_better = (
+            float(validation["candidate_brier"]) < float(validation["raw_brier"])
+            and float(validation["candidate_logloss"]) < float(validation["raw_logloss"])
+            and float(validation["candidate_brier"]) < float(validation["baseline_brier"])
+            and float(validation["candidate_logloss"]) < float(validation["baseline_logloss"])
+        )
+        calibration_improves_candidate = (
+            float(validation["candidate_calibrated_brier"]) < float(validation["candidate_brier"])
+            and float(validation["candidate_calibrated_logloss"]) < float(validation["candidate_logloss"])
+        )
+        if not candidate_is_better:
+            return output, {"applied": False, "reason": "Venue-weighted Dixon-Coles candidate did not beat both the current model and baseline on both holdout metrics."}
+        if not calibration_improves_candidate:
+            return output, {"applied": False, "reason": "Temperature calibration did not improve both holdout metrics for the candidate model."}
         temperature = float(validation["temperature"])
         from prediction_validation import apply_temperature
         from dixon_coles_engine import selected_outcome_probability
@@ -461,10 +475,12 @@ def apply_walk_forward_calibration(rows: list[dict], validation: dict) -> tuple[
                     "temperature": temperature,
                     "train": validation.get("train"),
                     "holdout": validation.get("holdout"),
-                    "raw_brier": validation.get("raw_brier"),
-                    "calibrated_brier": validation.get("calibrated_brier"),
-                    "raw_logloss": validation.get("raw_logloss"),
-                    "calibrated_logloss": validation.get("calibrated_logloss"),
+                    "current_model_brier": validation.get("raw_brier"),
+                    "current_model_logloss": validation.get("raw_logloss"),
+                    "candidate_brier": validation.get("candidate_brier"),
+                    "candidate_logloss": validation.get("candidate_logloss"),
+                    "candidate_calibrated_brier": validation.get("candidate_calibrated_brier"),
+                    "candidate_calibrated_logloss": validation.get("candidate_calibrated_logloss"),
                     "applied": True,
                 }
                 adjusted += 1
