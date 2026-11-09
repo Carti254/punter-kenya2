@@ -2305,13 +2305,13 @@ async def autobuild_sportybet_command(update, context):
             ) or "No rejection counts recorded"
             await reply(
                 update,
-                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\\n"
-                f"Research-qualified selections: {len(rows)} across {len(qualified_fixture_keys)} distinct fixtures.\\n"
+                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\n"
+                f"Research-qualified selections: {len(rows)} across {len(qualified_fixture_keys)} distinct fixtures.\n"
                 f"Research grades: A={research_stats.get('research_grade_a', 0)}, "
                 f"B={research_stats.get('research_grade_b', 0)} "
-                f"(B selections have incomplete venue-specific evidence).\\n"
+                f"(B selections have incomplete venue-specific evidence).\n"
                 f"Rejected rows: {research_stats.get('rejected', 0)}. "
-                f"Rejection breakdown: {rejection_text}.\\n"
+                f"Rejection breakdown: {rejection_text}.\n"
                 "At least two different matches are required. Multiple markets from one match "
                 "cannot count as separate accumulator legs. No weak selections were added."
             )
