@@ -166,22 +166,9 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
     for item in picks:
         selections.append({k: v for k, v in item.items() if not k.startswith("_")})
 
-    # A conservative disclosed haircut is applied when multiple legs come from
-    # the same competition on the same date. It is a heuristic, not a measured
-    # correlation estimate; empirical dependence data is not available here.
-    same_competition_same_day = set()
-    for item in selections:
-        day = str(item.get("day") or item.get("match_date") or "")[:10]
-        league = str(item.get("league") or "").strip().casefold()
-        if day and league:
-            same_competition_same_day.add((day, league))
-    has_same_competition_pair = any(
-        sum(1 for item in selections
-            if str(item.get("day") or item.get("match_date") or "")[:10] == day
-            and str(item.get("league") or "").strip().casefold() == league) > 1
-        for day, league in same_competition_same_day
-    )
-    correlation_factor = 0.97 if has_same_competition_pair else 1.0
+    # No arbitrary correlation haircut is applied. Without empirical pairwise
+    # outcome data, the combined probability is explicitly the independence product.
+    correlation_factor = 1.0
     naive_probability = probability_product
     adjusted_probability = naive_probability * correlation_factor
     return {
