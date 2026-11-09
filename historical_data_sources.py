@@ -151,8 +151,15 @@ def fetch_competition_history(competition, country, as_of_date=None, seasons=6):
     """Fetch historical results for one explicitly mapped competition only."""
     code = competition_code(competition, country)
     if not code:
+        # Include the exact feed labels in scan diagnostics. This makes missing
+        # coverage actionable instead of collapsing every unknown league into
+        # the same generic message.
         return [], {"source": "football-data.co.uk", "mapped": False,
-                    "reason": "Competition/country is not in the verified division map."}
+                    "reason": (
+                        "Unmapped competition/country: "
+                        + str(competition or "<blank>")[:90]
+                        + " / " + str(country or "<blank>")[:60]
+                    )}
     rows, errors = [], []
     cutoff = str(as_of_date or date.today())[:10]
     for season in _season_codes(as_of_date, max(1, min(int(seasons), 8))):
