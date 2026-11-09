@@ -2169,9 +2169,22 @@ async def autobuild_sportybet_command(update, context):
         # exact Betika cross-bookmaker checks and stored odds-history enrichment.
         specialist_stats = {"reason": "Specialist enrichment was not run."}
         price_history_stats = {"matched": 0, "reason": "Stored price history not available."}
+        # Stored price history is a separate data source from API-Football.
+        # It compares exact fixture/market/selection snapshots and fails open
+        # with an explicit gap when the database or history is unavailable.
         try:
-            rows, specialist_stats = await asyncio.to_thread(enrich_with_specialist_models, rows)
-            price_history_stats = specialist_stats.get("price_history") or price_history_stats
+            snapshot_rows, price_history_stats = await asyncio.to_thread(
+                enrich_candidates_with_price_history, rows[:100]
+            )
+            rows = snapshot_rows + rows[100:]
+        except Exception as price_error:
+            price_history_stats = {
+                "reason": f"Stored odds history unavailable: {type(price_error).__name__}: {str(price_error)[:120]}"
+            }
+        try:
+            rows, specialist_stats = await asyncio.to_thread(
+                enrich_specialist_candidates, rows, max_fixtures=3
+            )
         except Exception as enrichment_error:
             logger.warning("Autobuild full research enrichment failed: %s", enrichment_error)
             specialist_stats = {"reason": f"Specialist enrichment unavailable: {type(enrichment_error).__name__}"}
