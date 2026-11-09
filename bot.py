@@ -2208,6 +2208,7 @@ async def autobuild_sportybet_command(update, context):
                 "🚫 NO QUALIFYING SPORTYBET SLIP\n"
                 f"Target: {target:.2f}\nMarkets scanned: {scanned_count}\n"
                 f"Research/value-qualified selections: 0\n"
+                f"Big-Five top-flight fixtures excluded: {big_five_excluded}\n"
                 f"Rejected by research/value screen: {research_stats.get('rejected', 0)}\n"
                 "PUNTER will not pad the slip with weak, unmodelled or negative-value selections.\n"
                 f"Specialist research: {specialist_stats.get('reason', 'not available')}\n"
@@ -2277,6 +2278,7 @@ async def autobuild_sportybet_command(update, context):
             f"Research screen: {research_stats.get('eligible', 0)} eligible; "
             f"{research_stats.get('rejected', 0)} rejected; "
             f"{research_stats.get('tier_a', 0)} Tier A positive-value candidates; "
+            f"{big_five_excluded} Big-Five top-flight fixtures excluded; "
             f"exact odds-history matches: {price_history_stats.get('matched', 0)}",
             "",
         ]
