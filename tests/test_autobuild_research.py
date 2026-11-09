@@ -9,6 +9,9 @@ class AutobuildResearchTests(unittest.TestCase):
             "home": "Home FC", "away": "Away FC", "market": "1X2",
             "selection": "Home", "odds": 2.10, "probability": 0.52,
             "bookmaker": "SportyBet",
+            "model_confidence": "MODERATE",
+            "home_sample": 10, "away_sample": 10,
+            "home_home_sample": 5, "away_away_sample": 5,
         }
         row.update(overrides)
         return row
@@ -73,6 +76,14 @@ class AutobuildResearchTests(unittest.TestCase):
 
     def test_insufficient_verified_team_sample_is_rejected(self):
         row = self.candidate(model_confidence="MODERATE", home_sample=4, away_sample=10)
+        self.assertIsNone(assess_candidate(row))
+
+    def test_missing_venue_samples_are_rejected(self):
+        row = self.candidate(home_home_sample=None, away_away_sample=5)
+        self.assertIsNone(assess_candidate(row))
+
+    def test_special_2up_market_is_rejected_as_not_ordinary_1x2(self):
+        row = self.candidate(market="1X2 - 2UP", selection="Away")
         self.assertIsNone(assess_candidate(row))
 
     def test_negative_ev_is_rejected_by_zero_floor(self):
