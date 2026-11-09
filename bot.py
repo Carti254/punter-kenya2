@@ -2314,7 +2314,7 @@ async def autobuild_sportybet_command(update, context):
                 f"Rejection breakdown: {rejection_text}.\n"
                 "At least two different matches are required. Multiple markets from one match "
                 "cannot count as separate accumulator legs. No weak selections were added.\n"
-                + ("Scanner diagnostics: " + " | ".join(str(x)[:220] for x in diagnostics[:4])
+                + ("Scanner diagnostics: " + " | ".join(str(x)[:220] for x in diagnostics[-5:])
                    if diagnostics else "Scanner diagnostics: unavailable.")
             )
             return
