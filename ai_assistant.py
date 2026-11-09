@@ -172,7 +172,7 @@ def read_slip_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> list[s
     if not isinstance(rows, list):
         raise RuntimeError("Gemini did not return a readable selections list.")
     lines = []
-    for row in rows[:20]:
+    for row in rows[:50]:
         if not isinstance(row, dict):
             continue
         fixture = re.sub(r"[|\n\r]", " ", str(row.get("fixture") or "")).strip()
