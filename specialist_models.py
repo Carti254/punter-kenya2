@@ -166,6 +166,7 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
     fixture_id = int(((exact[0].get("fixture") or {}).get("id") or 0))
     league_info = exact[0].get("league") or {}
     standings_evidence = None
+    standings_warning = None
     if league_info.get("id") is not None and league_info.get("season") is not None:
         try:
             standings_rows = _get(
@@ -212,10 +213,12 @@ def specialist_council(home, away, match_date, api_key=None, session=None, last=
                     "away": away_table,
                 }
         except Exception as exc:
-            provider_warnings = [f"Standings unavailable: {type(exc).__name__}"]
+            standings_warning = f"Standings unavailable: {type(exc).__name__}"
     lineup_evidence = None
     team_news_evidence = None
     provider_warnings = []
+    if standings_warning:
+        provider_warnings.append(standings_warning)
 
     # API-Football exposes official lineups and fixture-specific injuries on
     # the free plan, but coverage varies. Never infer a clean bill of health
