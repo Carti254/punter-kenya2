@@ -61,6 +61,12 @@ PROVIDER_NAME = "open-matchday"
 EAT = ZoneInfo("Africa/Nairobi")
 FIXTURE_RESPONSE_DIAGNOSTICS = []
 
+# Cross-competition team history is fetched lazily only when a fixture's own
+# competition does not contain enough recent results. Cache it for this process
+# so multiple cup/newly-promoted fixtures do not trigger repeated downloads.
+OPENMATCHDAY_TEAM_HISTORY_CACHE = {"saved_at": 0.0, "rows": []}
+OPENMATCHDAY_TEAM_HISTORY_LOCK = threading.RLock()
+
 # Stop every bot command from repeatedly hitting GOAL API after a 429.
 GOAL_API_COOLDOWN_UNTIL = None
 GOAL_API_COOLDOWN_LOCK = threading.Lock()
@@ -870,6 +876,41 @@ def fetch_openmatchday_csv(folder, kind="fixtures"):
     rows = list(csv.DictReader(io.StringIO(response.text)))
     goal_store_response(cache_key, "fixtures", rows)
     return rows
+
+
+def fetch_openmatchday_team_history_rows(max_age_seconds=1800):
+    """Load a cached cross-competition results pool for team-form fallback."""
+    with OPENMATCHDAY_TEAM_HISTORY_LOCK:
+        cached_at = float(OPENMATCHDAY_TEAM_HISTORY_CACHE.get("saved_at") or 0)
+        cached_rows = OPENMATCHDAY_TEAM_HISTORY_CACHE.get("rows") or []
+        if cached_rows and time.time() - cached_at < max_age_seconds:
+            return list(cached_rows)
+
+    leagues = fetch_all_leagues()
+    collected = []
+
+    def fetch_one(league):
+        folder = str(league.get("leagueShortcut") or "").strip()
+        if not folder:
+            return []
+        try:
+            return fetch_openmatchday_csv(folder, "results")
+        except Exception as exc:
+            logger.info("Cross-competition history unavailable for %s: %s", folder, exc)
+            return []
+
+    with ThreadPoolExecutor(max_workers=min(24, max(1, len(leagues)))) as pool:
+        futures = [pool.submit(fetch_one, league) for league in leagues]
+        for future in as_completed(futures):
+            try:
+                collected.extend(future.result())
+            except Exception:
+                continue
+
+    with OPENMATCHDAY_TEAM_HISTORY_LOCK:
+        OPENMATCHDAY_TEAM_HISTORY_CACHE["saved_at"] = time.time()
+        OPENMATCHDAY_TEAM_HISTORY_CACHE["rows"] = list(collected)
+    return collected
 
 
 def fetch_openmatchday_fixture_rows(days=14, league_id=None, day_filter=None):
@@ -3452,7 +3493,7 @@ def build_pre_match_prediction(raw_fixture, fixture):
 
 
 
-def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None, model_variant="current", include_monte_carlo=True):
+def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None, model_variant="current", include_monte_carlo=True, team_history_rows=None):
     """Forecast from competition results strictly before as_of_date when supplied."""
     folder = str(raw_fixture.get("leagueShortcut") or "").strip()
     if not folder:
@@ -3467,21 +3508,26 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
             logger.warning("Could not load historical results for %s: %s", folder, exc)
             return {"available": False, "reason": "Historical results could not be retrieved for this competition."}
 
+    team_rows = list(team_history_rows) if team_history_rows is not None else list(rows)
+
     if as_of_date is not None:
         cutoff_date = as_of_date.date() if isinstance(as_of_date, datetime) else datetime.strptime(str(as_of_date)[:10], "%Y-%m-%d").date()
-        prior_rows = []
-        for row in rows:
-            try:
-                row_date = datetime.strptime(str(row.get("date") or ""), "%Y-%m-%d").date()
-            except ValueError:
-                continue
-            if row_date < cutoff_date:
-                prior_rows.append(row)
-        rows = prior_rows
+        def before_cutoff(source_rows):
+            prior = []
+            for row in source_rows:
+                try:
+                    row_date = datetime.strptime(str(row.get("date") or ""), "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+                if row_date < cutoff_date:
+                    prior.append(row)
+            return prior
+        rows = before_cutoff(rows)
+        team_rows = before_cutoff(team_rows)
 
     def parse_team_history(team_name):
         parsed = []
-        for row in rows:
+        for row in team_rows:
             home = str(row.get("home") or "").strip()
             away = str(row.get("away") or "").strip()
             try:
@@ -4256,8 +4302,25 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             progress(f"{day.isoformat()}: fixture {fixture_index}/{len(day_fixtures)} — matching {home_name} vs {away_name}…")
             matched_events += len(matches)
             folder = str(raw.get("leagueShortcut") or "").strip()
+            local_history = historical_cache.get(folder, [])
             try:
-                prediction = build_openmatchday_prediction(raw, fixture, historical_rows=historical_cache.get(folder, []), model_variant="venue_weighted")
+                prediction = build_openmatchday_prediction(
+                    raw, fixture, historical_rows=local_history,
+                    model_variant="venue_weighted"
+                )
+                # Cup fixtures and teams crossing competition boundaries often
+                # have fewer than five records in the cup CSV. In that case,
+                # reuse the same recent-form model with a broader team-history
+                # pool, while retaining the fixture's own competition rows for
+                # its scoring baseline, H2H and competition Elo calculations.
+                if (not prediction.get("available")
+                        and "Insufficient recent results" in str(prediction.get("reason") or "")):
+                    cross_competition_rows = fetch_openmatchday_team_history_rows()
+                    prediction = build_openmatchday_prediction(
+                        raw, fixture, historical_rows=local_history,
+                        team_history_rows=cross_competition_rows,
+                        model_variant="venue_weighted"
+                    )
             except Exception as exc:
                 prediction_unavailable += 1
                 logger.exception("Autobuild prediction failed for %s vs %s", home_name, away_name)
@@ -4267,7 +4330,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                 prediction_unavailable += 1
                 # Keep the exact SportyBet fixture in the research pool. BSD can
                 # independently supply supported 1X2, goal-total and corner
-                # probabilities even when open-matchday history is missing.
+                # probabilities even when verified history is still unavailable.
                 prediction = {}
             progress(f"{day.isoformat()}: matched {home_name} vs {away_name}; evaluating {sum(len(g.get('markets') or []) for g in matches)} market rows…")
             for game in matches:
