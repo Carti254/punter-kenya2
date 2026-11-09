@@ -337,13 +337,19 @@ def fetch_betika(day: date | None = None, max_pages=30, max_details=None):
     return sorted(games, key=lambda game: game.get("kickoff_eat") or "")
 
 def smoke_test_bookmakers():
-    """Small read-only live smoke check: one feed page and at most three Betika details."""
+    """Read-only smoke check using multiple pages and both local match days.
+
+    SportyBet's upcoming feed is not ordered strictly by local calendar date.
+    A one-page/today-only probe can return a valid but empty response even while
+    later pages contain tomorrow's matches. Probe the same bounded 12-page
+    window used by the production accumulator scanner.
+    """
     day = datetime.now(EAT).date()
     output = {}
     for name, fetcher in (
         ("Betika", lambda: fetch_betika(day, max_pages=1, max_details=3)),
         ("Betika tomorrow", lambda: fetch_betika(day + timedelta(days=1), max_pages=1, max_details=3)),
-        ("SportyBet", lambda: fetch_sportybet(day, max_pages=1)),
+        ("SportyBet", lambda: fetch_sportybet({day, day + timedelta(days=1)}, max_pages=12)),
     ):
         try:
             games = fetcher()
