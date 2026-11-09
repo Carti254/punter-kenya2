@@ -2248,6 +2248,7 @@ async def autobuild_sportybet_command(update, context):
             live_leg["research_checks"] = model_leg.get("research_checks") or []
             live_leg["research_gaps"] = model_leg.get("research_gaps") or []
             live_leg["probability_source"] = model_leg.get("probability_source") or "PUNTER statistical model"
+            live_leg["model_confidence"] = model_leg.get("model_confidence")
             for evidence_key in ("specialist_evidence", "specialist_panels", "x_research_evidence",
                                  "x_research_warning", "other_bookmaker_prices",
                                  "best_other_bookmaker", "cross_bookmaker_edge",
@@ -2314,6 +2315,22 @@ async def autobuild_sportybet_command(update, context):
                     f"   Recent form: {evidence.get('home_form') or 'available'} / "
                     f"{evidence.get('away_form') or 'available'} ({home_n}/{away_n} matches)"
                 )
+            confidence = str(leg.get("model_confidence") or "UNAVAILABLE").upper()
+            risk_flags = []
+            if confidence == "MODERATE":
+                risk_flags.append("moderate model confidence")
+            if home_n < 8 or away_n < 8:
+                risk_flags.append("limited recent-form sample")
+            if int(evidence.get("home_home_sample") or 0) < 3 or int(evidence.get("away_away_sample") or 0) < 3:
+                risk_flags.append("insufficient home/away split evidence")
+            if not leg.get("lineup_evidence"):
+                risk_flags.append("confirmed line-ups unavailable")
+            if not leg.get("team_news_evidence"):
+                risk_flags.append("injury/team-news evidence unavailable")
+            lines.append(
+                f"   Risk review ({confidence}): " +
+                ("; ".join(risk_flags) if risk_flags else "no listed evidence gaps; this is not a safety guarantee")
+            )
             venue_n = int(evidence.get("home_home_sample") or 0) + int(evidence.get("away_away_sample") or 0)
             if venue_n:
                 lines.append(
