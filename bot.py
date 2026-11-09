@@ -936,7 +936,7 @@ def fetch_openmatchday_fixture_rows(days=14, league_id=None, day_filter=None):
 
     # The index contains 75 competitions. Consume whichever request completes
     # first so one slow league cannot block already completed fixture feeds.
-    with ThreadPoolExecutor(max_workers=min(32, max(8, len(leagues)))) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(fetch_one, league) for league in leagues]
         for future in as_completed(futures):
             try:
