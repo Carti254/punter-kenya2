@@ -2299,12 +2299,21 @@ async def autobuild_sportybet_command(update, context):
         }
         if len(qualified_fixture_keys) < 2:
             context.user_data.pop("pending_sportybet_booking", None)
+            rejection_breakdown = research_stats.get("rejection_reasons") or {}
+            rejection_text = ", ".join(
+                f"{reason}={count}" for reason, count in rejection_breakdown.items()
+            ) or "No rejection counts recorded"
             await reply(
                 update,
-                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\n"
-                f"Research-qualified selections: {len(rows)} across {len(qualified_fixture_keys)} distinct fixtures.\n"
-                "At least two different matches are required. PUNTER will not count multiple markets "
-                "from one match as separate accumulator legs or weaken the research filters."
+                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\\n"
+                f"Research-qualified selections: {len(rows)} across {len(qualified_fixture_keys)} distinct fixtures.\\n"
+                f"Research grades: A={research_stats.get('research_grade_a', 0)}, "
+                f"B={research_stats.get('research_grade_b', 0)} "
+                f"(B selections have incomplete venue-specific evidence).\\n"
+                f"Rejected rows: {research_stats.get('rejected', 0)}. "
+                f"Rejection breakdown: {rejection_text}.\\n"
+                "At least two different matches are required. Multiple markets from one match "
+                "cannot count as separate accumulator legs. No weak selections were added."
             )
             return
 
