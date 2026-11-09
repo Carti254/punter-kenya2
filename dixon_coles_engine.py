@@ -114,7 +114,8 @@ def fit_dixon_coles(rows, before_date=None, half_life_days=180, min_matches=60,
         counts[h] += 1
         counts[a] += 1
     teams = [t for t in teams if counts[t] >= min_team_matches]
-    matches = [m for m in matches if m[1] in counts and m[2] in counts]
+    eligible_teams = set(teams)
+    matches = [m for m in matches if m[1] in eligible_teams and m[2] in eligible_teams]
     if len(matches) < min_matches or len(teams) < 4:
         return {"available": False, "reason": "Insufficient connected team history to fit this competition.", "sample_size": len(matches)}
     index = {team: i for i, team in enumerate(teams)}
