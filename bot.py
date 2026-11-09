@@ -2378,7 +2378,7 @@ async def autobuild_sportybet_command(update, context):
                 f"Research-qualified selections: {len(rows)} across {len(qualified_fixture_keys)} distinct fixtures.\n"
                 f"Research grades: A={research_stats.get('research_grade_a', 0)}, "
                 f"B={research_stats.get('research_grade_b', 0)} "
-                f"(B selections have incomplete venue-specific evidence).\n"
+                f"(B selections passed selection gates but lack one or more Grade-A evidence requirements).\n"
                 f"Rejected rows: {research_stats.get('rejected', 0)}. "
                 f"Rejection breakdown: {rejection_text}.\n"
                 "At least two different matches are required. Multiple markets from one match "
