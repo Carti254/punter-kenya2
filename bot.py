@@ -2345,18 +2345,14 @@ async def autobuild_sportybet_command(update, context):
         )
         if not rows:
             context.user_data.pop("pending_sportybet_booking", None)
-            note = "; ".join(str(x) for x in diagnostics[:4])
-            await reply(
-                update,
-                "🚫 NO QUALIFYING SPORTYBET SLIP\n"
-                f"Target: {target:.2f}\nMarkets scanned: {scanned_count}\n"
-                f"Research/value-qualified selections: 0\n"
-                f"Big-Five top-flight fixtures excluded: {big_five_excluded}\n"
-                f"Rejected by research/value screen: {research_stats.get('rejected', 0)}\n"
-                "PUNTER will not pad the slip with weak, unmodelled or negative-value selections.\n"
-                f"Specialist research: {specialist_stats.get('reason', 'not available')}\n"
-                + (f"Feed notes: {note}" if note else "")
+            # Research and feed diagnostics stay internal; Telegram gets a clean result.
+            logger.info(
+                "SportyBet autobuild: no eligible rows; scanned=%s rejected=%s "
+                "big_five_excluded=%s specialist=%s diagnostics=%s",
+                scanned_count, research_stats.get("rejected", 0),
+                big_five_excluded, specialist_stats.get("reason"), diagnostics,
             )
+            await reply(update, f"🚫 NO QUALIFYING SPORTYBET SLIP — {target:.2f} TARGET")
             return
 
         # Research every eligible row first; the target is used only by the
@@ -2368,24 +2364,11 @@ async def autobuild_sportybet_command(update, context):
         }
         if len(qualified_fixture_keys) < 2:
             context.user_data.pop("pending_sportybet_booking", None)
-            rejection_breakdown = research_stats.get("rejection_reasons") or {}
-            rejection_text = ", ".join(
-                f"{reason}={count}" for reason, count in rejection_breakdown.items()
-            ) or "No rejection counts recorded"
-            await reply(
-                update,
-                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\n"
-                f"Research-qualified selections: {len(rows)} across {len(qualified_fixture_keys)} distinct fixtures.\n"
-                f"Research grades: A={research_stats.get('research_grade_a', 0)}, "
-                f"B={research_stats.get('research_grade_b', 0)} "
-                f"(B selections passed selection gates but lack one or more Grade-A evidence requirements).\n"
-                f"Rejected rows: {research_stats.get('rejected', 0)}. "
-                f"Rejection breakdown: {rejection_text}.\n"
-                "At least two different matches are required. Multiple markets from one match "
-                "cannot count as separate accumulator legs. No weak selections were added.\n"
-                + ("Scanner diagnostics: " + " | ".join(str(x)[:220] for x in diagnostics[-5:])
-                   if diagnostics else "Scanner diagnostics: unavailable.")
+            logger.info(
+                "SportyBet autobuild: only %s qualifying fixture(s); rows=%s stats=%s diagnostics=%s",
+                len(qualified_fixture_keys), len(rows), research_stats, diagnostics,
             )
+            await reply(update, f"🚫 NO QUALIFYING SPORTYBET SLIP — {target:.2f} TARGET")
             return
 
         build = build_accumulator(
@@ -2400,14 +2383,11 @@ async def autobuild_sportybet_command(update, context):
         if not chosen or not build.get("target_reached"):
             context.user_data.pop("pending_sportybet_booking", None)
             fixture_count = len({(x.get("day"), x.get("home"), x.get("away")) for x in rows})
-            await reply(
-                update,
-                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\n"
-                f"Research-qualified selections: {len(rows)} across {fixture_count} fixtures.\n"
-                f"Research rejection breakdown: {', '.join(f'{k}={v}' for k, v in (research_stats.get('rejection_reasons') or {}).items()) or 'not available'}.\n"
-                "No combination reached the target within the permitted 20% range. "
-                "No lower-odds substitute or booking code was created."
+            logger.info(
+                "SportyBet autobuild: no target-reaching combination; rows=%s fixtures=%s stats=%s",
+                len(rows), fixture_count, research_stats,
             )
+            await reply(update, f"🚫 NO QUALIFYING SPORTYBET SLIP — {target:.2f} TARGET")
             return
 
         resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
