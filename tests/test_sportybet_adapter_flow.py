@@ -62,7 +62,7 @@ class SportyBetAdapterFlowTests(unittest.TestCase):
             client._get_fixtures()
         params = get_mock.call_args.kwargs["params"]
         self.assertEqual(params["option"], "2")
-        self.assertEqual(params["timeline"], 2880)
+        self.assertNotIn("timeline", params)
 
 
 if __name__ == "__main__":
