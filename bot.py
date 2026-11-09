@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
 from database import get_connection, test_connection
@@ -5909,6 +5909,22 @@ async def sources_command(update, context):
     await reply(update, "\n".join(lines))
 
 
+async def set_bot_commands(application):
+    """Publish only the current supported commands in Telegram's command menu."""
+    await application.bot.set_my_commands([
+        BotCommand("start", "Open PUNTER KENYA"),
+        BotCommand("build", "Build a SportyBet slip at 2.00–5.00 odds"),
+        BotCommand("results", "Refresh and view settled betting records"),
+        BotCommand("roi", "View recorded betting ROI and profit/loss"),
+        BotCommand("history", "View saved SportyBet slips"),
+        BotCommand("rollover", "Set a 2.00–5.00 rollover plan"),
+        BotCommand("rolloverstatus", "View rollover progress"),
+        BotCommand("rolloverday", "Record a rollover result"),
+        BotCommand("bankroll", "View or update bankroll"),
+        BotCommand("cancel", "Cancel the current action"),
+    ])
+
+
 def main():
 
     if not BOT_TOKEN:
@@ -5932,6 +5948,7 @@ def main():
     app = (
         Application.builder()
         .token(BOT_TOKEN)
+        .post_init(set_bot_commands)
         .build()
     )
 
@@ -5982,7 +5999,6 @@ def main():
     app.add_handler(CallbackQueryHandler(sportybet_build_callback, pattern=r"^sb:"))
     app.add_handler(MessageHandler(filters.PHOTO, ai_slip_photo_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_text_handler))
-    app.add_handler(MessageHandler(filters.Regex(r"^/myslips$"), my_slips_command))
     
     app.add_error_handler(error_handler)
 
