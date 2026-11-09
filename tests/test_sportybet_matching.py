@@ -130,6 +130,37 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
             with self.assertRaisesRegex(SportyBetError, "native IDs"):
                 prepare_slip_from_candidates([{"odds": 4.5}])
 
+    def test_booking_adapter_accepts_21_selections_within_published_limit(self):
+        events = []
+        candidates = []
+        for index in range(21):
+            event_id = f"event-{index}"
+            events.append({
+                "eventId": event_id,
+                "homeTeamName": f"Home {index}",
+                "awayTeamName": f"Away {index}",
+                "estimateStartTime": 1999999999000,
+                "markets": [{
+                    "id": "market-1", "desc": "1X2", "specifier": None,
+                    "outcomes": [{"id": "home", "desc": "Home", "odds": "1.50", "isActive": 1}],
+                }],
+            })
+            candidates.append({
+                "event_id": event_id, "market_id": "market-1",
+                "outcome_id": "home", "specifier": None, "odds": 1.50,
+                "market": "1X2", "selection": "Home",
+            })
+        with patch("sportybet_client._get_fixtures", return_value=events):
+            resolved = prepare_slip_from_candidates(candidates)
+        self.assertEqual(len(resolved), 21)
+
+    def test_booking_adapter_rejects_more_than_50_selections(self):
+        with self.assertRaisesRegex(SportyBetError, "between 1 and 50"):
+            prepare_slip_from_candidates([{}] * 51)
+        with self.assertRaisesRegex(SportyBetError, "between 1 and 50"):
+            from sportybet_client import prepare_slip
+            prepare_slip(["Home vs Away | 1X2 | Home"] * 51)
+
 
 
     def test_betika_list_malformed_envelope_is_not_empty_day(self):
