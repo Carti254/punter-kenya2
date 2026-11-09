@@ -3398,7 +3398,7 @@ def build_pre_match_prediction(raw_fixture, fixture):
 
 
 
-def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None, model_variant="current"):
+def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None, model_variant="current", include_monte_carlo=True):
     """Forecast from competition results strictly before as_of_date when supplied."""
     folder = str(raw_fixture.get("leagueShortcut") or "").strip()
     if not folder:
@@ -3542,7 +3542,7 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
     elo_home_rating = elo_ratings.get(fixture["home_team"])
     elo_away_rating = elo_ratings.get(fixture["away_team"])
     # Reproducible Monte Carlo cross-check from the same transparent goal-rate inputs.
-    monte_carlo = monte_carlo_scoreline(lambda_home, lambda_away, simulations=10000)
+    monte_carlo = monte_carlo_scoreline(lambda_home, lambda_away, simulations=10000) if include_monte_carlo else None
 
     grid = []
     for home_goals in range(9):
@@ -5420,6 +5420,7 @@ def collect_walk_forward_forecasts(max_matches=2000):
                 {"home_team": home, "away_team": away},
                 historical_rows=rows,
                 as_of_date=match_date,
+                include_monte_carlo=False,
             )
             candidate = build_openmatchday_prediction(
                 {"leagueShortcut": folder},
@@ -5427,6 +5428,7 @@ def collect_walk_forward_forecasts(max_matches=2000):
                 historical_rows=rows,
                 as_of_date=match_date,
                 model_variant="venue_weighted",
+                include_monte_carlo=False,
             )
             if not prediction.get("available") or not candidate.get("available"):
                 continue
@@ -5447,13 +5449,16 @@ def collect_walk_forward_forecasts(max_matches=2000):
 
 
 def evaluate_historical_calibration():
-    """Evaluate reconstructed pre-match forecasts; never trust records without kickoff timestamps.
+    """Evaluate reconstructed pre-match forecasts and cache the result for six hours.
 
-    Existing saved prediction rows do not persist the exact kickoff timestamp, so they
-    cannot prove that the forecast was created before the match started. For calibration
-    we therefore reconstruct each forecast using only completed results strictly before
-    that fixture's date, then evaluate on later match dates.
+    The reconstruction is intentionally expensive and is not repeated on every
+    accumulator request. Historical simulations omit Monte Carlo because the
+    calibration target is the deterministic 1X2 scoreline probability vector.
     """
+    cache = globals().setdefault("_WALK_FORWARD_CALIBRATION_CACHE", {})
+    if cache.get("result") is not None and time.time() - cache.get("timestamp", 0) < 21600:
+        return dict(cache["result"])
+
     rows = collect_walk_forward_forecasts()
     source = "walk-forward reconstruction from historical competition results"
     rows = sorted(rows, key=lambda row: row["match_date"])
@@ -5481,13 +5486,17 @@ def evaluate_historical_calibration():
     dates = sorted({row[0] for row in usable})
     date_split = int(len(dates) * 0.70)
     if date_split < 1 or date_split >= len(dates):
-        return {"ready": False, "count": count, "train": 0, "holdout": 0, "source": source}
+        result = {"ready": False, "count": count, "train": 0, "holdout": 0, "source": source}
+        cache.update({"timestamp": time.time(), "result": result})
+        return dict(result)
     cutoff = dates[date_split]
     train = [row for row in usable if row[0] < cutoff]
     holdout = [row for row in usable if row[0] >= cutoff]
     if len(train) < 50 or len(holdout) < 30:
-        return {"ready": False, "count": count, "train": len(train),
-                "holdout": len(holdout), "source": source}
+        result = {"ready": False, "count": count, "train": len(train),
+                  "holdout": len(holdout), "source": source}
+        cache.update({"timestamp": time.time(), "result": result})
+        return dict(result)
 
     train_p = [row[1] for row in train]
     train_y = [row[2] for row in train]
@@ -5506,7 +5515,7 @@ def evaluate_historical_calibration():
     # A training-only prevalence baseline is a minimum reference, not a deployable model.
     baseline = [sum(1 for y in train_y if y == outcome) / len(train_y) for outcome in range(3)]
     baseline_p = [baseline for _ in test_y]
-    return {
+    result = {
         "ready": True, "count": count, "train": len(train),
         "holdout": len(holdout), "source": source,
         "temperature": fitted["temperature"],
@@ -5519,6 +5528,8 @@ def evaluate_historical_calibration():
         "baseline_brier": brier_score(baseline_p, test_y),
         "baseline_logloss": log_loss(baseline_p, test_y),
     }
+    cache.update({"timestamp": time.time(), "result": result})
+    return dict(result)
 
 
 async def calibrate_command(update, context):
