@@ -141,6 +141,10 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         checks.append(f"home/away venue splits reviewed ({home_venue_n} home; {away_venue_n} away)")
     if h2h_n:
         checks.append(f"same-competition head-to-head reviewed ({h2h_n} meetings)")
+    if row.get("standings_evidence"):
+        checks.append("current league table positions and points checked (API-Football)")
+    if row.get("early_goal_evidence"):
+        checks.append("first-goal-before-10-minute rates checked from recent match events (API-Football)")
     if probability_source.startswith("Dixon-Coles"):
         checks.append("Dixon-Coles low-score correction applied to the 1X2 probability")
     if monte_carlo:
@@ -183,6 +187,8 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
             "expected_home_goals": row.get("lambda_home"),
             "expected_away_goals": row.get("lambda_away"),
             "specialist_evidence": row.get("specialist_evidence"),
+            "standings_evidence": row.get("standings_evidence"),
+            "early_goal_evidence": row.get("early_goal_evidence"),
             "elo_home_rating": row.get("elo_home_rating"),
             "elo_away_rating": row.get("elo_away_rating"),
             "elo_matches_used": row.get("elo_matches_used"),
@@ -211,6 +217,8 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
                 ("empirical cross-fixture correlation data", bool(row.get("correlation_evidence"))),
                 ("out-of-sample probability calibration evidence", bool(row.get("calibration_evidence"))),
                 ("tactical matchup evidence", bool(row.get("tactical_evidence"))),
+                ("current league standings", bool(row.get("standings_evidence"))),
+                ("first-goal-before-10-minute statistics", bool(row.get("early_goal_evidence"))),
             ) if not present
         ],
     })
@@ -348,6 +356,10 @@ def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None, 
                 row["xg_evidence"] = report["xg_evidence"]
             if report.get("tactical_evidence"):
                 row["tactical_evidence"] = report["tactical_evidence"]
+            if report.get("standings_evidence"):
+                row["standings_evidence"] = report["standings_evidence"]
+            if report.get("early_goal_evidence"):
+                row["early_goal_evidence"] = report["early_goal_evidence"]
             if report.get("lineup_evidence") or report.get("team_news_evidence"):
                 providers = set(row.get("external_evidence_sources") or [])
                 providers.add("api-football")
