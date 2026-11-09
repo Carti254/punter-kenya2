@@ -143,12 +143,18 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
         all_states = eligible_partials or states
         if not all_states:
             all_states = [([], 1.0, 1.0, frozenset(), 0)]
-        if ranking == "probability":
-            best = max(all_states, key=lambda s: (s[2], s[1], -len(s[0])))
-        elif ranking == "odds":
-            best = max(all_states, key=lambda s: (s[1] * s[2], s[2], -len(s[0])))
-        else:
-            best = max(all_states, key=lambda s: (s[1] * s[2], s[2], -len(s[0])))
+        # A fallback is meant to be the closest sensible slip to the requested
+        # target, not merely the single leg with the largest expected-return
+        # factor. Only partials within the existing 20% tolerance are eligible;
+        # this prevents a small target from being "filled" with an extreme longshot.
+        def fallback_score(state):
+            _, odds_now, probability_now, _, _ = state
+            distance = -abs(math.log(target / odds_now))
+            value = odds_now * probability_now
+            if ranking == "probability":
+                return (distance, probability_now, value, -len(state[0]))
+            return (distance, value, probability_now, -len(state[0]))
+        best = max(all_states, key=fallback_score)
     picks, odds_product, probability_product, _, _ = best
     selections = []
     for item in picks:
