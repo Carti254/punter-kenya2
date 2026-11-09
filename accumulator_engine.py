@@ -39,6 +39,11 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
         item = dict(row)
         item["odds"], item["probability"] = odds, probability
         market_text = (str(row.get("market") or "") + " " + str(row.get("selection") or "") + " " + str(row.get("specifier") or "")).casefold()
+        # DNB includes a void-on-draw settlement. Until the accumulator models
+        # push outcomes across all legs, multiplying conditional DNB probabilities
+        # overstates accumulator hit probability and can misstate combined returns.
+        if "draw no bet" in market_text or __import__("re").search(r"(?<![a-z])dnb(?![a-z])", market_text):
+            continue
         if "btts" in market_text or "both teams to score" in market_text:
             continue
         if "under 2.5" in market_text or ("under" in market_text and "2.5" in str(row.get("specifier") or "")):
