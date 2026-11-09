@@ -3223,7 +3223,6 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
         if not fit.get("available"):
             return {
                 "available": False,
-                "reason": fit.get("reason") or "Competition history unavailable.",
                 "training_sample": fit.get("sample_size", 0),
                 "history_source": history_source,
                 "supplementary_history": source_info,
