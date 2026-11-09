@@ -1394,8 +1394,8 @@ async def process_slip_flow(update, context):
                         selections.append(leg)
             if not selections:
                 raise SportyBetError("No selections could be merged.")
-            if len(selections) > 20:
-                raise SportyBetError(f"Merged slip has {len(selections)} unique selections; SportyBet builder currently supports at most 20.")
+            if len(selections) > 50:
+                raise SportyBetError(f"Merged slip has {len(selections)} unique selections; SportyBet Kenya's published betslip limit is 50.")
             context.user_data["pending_sportybet_groups"] = [selections]
             context.user_data.pop("slip_flow", None)
             odds = math.prod(float(x["odds"]) for x in selections)
