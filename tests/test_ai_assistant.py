@@ -61,5 +61,21 @@ class AIAssistantTests(unittest.TestCase):
             self.assertFalse(ai_assistant.ai_is_configured())
 
 
+    def test_retired_gemini_25_model_is_upgraded_to_38(self):
+        response = FakeResponse('{"action":"deepdive","fixture":"Deportivo La Coruna vs Valencia","date":"today","market":"all","target_odds":2.0}')
+        with patch.dict("os.environ", {"GEMINI_MODEL": "gemini-2.5-flash"}):
+            with patch.object(ai_assistant.requests, "post", return_value=response) as post:
+                result = ai_assistant.interpret_request("deportivo la coruna fc vs valencia")
+        self.assertEqual(result["fixture"], "Deportivo La Coruna vs Valencia")
+        self.assertIn("models/gemini-3.8-flash:generateContent", post.call_args.args[0])
+
+    def test_default_model_is_gemini_38_flash(self):
+        response = FakeResponse('{"action":"help","fixture":"","date":"both","market":"all","target_odds":5.0}')
+        with patch.dict("os.environ", {}, clear=True):
+            with patch.object(ai_assistant.requests, "post", return_value=response) as post:
+                ai_assistant.interpret_request("help")
+        self.assertIn("models/gemini-3.8-flash:generateContent", post.call_args.args[0])
+
+
 if __name__ == "__main__":
     unittest.main()
