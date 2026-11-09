@@ -2301,49 +2301,10 @@ async def autobuild_sportybet_command(update, context):
         rows = [row for row in rows if not is_big_five_top_flight(row)]
         big_five_excluded = before_big_five_filter - len(rows)
 
-        # Keep the live builder's critical path short: run the capped specialist
-        # match panels, but do not launch secondary X searches or a second full
-        # bookmaker-feed download for every build. Those optional sources must not
-        # prevent the primary SportyBet research scan from returning.
-        specialist_stats = {"reason": "Specialist research not configured or unavailable."}
-        price_history_stats = {"matched": 0, "reason": "Stored odds history not checked."}
-        try:
-            rows, specialist_stats = await asyncio.wait_for(
-                asyncio.to_thread(enrich_specialist_candidates, rows, max_fixtures=20),
-                timeout=45,
-            )
-        except Exception as enrichment_error:
-            logger.warning("Autobuild specialist enrichment failed: %s", enrichment_error)
-            specialist_stats = {
-                "reason": f"Specialist enrichment unavailable: {type(enrichment_error).__name__}: {str(enrichment_error)[:120]}"
-            }
-        # Odds-history lookup is supplementary; failure must not block a live scan.
-        try:
-            original_rows = rows
-            enriched_rows, price_history_stats = await asyncio.wait_for(
-                asyncio.to_thread(enrich_candidates_with_price_history, original_rows[:100]),
-                timeout=8,
-            )
-            rows = list(enriched_rows or []) + original_rows[100:]
-        except Exception as history_error:
-            logger.warning("Autobuild price-history enrichment unavailable: %s", history_error)
-            price_history_stats = {"matched": 0, "reason": f"Stored odds history unavailable: {type(history_error).__name__}"}
-
-        # Never reconstruct the entire historical dataset during a live slip request.
-        # Use only a recent, already-computed walk-forward result; otherwise leave
-        # probabilities uncalibrated and label them experimental in the report.
-        calibration_stats = {"applied": False, "reason": "No recent cached walk-forward validation; live scan skipped expensive recalculation."}
-        cached_validation = globals().get("_WALK_FORWARD_CALIBRATION_CACHE", {}).get("result")
-        cached_at = globals().get("_WALK_FORWARD_CALIBRATION_CACHE", {}).get("timestamp", 0)
-        if cached_validation and time.time() - cached_at < 21600:
-            rows, calibration_stats = apply_walk_forward_calibration(rows, cached_validation)
-
-        # Same evidence/value gate as /accumulator: minimum recent and venue samples,
-        # LOW confidence rejected, BTTS/Under 2.5/2UP excluded, and at least 3% EV.
-        rows, research_stats = await asyncio.to_thread(
-            prepare_candidate_pool, rows, marginal_ev_floor=0.03, use_dixon_coles=True
-        )
-        if not rows:
+        # Specialist and secondary prediction layers are disabled.
+        specialist_stats = {"enabled": False, "reason": "Single fitted Dixon-Coles model only."}
+        price_history_stats = {"matched": 0, "reason": "Not used for prediction."}
+                if not rows:
             context.user_data.pop("pending_sportybet_booking", None)
             # Research and feed diagnostics stay internal; Telegram gets a clean result.
             logger.info(
@@ -2493,7 +2454,7 @@ async def accumulator_status_command(update, context):
         # Keep this command on the same research/value gate as the SportyBet
         # auto-builder. The old implementation selected the six highest raw
         # probabilities, bypassed the 3% EV screen and hard-coded six legs.
-        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.03)
+        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.0)
     except Exception as exc:
         logger.exception("Accumulator scan failed")
         await reply(update, f"❌ ACCUMULATOR SCAN FAILED: {type(exc).__name__}: {str(exc)[:250]}")
@@ -4333,28 +4294,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         if unsupported:
             diagnostics.append("Markets retrieved but not model-supported yet: " + ", ".join(sorted(unsupported)[:12]))
 
-    try:
-    # Silently enrich exact SportyBet fixture matches with free BSD and PitchAPI
-    # evidence. External probabilities are cross-checks; exact BSD-supported
-    # result, goal-total and corner markets may supply missing probabilities.
-    # SportyBet prices remain the executable prices used by the accumulator.
-        candidates, free_source_stats = enrich_free_football_sources(candidates, max_fixtures=48)
-        logger.info("Free football source enrichment: %s", free_source_stats)
-        diagnostics.append(
-            "Free-source coverage: "
-            f"BSD={'on' if free_source_stats.get('bsd_enabled') else 'off'}, "
-            f"PitchAPI={'on' if free_source_stats.get('pitchapi_enabled') else 'off'}, "
-            f"fixtures_enriched={free_source_stats.get('fixtures_enriched', 0)}, "
-            f"BSD_matches={free_source_stats.get('bsd_matches', 0)}, "
-            f"PitchAPI_matches={free_source_stats.get('pitchapi_matches', 0)}, "
-            f"external_probabilities_added={free_source_stats.get('external_probabilities_added', 0)}"
-            + (f"; {free_source_stats.get('reason')}" if free_source_stats.get('reason') else "")
-        )
-        if free_source_stats.get("errors"):
-            diagnostics.extend("Free source: " + str(x)[:160] for x in free_source_stats["errors"][:5])
-    except Exception as source_error:
-        logger.warning("Optional free football source enrichment failed: %s", source_error)
-        free_source_stats = {"error": f"{type(source_error).__name__}: {str(source_error)[:160]}"}
+    # External probability enrichment removed: the fitted Dixon-Coles model is the sole source.
 
     for name, error in feed_errors.items():
         diagnostics.append(f"{name}: {str(error)[:100]}")
