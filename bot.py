@@ -2179,7 +2179,7 @@ async def autobuild_sportybet_command(update, context):
         specialist_stats = {"reason": "Specialist enrichment was not run."}
         try:
             rows, specialist_stats = await asyncio.to_thread(
-                enrich_specialist_candidates, rows, max_fixtures=10
+                enrich_specialist_candidates, rows, max_fixtures=4
             )
         except Exception as enrichment_error:
             logger.warning("Autobuild specialist enrichment failed: %s", enrichment_error)
@@ -2209,7 +2209,8 @@ async def autobuild_sportybet_command(update, context):
                 f"Target: {target:.2f}\nMarkets scanned: {scanned_count}\n"
                 f"Research/value-qualified selections: 0\n"
                 f"Big-Five top-flight fixtures excluded: {big_five_excluded}\n"
-                f"Rejected by research/value screen: {research_stats.get('rejected', 0)}\n"
+                f"Big-Five top-flight fixtures excluded: {big_five_excluded}\n"
+                f"Rejected by research/value screen: {research_stats.get('rejected', 0)}\n
                 "PUNTER will not pad the slip with weak, unmodelled or negative-value selections.\n"
                 f"Specialist research: {specialist_stats.get('reason', 'not available')}\n"
                 + (f"Feed notes: {note}" if note else "")
@@ -2338,6 +2339,24 @@ async def autobuild_sportybet_command(update, context):
                 lines.append("   xG/shot-quality evidence: available from specialist provider.")
             if leg.get("tactical_evidence"):
                 lines.append("   Tactical matchup evidence: available from specialist provider.")
+            if leg.get("standings_evidence"):
+                table = leg["standings_evidence"]
+                home_table, away_table = table.get("home") or {}, table.get("away") or {}
+                lines.append(
+                    f"   League standings ({table.get('league') or 'competition'}): "
+                    f"home rank {home_table.get('rank', 'N/A')} / {home_table.get('points', 'N/A')} pts; "
+                    f"away rank {away_table.get('rank', 'N/A')} / {away_table.get('points', 'N/A')} pts."
+                )
+            if leg.get("early_goal_evidence"):
+                early = leg["early_goal_evidence"]
+                home_early, away_early = early.get("home") or {}, early.get("away") or {}
+                lines.append(
+                    "   First goal ≤10 min — "
+                    f"home team: {home_early.get('team_scored_first_before_10_rate', 0):.0%} "
+                    f"(n={home_early.get('sample', 0)}); away team: "
+                    f"{away_early.get('team_scored_first_before_10_rate', 0):.0%} "
+                    f"(n={away_early.get('sample', 0)})."
+                )
             if leg.get("odds_history_evidence"):
                 history = leg["odds_history_evidence"]
                 lines.append(
