@@ -82,10 +82,32 @@ def _json_from_response(raw: str) -> dict[str, Any]:
     return value
 
 
+def _plain_fixture_request(message: str) -> dict[str, Any] | None:
+    """Route an unambiguous 'Home vs Away' message without depending on Gemini."""
+    match = re.fullmatch(r"\\s*(.+?)\\s+(?:vs?\\.?|v)\\s+(.+?)\\s*", message, flags=re.IGNORECASE)
+    if not match:
+        return None
+    home = re.sub(r"\\s+", " ", match.group(1)).strip(" .,-")
+    away = re.sub(r"\\s+", " ", match.group(2)).strip(" .,-")
+    if not home or not away or len(home) > 90 or len(away) > 90:
+        return None
+    return {
+        "action": "deepdive",
+        "fixture": f"{home} vs {away}",
+        "date": "today",
+        "market": "all",
+        "target_odds": 5.0,
+        "explanation": "",
+    }
+
+
 def interpret_request(message: str) -> dict[str, Any]:
-    """Translate a user's natural-language request into an existing bot workflow."""
+    """Translate a user's request; route clear fixture queries locally first."""
     if not message or len(message) > 2000:
         raise ValueError("Message must contain 1–2,000 characters.")
+    direct_fixture = _plain_fixture_request(message)
+    if direct_fixture is not None:
+        return direct_fixture
     prompt = (
         "Translate this user request into JSON with keys action, fixture, date, market, target_odds, explanation. "
         "action must be one of deepdive, odds, fixtures, topvalue, autobuild, help, explain. "
