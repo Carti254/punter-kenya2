@@ -458,6 +458,12 @@ def enrich_candidates(rows: list[dict], max_fixtures: int = 30):
                     row["external_model_disagreement"] = abs(float(own_p) - external_p)
                 else:
                     row["probability"] = external_p
+                    # This probability came from a unique provider fixture match
+                    # and an explicit market/selection mapping in _external_probability.
+                    # Mark the mapping as verified so the research gate does not
+                    # reject a valid external probability merely because the base
+                    # PUNTER history model had no estimate for this row.
+                    row["market_probability_verified"] = True
                     row["probability_source"] = "BSD free football model — exact market/selection mapping"
                     row["ev"] = external_p * float(row["odds"]) - 1.0
                     row["fair_odds"] = 1.0 / external_p
