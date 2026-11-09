@@ -44,21 +44,31 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     if row.get("market_probability_verified") is not True:
         return None
 
-    # Check the underlying sample before its derived confidence label. This
-    # makes rejection diagnostics identify missing/short team history instead
-    # of masking the root cause as a generic LOW or missing confidence.
-    for sample_key, minimum in (("home_sample", 5), ("away_sample", 5)):
-        try:
-            sample_size = int(row.get(sample_key))
-        except (TypeError, ValueError, OverflowError):
-            return None
-        if sample_size < minimum:
-            return None
-
-    # Confidence remains a separate gate after the minimum sample check.
-    # A high quoted price must never turn a weak forecast into an accumulator leg.
-    confidence = str(row.get("model_confidence") or "").strip().upper()
-    if confidence not in {"MODERATE", "HIGH"}:
+    # Two explicitly separated evidence routes:
+    # (1) PUNTER's own model, supported by recent samples and venue evidence;
+    # (2) an exact-market BSD probability, attached only after a unique exact
+    # provider fixture match. Missing PUNTER history must not erase a valid
+    # independent forecast, but an arbitrary probability is never sufficient.
+    specialist = row.get("specialist_evidence") or {}
+    probability_source = str(row.get("probability_source") or "")
+    external_bsd_probability = (
+        specialist.get("provider") == "BSD"
+        and probability_source.startswith("BSD free football model")
+        and row.get("external_market_probability") is not None
+        and abs(float(row.get("external_market_probability")) - probability) < 1e-9
+        and "bsd" in (row.get("external_evidence_sources") or [])
+        and (row.get("external_research") or {}).get("bsd", {}).get("event_id")
+    )
+    try:
+        home_sample = int(row.get("home_sample") or 0)
+        away_sample = int(row.get("away_sample") or 0)
+    except (TypeError, ValueError, OverflowError):
+        home_sample = away_sample = 0
+    own_model_supported = (
+        home_sample >= 5 and away_sample >= 5
+        and str(row.get("model_confidence") or "").strip().upper() in {"MODERATE", "HIGH"}
+    )
+    if not own_model_supported and not external_bsd_probability:
         return None
 
     # An independently supplied external model is a
@@ -68,7 +78,7 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         external_disagreement = float(row.get("external_model_disagreement"))
     except (TypeError, ValueError, OverflowError):
         external_disagreement = None
-    if external_disagreement is not None:
+    if external_disagreement is not None and own_model_supported:
         if not math.isfinite(external_disagreement) or external_disagreement > 0.10:
             return None
     # Venue splits are valuable supplementary evidence, but missing venue
@@ -99,8 +109,12 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         ))
     except (TypeError, ValueError, OverflowError):
         venue_goals_present = False
-    if home_venue_n < 1 or away_venue_n < 1 or not venue_goals_present:
+    if own_model_supported and (home_venue_n < 1 or away_venue_n < 1 or not venue_goals_present):
         return None
+    if external_bsd_probability and not own_model_supported:
+        # The external provider is the probability source; absent PUNTER venue
+        # splits are recorded as research gaps, not misrepresented as observed.
+        venue_goals_present = False
 
     market = str(row.get("market") or "")
     selection = str(row.get("selection") or "")
@@ -346,14 +360,23 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03, use_d
         return "unverified_selected_market_probability"
     # Report missing/insufficient underlying samples before the confidence
     # label derived from those same samples, so diagnostics expose root causes.
-    for key, minimum in (("home_sample", 5), ("away_sample", 5)):
-        try:
-            if int(row.get(key)) < minimum:
-                return "insufficient_" + key
-        except (TypeError, ValueError, OverflowError):
-            return "missing_" + key
-    if str(row.get("model_confidence") or "").strip().upper() not in {"MODERATE", "HIGH"}:
-        return "low_or_missing_model_confidence"
+    specialist = row.get("specialist_evidence") or {}
+    source = str(row.get("probability_source") or "")
+    external_bsd_probability = (
+        specialist.get("provider") == "BSD"
+        and source.startswith("BSD free football model")
+        and row.get("external_market_probability") is not None
+        and abs(float(row.get("external_market_probability")) - probability) < 1e-9
+        and "bsd" in (row.get("external_evidence_sources") or [])
+        and (row.get("external_research") or {}).get("bsd", {}).get("event_id")
+    )
+    try:
+        own_samples_ok = int(row.get("home_sample") or 0) >= 5 and int(row.get("away_sample") or 0) >= 5
+    except (TypeError, ValueError, OverflowError):
+        own_samples_ok = False
+    own_model_supported = own_samples_ok and str(row.get("model_confidence") or "").strip().upper() in {"MODERATE", "HIGH"}
+    if not own_model_supported and not external_bsd_probability:
+        return "insufficient_own_or_verified_external_model_evidence"
     try:
         home_venue_n = int(row.get("home_home_sample") or 0)
         away_venue_n = int(row.get("away_away_sample") or 0)
@@ -364,11 +387,10 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03, use_d
             return math.isfinite(float(value))
         except (TypeError, ValueError, OverflowError):
             return False
-    if home_venue_n < 1 or away_venue_n < 1 or not all(
-        _has_number(row.get(key)) for key in (
-            "home_home_gf", "home_home_ga", "away_away_gf", "away_away_ga"
-        )
-    ):
+    venue_numbers_ok = all(_has_number(row.get(key)) for key in (
+        "home_home_gf", "home_home_ga", "away_away_gf", "away_away_ga"
+    ))
+    if own_model_supported and (home_venue_n < 1 or away_venue_n < 1 or not venue_numbers_ok):
         return "insufficient_venue_split_evidence"
     try:
         disagreement = float(row.get("external_model_disagreement"))
