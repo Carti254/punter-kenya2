@@ -579,6 +579,9 @@ def enrich_with_specialist_models(rows: list[dict], api_key: str | None = None, 
                 continue
             row["base_probability"] = row.get("probability")
             row["probability"] = float(match["probability"])
+            # The specialist assessment is attached only after the exact
+            # fixture/date and exact market/selection/price have matched.
+            row["market_probability_verified"] = True
             row["probability_source"] = "API-Football recent-form specialist Poisson baseline (experimental)"
             row["specialist_evidence"] = {
                 "provider": report.get("provider"), "model": "recent-form Poisson baseline",
