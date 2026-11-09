@@ -98,7 +98,18 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
                 if fixture_key in used:
                     continue
                 new_odds = odds_product * item["odds"]
-                new_probability = probability_product * item["probability"]
+                # Conservative dependence haircut for legs in the same competition
+                # on the same date. This is an explicit risk heuristic, NOT an
+                # empirically estimated pairwise correlation coefficient.
+                dependence_factor = 1.0
+                item_league = str(item.get("league") or "").strip().casefold()
+                item_day = str(item.get("day") or item.get("match_date") or "")[:10]
+                for previous in picks:
+                    previous_league = str(previous.get("league") or "").strip().casefold()
+                    previous_day = str(previous.get("day") or previous.get("match_date") or "")[:10]
+                    if item_league and previous_league == item_league and item_day and previous_day == item_day:
+                        dependence_factor *= 0.97
+                new_probability = probability_product * item["probability"] * dependence_factor
                 new_picks = picks + [item]
                 factor = new_odds * new_probability
                 state = (new_picks, new_odds, new_probability, used | {fixture_key}, item_index + 1)
@@ -156,6 +167,10 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
             return (distance, value, probability_now, -len(state[0]))
         best = max(all_states, key=fallback_score)
     picks, odds_product, probability_product, _, _ = best
+    naive_probability_product = math.prod(item["probability"] for item in picks)
+    correlation_adjustment_factor = (
+        probability_product / naive_probability_product if naive_probability_product > 0 else 1.0
+    )
     selections = []
     for item in picks:
         selections.append({k: v for k, v in item.items() if not k.startswith("_")})
@@ -174,11 +189,13 @@ def build_accumulator(candidates, target_odds, max_legs=None, beam_width=1800, m
         "selections": selections,
         "combined_odds": odds_product,
         "combined_probability": probability_product,
+        "naive_independent_probability": naive_probability_product,
+        "correlation_adjustment_factor": correlation_adjustment_factor,
         "expected_return_factor": odds_product * probability_product,
         "expected_roi": odds_product * probability_product - 1,
         "target_reached": target <= odds_product <= target * 1.20,
         "independence_assumption": True,
         "correlation_warnings": correlation_warnings,
-        "correlation_note": "Same-competition/date clustering is flagged; other cross-fixture dependencies are not quantified.",
+        "correlation_note": "Same-competition/date pairs receive a conservative 3% dependence haircut each. This is a heuristic, not measured correlation; other dependencies are not quantified.",
         "reason": None if target <= odds_product <= target * 1.20 else "No combination found within 20% above target.",
     }
