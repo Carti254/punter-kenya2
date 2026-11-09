@@ -4286,6 +4286,9 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         matched_events = 0
         unsupported = set()
         prediction_unavailable = 0
+        history_fallback_attempted = 0
+        history_fallback_recovered = 0
+        history_failure_reasons = Counter()
         market_rows_seen = 0
         # Resolve live SportyBet matches first, then prefetch history only for
         # the leagues that actually have matched events. Do this concurrently:
@@ -4329,20 +4332,37 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                     as_of_date=fixture.get("kickoff_at"),
                     model_variant="venue_weighted"
                 )
-                # Cup fixtures and teams crossing competition boundaries often
-                # have fewer than five records in the cup CSV. In that case,
-                # reuse the same recent-form model with a broader team-history
-                # pool, while retaining the fixture's own competition rows for
-                # its scoring baseline, H2H and competition Elo calculations.
-                if (not prediction.get("available")
-                        and "Insufficient recent results" in str(prediction.get("reason") or "")):
-                    cross_competition_rows = fetch_openmatchday_team_history_rows()
-                    prediction = build_openmatchday_prediction(
-                        raw, fixture, historical_rows=local_history,
-                        as_of_date=fixture.get("kickoff_at"),
-                        team_history_rows=cross_competition_rows,
-                        model_variant="venue_weighted"
-                    )
+                # Retry every unavailable prediction with cross-competition
+                # team history, not only the exact "Insufficient recent results"
+                # message. A local results feed can be empty, stale, or malformed
+                # while the teams still have usable results in another competition.
+                # Keep the fixture's own competition rows for league baseline,
+                # H2H and Elo; broaden only the two teams' recent-form samples.
+                if not prediction.get("available") and folder:
+                    history_fallback_attempted += 1
+                    original_reason = str(prediction.get("reason") or "unknown model-history failure")
+                    try:
+                        cross_competition_rows = fetch_openmatchday_team_history_rows()
+                        fallback_prediction = build_openmatchday_prediction(
+                            raw, fixture, historical_rows=local_history,
+                            as_of_date=fixture.get("kickoff_at"),
+                            team_history_rows=cross_competition_rows,
+                            model_variant="venue_weighted"
+                        )
+                        if fallback_prediction.get("available"):
+                            prediction = fallback_prediction
+                            history_fallback_recovered += 1
+                        else:
+                            history_failure_reasons[original_reason[:100]] += 1
+                            history_failure_reasons[str(fallback_prediction.get("reason") or "cross-competition history insufficient")[:100]] += 1
+                    except Exception as fallback_exc:
+                        history_failure_reasons[
+                            f"cross-competition fallback error: {type(fallback_exc).__name__}"[:100]
+                        ] += 1
+                        logger.warning(
+                            "Cross-competition history fallback failed for %s vs %s: %s",
+                            home_name, away_name, fallback_exc
+                        )
             except Exception as exc:
                 prediction_unavailable += 1
                 logger.exception("Autobuild prediction failed for %s vs %s", home_name, away_name)
@@ -4458,6 +4478,18 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             f"{market_rows_seen} market rows inspected; {len(candidates)} total candidate rows accumulated; "
             f"{prediction_unavailable} matched fixtures lacked usable model history"
         )
+        if history_fallback_attempted:
+            diagnostics.append(
+                f"{day.isoformat()}: cross-competition history fallback attempted for "
+                f"{history_fallback_attempted} fixtures; recovered {history_fallback_recovered}"
+            )
+        if history_failure_reasons:
+            diagnostics.append(
+                "History fallback details: " + "; ".join(
+                    f"{reason} ({count})"
+                    for reason, count in history_failure_reasons.most_common(4)
+                )
+            )
         if not matched_events:
             diagnostics.append(f"{day.isoformat()}: no confidently matched SportyBet events")
         if unsupported:
