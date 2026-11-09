@@ -2266,14 +2266,32 @@ async def autobuild_sportybet_command(update, context):
                 f"{leg.get('away_scored_avg') or 0:.2f}/{leg.get('away_conceded_avg') or 0:.2f}"
             )
             lines.append(
-                f"   Venue samples — home at home: {leg.get('home_home_sample') or 0}; "
-                f"away away: {leg.get('away_away_sample') or 0}"
+                f"   Venue splits — home at home GF/GA: "
+                f"{leg.get('home_home_gf') if leg.get('home_home_gf') is not None else 'N/A'}/"
+                f"{leg.get('home_home_ga') if leg.get('home_home_ga') is not None else 'N/A'} "
+                f"({leg.get('home_home_sample') or 0} matches); away away GF/GA: "
+                f"{leg.get('away_away_gf') if leg.get('away_away_gf') is not None else 'N/A'}/"
+                f"{leg.get('away_away_ga') if leg.get('away_away_ga') is not None else 'N/A'} "
+                f"({leg.get('away_away_sample') or 0} matches)"
             )
+            h2h_rows = leg.get("h2h_results") or []
+            h2h_scores = [
+                f"{int(x.get('home_goals', 0))}-{int(x.get('away_goals', 0))}"
+                for x in h2h_rows[:3]
+            ]
             lines.append(
-                f"   H2H: {leg.get('h2h_count') or 0} same-competition meetings; "
-                f"Elo: {leg.get('elo_home_rating') if leg.get('elo_home_rating') is not None else 'N/A'} / "
+                f"   H2H: {leg.get('h2h_count') or 0} same-competition meetings"
+                + (f" (latest: {', '.join(h2h_scores)})" if h2h_scores else " (no prior meeting found)")
+                + f"; Elo: {leg.get('elo_home_rating') if leg.get('elo_home_rating') is not None else 'N/A'} / "
                 f"{leg.get('elo_away_rating') if leg.get('elo_away_rating') is not None else 'N/A'}"
             )
+            if leg.get("lambda_home") is not None and leg.get("lambda_away") is not None:
+                lines.append(
+                    f"   Expected goals: {float(leg['lambda_home']):.2f} – {float(leg['lambda_away']):.2f}"
+                )
+            if leg.get("monte_carlo"):
+                lines.append("   Monte Carlo: 10,000 scoreline simulations from the same expected-goal inputs (not independent evidence)")
+            lines.append(f"   Probability source: {leg.get('probability_source') or 'not specified'}")
             if leg.get("research_checks"):
                 lines.append("   Checks: " + "; ".join(leg["research_checks"][:5]))
             if leg.get("research_gaps"):
@@ -2282,6 +2300,16 @@ async def autobuild_sportybet_command(update, context):
                 lines.append("   Lineup evidence: available from specialist provider; verify it is confirmed before kickoff.")
             if leg.get("team_news_evidence"):
                 lines.append("   Injury/suspension evidence: available from specialist provider.")
+            if leg.get("xg_evidence"):
+                lines.append("   xG/shot-quality evidence: available from specialist provider.")
+            if leg.get("tactical_evidence"):
+                lines.append("   Tactical matchup evidence: available from specialist provider.")
+            if leg.get("odds_history_evidence"):
+                history = leg["odds_history_evidence"]
+                lines.append(
+                    f"   Odds movement: {history.get('status', 'not verified')} "
+                    f"({history.get('observations', 0)} exact-match snapshots)"
+                )
             if leg.get("x_research_evidence"):
                 lines.append("   Public social leads: available but unverified; not treated as confirmed team news.")
             if leg.get("best_other_bookmaker"):
@@ -2308,7 +2336,21 @@ async def autobuild_sportybet_command(update, context):
             InlineKeyboardButton("Generate SportyBet code", callback_data="sb:confirm"),
             InlineKeyboardButton("Cancel", callback_data="sb:cancel"),
         ]])
-        await update.effective_message.reply_text("\n".join(lines), reply_markup=markup)
+        # Split long high-leg-count reports into Telegram-safe messages.
+        chunks, current = [], ""
+        for line in lines:
+            addition = line + "\n"
+            if current and len(current) + len(addition) > 3500:
+                chunks.append(current.rstrip())
+                current = ""
+            current += addition
+        if current.strip():
+            chunks.append(current.rstrip())
+        for index, chunk in enumerate(chunks):
+            await update.effective_message.reply_text(
+                chunk,
+                reply_markup=markup if index == len(chunks) - 1 else None,
+            )
     except Exception as exc:
         logger.exception("SportyBet auto-builder failed")
         context.user_data.pop("pending_sportybet_booking", None)
@@ -4117,8 +4159,18 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                     market_rows_seen += 1
                     market_name = str(row.get("market") or "Unknown")
                     selection_name = str(row.get("selection") or "Unknown")
+                    market_text_for_sources = _normal_market_text(
+                        market_name + " " + selection_name + " " + str(row.get("specifier") or row.get("handicap") or "")
+                    )
+                    # These exclusions apply at scan time as well as in the
+                    # research gate and accumulator engine.
+                    if ("btts" in market_text_for_sources or
+                            "both teams to score" in market_text_for_sources or
+                            ("under" in market_text_for_sources and "2.5" in market_text_for_sources) or
+                            "2up" in market_text_for_sources or
+                            "early payout" in market_text_for_sources):
+                        continue
                     probability, reason = _market_probability_for_row(prediction, row)
-                    market_text_for_sources = _normal_market_text(market_name + " " + selection_name)
                     specialist_market = any(term in market_text_for_sources
                         for term in ("corner", "card", "booking", "total shots", "shots on target",
                                      "shots on goal", "first half", "half time", "1st half"))
