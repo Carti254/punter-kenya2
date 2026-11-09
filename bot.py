@@ -5391,7 +5391,8 @@ async def error_handler(
 # ============================================================
 
 def collect_walk_forward_forecasts(max_matches=2000):
-    """Reconstruct historical forecasts using only results before each match date."""
+    """Reconstruct current and venue-weighted Dixon-Coles forecasts before each match date."""
+    from dixon_coles_engine import selected_outcome_probability
     samples = []
     leagues = fetch_all_leagues()
     for league in leagues:
@@ -5432,14 +5433,28 @@ def collect_walk_forward_forecasts(max_matches=2000):
             )
             if not prediction.get("available") or not candidate.get("available"):
                 continue
+            # The deployable candidate is venue-weighted Dixon-Coles. Backtest
+            # exactly the same 1X2 probability vector that the live gate uses.
+            try:
+                lh, la = float(candidate["lambda_home"]), float(candidate["lambda_away"])
+                candidate_vector = [
+                    selected_outcome_probability(lh, la, "1", home, away),
+                    selected_outcome_probability(lh, la, "X", home, away),
+                    selected_outcome_probability(lh, la, "2", home, away),
+                ]
+            except (KeyError, TypeError, ValueError, ArithmeticError):
+                continue
+            if not all(value is not None and math.isfinite(float(value)) and 0 <= float(value) <= 1
+                       for value in candidate_vector) or sum(candidate_vector) <= 0:
+                continue
             samples.append({
                 "match_date": match_date,
                 "p_home": prediction["home_win"],
                 "p_draw": prediction["draw"],
                 "p_away": prediction["away_win"],
-                "candidate_home": candidate["home_win"],
-                "candidate_draw": candidate["draw"],
-                "candidate_away": candidate["away_win"],
+                "candidate_home": candidate_vector[0],
+                "candidate_draw": candidate_vector[1],
+                "candidate_away": candidate_vector[2],
                 "actual_home_goals": hg,
                 "actual_away_goals": ag,
             })
@@ -5502,15 +5517,19 @@ def evaluate_historical_calibration():
     train_y = [row[2] for row in train]
     test_p = [row[1] for row in holdout]
     test_y = [row[2] for row in holdout]
-    fitted = fit_temperature(train_p, train_y, minimum_samples=50)
-    calibrated = [apply_temperature(p, fitted["temperature"]) for p in test_p]
 
+    # Fit temperature on the venue-weighted Dixon-Coles candidate itself,
+    # never on the older model and then transfer that temperature to a different model.
+    candidate_train_p = [row[3] for row in train]
     candidate_p = [row[3] for row in holdout]
-    if len(candidate_p) != len(test_y):
-        candidate_brier = candidate_logloss = None
-    else:
-        candidate_brier = brier_score(candidate_p, test_y)
-        candidate_logloss = log_loss(candidate_p, test_y)
+    fitted = fit_temperature(candidate_train_p, train_y, minimum_samples=50)
+    candidate_calibrated = [
+        apply_temperature(p, fitted["temperature"]) for p in candidate_p
+    ]
+    candidate_brier = brier_score(candidate_p, test_y)
+    candidate_logloss = log_loss(candidate_p, test_y)
+    candidate_calibrated_brier = brier_score(candidate_calibrated, test_y)
+    candidate_calibrated_logloss = log_loss(candidate_calibrated, test_y)
 
     # A training-only prevalence baseline is a minimum reference, not a deployable model.
     baseline = [sum(1 for y in train_y if y == outcome) / len(train_y) for outcome in range(3)]
@@ -5520,11 +5539,13 @@ def evaluate_historical_calibration():
         "holdout": len(holdout), "source": source,
         "temperature": fitted["temperature"],
         "raw_brier": brier_score(test_p, test_y),
-        "calibrated_brier": brier_score(calibrated, test_y),
         "raw_logloss": log_loss(test_p, test_y),
-        "calibrated_logloss": log_loss(calibrated, test_y),
+        "calibrated_brier": candidate_calibrated_brier,
+        "calibrated_logloss": candidate_calibrated_logloss,
         "candidate_brier": candidate_brier,
         "candidate_logloss": candidate_logloss,
+        "candidate_calibrated_brier": candidate_calibrated_brier,
+        "candidate_calibrated_logloss": candidate_calibrated_logloss,
         "baseline_brier": brier_score(baseline_p, test_y),
         "baseline_logloss": log_loss(baseline_p, test_y),
     }
@@ -5544,11 +5565,12 @@ async def calibrate_command(update, context):
                 f"Out-of-sample holdout: {result['holdout']} (minimum 30)\n\n"
                 "No calibration parameter has been fitted or applied. Keep the model labelled experimental.")
             return
-        improved = result["calibrated_brier"] < result["raw_brier"] and result["calibrated_logloss"] < result["raw_logloss"]
+        improved = (
+            result["candidate_calibrated_brier"] < result["candidate_brier"]
+            and result["candidate_calibrated_logloss"] < result["candidate_logloss"]
+        )
         candidate_improved = (
-            result.get("candidate_brier") is not None
-            and result.get("candidate_logloss") is not None
-            and result["candidate_brier"] < result["raw_brier"]
+            result["candidate_brier"] < result["raw_brier"]
             and result["candidate_logloss"] < result["raw_logloss"]
             and result["candidate_brier"] < result["baseline_brier"]
             and result["candidate_logloss"] < result["baseline_logloss"]
@@ -5558,9 +5580,9 @@ async def calibrate_command(update, context):
             f"Forecast sample: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\\n"
             f"Data source: {result['source']}\\n"
             f"Fitted temperature (not applied): {result['temperature']:.2f}\\n\\n"
-            f"Current model Brier: {result['raw_brier']:.4f} | calibrated: {result['calibrated_brier']:.4f}\\n"
-            f"Current model log loss: {result['raw_logloss']:.4f} | calibrated: {result['calibrated_logloss']:.4f}\\n"
-            f"Venue-weighted candidate: Brier {result['candidate_brier']:.4f} | log loss {result['candidate_logloss']:.4f}\\n"
+            f"Current model Brier: {result['raw_brier']:.4f} | log loss: {result['raw_logloss']:.4f}\\n"
+            f"Venue-weighted Dixon-Coles candidate: Brier {result['candidate_brier']:.4f} | log loss {result['candidate_logloss']:.4f}\\n"
+            f"Candidate after temperature calibration: Brier {result['candidate_calibrated_brier']:.4f} | log loss {result['candidate_calibrated_logloss']:.4f}\\n"
             f"Training-prevalence baseline: Brier {result['baseline_brier']:.4f} | log loss {result['baseline_logloss']:.4f}\\n\\n"
             + ("Candidate beat both the current model and baseline on both metrics; it may proceed to further validation." if candidate_improved else "Candidate did not beat both the current model and baseline on both metrics. Do not promote it; keep the model experimental.")
             + "\\n"
