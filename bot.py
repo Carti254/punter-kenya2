@@ -4415,6 +4415,8 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                             ("under" in market_text_for_sources and "2.5" in market_text_for_sources) or
                             "draw no bet" in market_text_for_sources or
                             re.search(r"(?<![a-z])dnb(?![a-z])", market_text_for_sources) or
+                            (any(term in market_text_for_sources for term in ("total goals", "over under", "goals over", "goals under", "total match", "goal line", "asian handicap", "handicap"))
+                             and bool(re.search(r"(?<!\\d)\\d+\\.0+(?!\\d)|(?<!\\d)\\d+(?![\\d.])", market_text_for_sources))) or
                             "2up" in market_text_for_sources or
                             "early payout" in market_text_for_sources):
                         continue
