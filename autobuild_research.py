@@ -74,6 +74,37 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
         away_venue_n = 0
     venue_evidence_complete = home_venue_n >= 3 and away_venue_n >= 3
 
+    # Autobuild must not promote a forecast to a qualifying betting leg merely
+    # because the overall sample counters and a derived confidence label exist.
+    # Require actual venue-split goal evidence for BOTH teams, plus at least one
+    # genuinely separate corroborating source (standings, 3+ H2H meetings,
+    # exact-market specialist assessment, or an independent model comparison).
+    def _has_number(value):
+        try:
+            return math.isfinite(float(value))
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+    venue_goals_present = all(_has_number(row.get(key)) for key in (
+        "home_home_gf", "home_home_ga", "away_away_gf", "away_away_ga"
+    ))
+    h2h_count_for_gate = 0
+    try:
+        h2h_count_for_gate = int(row.get("h2h_count") or 0)
+    except (TypeError, ValueError, OverflowError):
+        pass
+    standings_for_gate = row.get("standings_evidence") or {}
+    corroboration_present = bool(
+        (standings_for_gate.get("home") and standings_for_gate.get("away"))
+        or h2h_count_for_gate >= 3
+        or row.get("specialist_evidence")
+        or row.get("external_model_disagreement") is not None
+    )
+    if not venue_evidence_complete or not venue_goals_present:
+        return None
+    if not corroboration_present:
+        return None
+
     market = str(row.get("market") or "")
     selection = str(row.get("selection") or "")
     combined_text = f"{market} {selection} {row.get('specifier') or ''}".casefold()
@@ -175,11 +206,15 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
     )
 
     checks = [
-        "fixture matched to bookmaker event",
-        "current bookmaker price retrieved",
-        "market probability supported by PUNTER statistical model",
-        "implied probability, fair odds and raw expected value calculated",
+        "market probability and bookmaker-implied probability compared",
+        "implied probability, fair odds and model-estimated expected value calculated",
     ]
+    if row.get("event_id") or row.get("eventId") or row.get("sportybet_event_id"):
+        checks.append("SportyBet event identifier present on candidate")
+    if row.get("fixture_match_verified") is True:
+        checks.append("fixture identity explicitly verified by source matcher")
+    if row.get("price_source") or row.get("bookmaker") == "SportyBet":
+        checks.append("SportyBet price source recorded on candidate")
     if home_n >= 5 and away_n >= 5:
         checks.append(f"recent form and goals reviewed ({home_n} home-team matches; {away_n} away-team matches)")
     if home_venue_n >= 3 and away_venue_n >= 3:
@@ -292,6 +327,34 @@ def candidate_rejection_bucket(row: dict, marginal_ev_floor: float = 0.03, use_d
             return "missing_" + key
     if str(row.get("model_confidence") or "").strip().upper() not in {"MODERATE", "HIGH"}:
         return "low_or_missing_model_confidence"
+    try:
+        home_venue_n = int(row.get("home_home_sample") or 0)
+        away_venue_n = int(row.get("away_away_sample") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return "missing_venue_split_evidence"
+    def _has_number(value):
+        try:
+            return math.isfinite(float(value))
+        except (TypeError, ValueError, OverflowError):
+            return False
+    if home_venue_n < 3 or away_venue_n < 3 or not all(
+        _has_number(row.get(key)) for key in (
+            "home_home_gf", "home_home_ga", "away_away_gf", "away_away_ga"
+        )
+    ):
+        return "insufficient_venue_split_evidence"
+    standings = row.get("standings_evidence") or {}
+    try:
+        h2h_n = int(row.get("h2h_count") or 0)
+    except (TypeError, ValueError, OverflowError):
+        h2h_n = 0
+    if not (
+        (standings.get("home") and standings.get("away"))
+        or h2h_n >= 3
+        or row.get("specialist_evidence")
+        or row.get("external_model_disagreement") is not None
+    ):
+        return "missing_independent_corroboration"
     try:
         disagreement = float(row.get("external_model_disagreement"))
     except (TypeError, ValueError, OverflowError):
