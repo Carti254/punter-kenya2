@@ -60,7 +60,7 @@ class SportyBetFullMarketsTests(unittest.TestCase):
         self.assertEqual(games[0]["markets"][0]["odds"], 1.75)
         self.assertEqual(mocked.call_count, 6)
         index_call = mocked.call_args_list[0]
-        self.assertNotIn("marketId", index_call.kwargs["params"])
+        self.assertEqual(index_call.kwargs["params"]["marketId"], "1")
         self.assertEqual(index_call.kwargs["params"]["option"], "2")
 
     def test_falls_back_to_index_markets_if_event_detail_has_no_prices(self):
