@@ -2239,6 +2239,22 @@ async def autobuild_sportybet_command(update, context):
             max_candidates=None,
         )
         chosen = build["selections"]
+        # Never resolve or present a below-target partial as a parlay. The engine
+        # may retain its best partial internally for diagnostics, but the user asked
+        # for a target-odds accumulator, not a lower-odds substitute.
+        if not build.get("target_reached"):
+            context.user_data.pop("pending_sportybet_booking", None)
+            reason = build.get("reason") or "No permitted combination reached the requested odds range."
+            await reply(
+                update,
+                f"🚫 NO QUALIFYING COMBINATION — {target:.2f} TARGET\\n\\n"
+                f"PUNTER found {len(rows)} eligible market selections across {available_fixtures} distinct fixtures, "
+                f"but could not build a combination between {target:.2f} and {target * 1.20:.2f}.\\n"
+                f"{reason}\\n\\n"
+                "No lower-odds substitute was created and no booking code is available. "
+                "The fixture and market shortlist above shows what was available."
+            )
+            return
         if len(chosen) < min_legs or (max_legs is not None and len(chosen) > max_legs):
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(update, f"NO SLIP: I could not find a qualifying combination with exactly {min_legs} legs near your {target:.2f} target. I will not silently change your requested leg count or fill it with negative-value picks.")
