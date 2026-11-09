@@ -2161,13 +2161,17 @@ async def autobuild_sportybet_command(update, context):
                 scanned_count, research_stats.get("rejected", 0),
                 big_five_excluded, specialist_stats.get("reason"), diagnostics,
             )
+            diagnostic_lines = [str(item) for item in (diagnostics or []) if str(item).strip()]
+            diagnostic_text = "\\n".join(f"• {item[:220]}" for item in diagnostic_lines[-8:])
             await reply(
                 update,
                 f"🚫 NO MODEL-QUALIFIED SPORTYBET SELECTIONS — {target:.2f} TARGET\\n"
-                f"SportyBet/model candidates scanned: {scanned_count}\\n"
+                f"Candidate rows produced: {scanned_count}\\n"
                 f"Rejected by research checks: {research_stats.get('rejected', 0)}\\n"
-                f"Big-Five top-flight exclusions: {big_five_excluded}\\n"
-                "No selections passed the historical-data, exact-market and value checks."
+                f"Big-Five top-flight exclusions: {big_five_excluded}\\n\\n"
+                "🔬 FEED / EXTERNAL-HISTORY DIAGNOSTICS\\n"
+                + (diagnostic_text or "• No stage diagnostics were returned by the scanner.")
+                + "\\n\\nNo selection will be fabricated to fill the target."
             )
             return
 
