@@ -32,7 +32,7 @@ from results_tracker import record_bet, settle_bet, bet_statistics, list_pending
 from prediction_validation import brier_score, log_loss, fit_temperature, apply_temperature
 from football_stats_provider import fetch_match_market_data, FootballStatsError
 from market_settlement import settle_bet_with_market_evidence
-from ai_assistant import ai_is_configured, interpret_request, read_slip_image, _plain_fixture_request
+from ai_assistant import ai_is_configured, interpret_request, read_slip_image, review_fixture_evidence, _plain_fixture_request
 from premium_intelligence import market_probabilities, assess_price, rollover_projection
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day
@@ -2158,6 +2158,41 @@ async def autobuild_sportybet_command(update, context):
         # never silently pad a requested slip with negative-EV selections.
         rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.03)
 
+        # Run one real Gemini evidence-review pass on the strongest candidates.
+        # Gemini receives only PUNTER/provider facts already retrieved; it cannot
+        # invent missing lineups, injuries, xG, tactics or price movement.
+        ai_research_stats = {"enabled": False, "reason": "Not run"}
+        try:
+            ai_fixtures = {}
+            for candidate in rows:
+                fixture_label = str(candidate.get("fixture") or
+                                    f"{candidate.get('home','')} vs {candidate.get('away','')}")
+                key = (str(candidate.get("day") or "")[:10], fixture_label.casefold())
+                ai_fixtures.setdefault(key, {
+                    **candidate, "fixture": fixture_label,
+                })
+            ai_payload = list(ai_fixtures.values())[:12]
+            ai_research_stats = await asyncio.wait_for(
+                asyncio.to_thread(review_fixture_evidence, ai_payload, 12),
+                timeout=50,
+            )
+            ai_reviews = ai_research_stats.get("reviews") or {}
+            for candidate in rows:
+                fixture_label = str(candidate.get("fixture") or
+                                    f"{candidate.get('home','')} vs {candidate.get('away','')}")
+                review = ai_reviews.get(fixture_label)
+                if review:
+                    candidate["ai_research_review"] = review
+                    candidate["ai_research_provider"] = "Gemini evidence-grounded review"
+        except asyncio.TimeoutError:
+            ai_research_stats = {"enabled": ai_is_configured(), "reviewed": 0,
+                                 "reason": "Gemini evidence review timed out; no AI review is claimed."}
+        except Exception as exc:
+            ai_research_stats = {"enabled": ai_is_configured(), "reviewed": 0,
+                                 "reason": f"Gemini evidence review failed: {type(exc).__name__}"}
+            logger.warning("Gemini autobuild evidence review failed: %s", exc)
+
+
         # Research stays internal. Do not send fixture dumps, market lists or
         # intermediate candidate output to Telegram; only the final slip (or a
         # concise no-bet result) is user-facing.
@@ -2239,7 +2274,7 @@ async def autobuild_sportybet_command(update, context):
                                  "external_evidence_sources", "external_market_probability",
                                  "external_model_disagreement", "bsd_consensus_odds",
                                  "price_vs_bsd_consensus", "lineup_evidence",
-                                 "team_news_evidence"):
+                                 "team_news_evidence", "xg_evidence", "odds_history_evidence",\n                                 "tactical_evidence", "ai_research_review", "ai_research_provider",\n                                 "other_bookmaker_evidence"):
                 live_leg[evidence_key] = model_leg.get(evidence_key)
         combined = math.prod(float(x["odds"]) for x in resolved)
         combined_probability = math.prod(float(x["probability"]) for x in resolved)
@@ -2266,7 +2301,29 @@ async def autobuild_sportybet_command(update, context):
         lines.append("")
         if not target_reached:
             lines.append(f"Target not reached. This is the closest valid construction from {available_fixtures} fixtures and {len(rows)} eligible selections; no booking code is available.")
-        lines.append("PUNTER completed its fixture, price, probability and risk checks internally.")
+        # Report the actual evidence attached to each selected candidate. Missing
+        # feeds are never represented as completed checks.
+        for i, leg in enumerate(resolved, 1):
+            checks = leg.get("research_checks") or []
+            gaps = leg.get("research_gaps") or []
+            ai_review = leg.get("ai_research_review") or {}
+            source = leg.get("probability_source") or "PUNTER statistical model"
+            lines.append(f"   Model: {source}; estimated probability {float(leg.get('probability') or 0):.1%}; EV {float(leg.get('ev') or 0):+.1%}.")
+            if checks:
+                lines.append("   Verified inputs: " + "; ".join(checks[:4]) + ".")
+            if ai_review.get("assessment"):
+                lines.append("   AI evidence review: " + str(ai_review["assessment"])[:220])
+            if ai_review.get("risk_flags"):
+                lines.append("   AI risk flags: " + "; ".join(ai_review["risk_flags"][:2]))
+            missing = list(gaps)
+            if not leg.get("ai_research_review"):
+                missing.append("Gemini evidence review not completed for this fixture")
+            if missing:
+                lines.append("   Not verified: " + "; ".join(dict.fromkeys(missing)) + ".")
+        if ai_research_stats.get("reason"):
+            lines.append("AI research status: " + str(ai_research_stats["reason"])[:220])
+        lines.append("Accumulator probability is a product under an independence assumption; cross-fixture dependence is not fully modelled.")
+        lines.append("Model estimates are not guarantees; odds can change.")
         lines.append("Model estimates are not guarantees; odds can change.")
         markup = (
             InlineKeyboardMarkup([[
