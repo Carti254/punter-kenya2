@@ -20,7 +20,7 @@ class AutobuildResearchTests(unittest.TestCase):
         self.assertAlmostEqual(row["implied_probability"], 1 / 2.10)
 
     def test_break_even_is_retained_but_not_called_positive_value(self):
-        row = assess_candidate(self.candidate(odds=2.0, probability=0.5))
+        row = assess_candidate(self.candidate(odds=2.0, probability=0.5), marginal_ev_floor=0.0)
         self.assertEqual(row["value_tier"], "B")
         self.assertIn("not established", row["value_label"])
 
@@ -39,6 +39,14 @@ class AutobuildResearchTests(unittest.TestCase):
 
     def test_negative_ev_is_rejected_by_zero_floor(self):
         self.assertIsNone(assess_candidate(self.candidate(odds=2.0, probability=0.49)))
+
+    def test_default_accumulator_floor_requires_three_percent_ev(self):
+        # Odds 2.00 at 51% probability is +2% EV and must not qualify.
+        self.assertIsNone(assess_candidate(self.candidate(odds=2.0, probability=0.51)))
+        # Odds 2.00 at 52% probability is +4% EV and qualifies.
+        row = assess_candidate(self.candidate(odds=2.0, probability=0.52))
+        self.assertIsNotNone(row)
+        self.assertGreaterEqual(row["ev"], 0.03)
 
     def test_user_exclusions_are_enforced(self):
         self.assertIsNone(assess_candidate(self.candidate(market="Both Teams To Score")))
