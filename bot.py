@@ -2197,17 +2197,16 @@ async def autobuild_sportybet_command(update, context):
         # Never resolve or present a below-target partial as a parlay. The engine
         # may retain its best partial internally for diagnostics, but the user asked
         # for a target-odds accumulator, not a lower-odds substitute.
-        if not build.get("target_reached"):
+        target_reached = bool(build.get("target_reached"))
+        # Always attempt to show the engine's best valid construction. If it
+        # cannot reach the requested target, label the actual odds honestly and
+        # do not offer a booking code.
+        if not target_reached:
             context.user_data.pop("pending_sportybet_booking", None)
-            reason = build.get("reason") or "No permitted combination reached the requested odds range."
-            await reply(
-                update,
-                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\n\n"
-                f"PUNTER checked {available_fixtures} fixtures and {len(rows)} eligible selections internally.\n"
-                f"{reason}\n\n"
-                "No lower-odds substitute or booking code was created."
+            logger.info(
+                "Requested target %.2f not reached; presenting best available candidate at %.2f",
+                target, float(build.get("combined_odds") or 1.0),
             )
-            return
         if len(chosen) < min_legs or (max_legs is not None and len(chosen) > max_legs):
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(update, f"NO SLIP: I could not find a qualifying combination with exactly {min_legs} legs near your {target:.2f} target. I will not silently change your requested leg count or fill it with negative-value picks.")
@@ -2253,8 +2252,9 @@ async def autobuild_sportybet_command(update, context):
         # Keep the Telegram response focused on the finished slip. All evidence,
         # model checks and risk screening happen internally before this point.
         lines = [
-            f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET",
-            f"Combined odds: {combined:.2f}",
+            (f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET" if target_reached
+             else f"⚠️ BEST AVAILABLE SLIP — {target:.2f} TARGET NOT REACHED"),
+            f"Actual combined odds: {combined:.2f}",
             f"Selections: {len(resolved)}",
             "",
         ]
@@ -2264,6 +2264,8 @@ async def autobuild_sportybet_command(update, context):
                 f"{leg['selection']} @ {float(leg['odds']):.2f}"
             )
         lines.append("")
+        if not target_reached:
+            lines.append(f"Target not reached. This is the closest valid construction from {available_fixtures} fixtures and {len(rows)} eligible selections; no booking code is available.")
         lines.append("PUNTER completed its fixture, price, probability and risk checks internally.")
         lines.append("Model estimates are not guarantees; odds can change.")
         markup = (
