@@ -2118,14 +2118,18 @@ async def autobuild_sportybet_command(update, context):
         await reply(update, "Target odds must be greater than 1.00 and no higher than 1,000.")
         return
 
-    min_legs = 5 if target >= 10 else 2
+    # The target changes only the accumulator search objective. Every target
+    # uses the same research pipeline and the same 2–20 distinct-fixture bounds.
+    # Do not force five legs for larger targets; let the odds/probability search
+    # determine the smallest qualifying combination without weakening evidence.
+    min_legs = 2
     max_legs = 20
     market_filter = "all"
     await reply(
         update,
         f"🤖 PUNTER RESEARCH SCAN — TARGET {target:.2f}\n"
-        f"Automatically choosing {min_legs}–{max_legs} different matches; checking form, venue splits, "
-        "goals, H2H, Elo, model probability, specialist evidence and live SportyBet prices…"
+        f"Using the same full research pipeline for every target; automatically choosing "
+        f"2–{max_legs} different matches based on qualified prices, probability, value and risk…"
     )
     try:
         # Stream scan progress to Telegram while the synchronous provider work runs
@@ -2189,13 +2193,13 @@ async def autobuild_sportybet_command(update, context):
         # match panels, but do not launch secondary X searches or a second full
         # bookmaker-feed download for every build. Those optional sources must not
         # prevent the primary SportyBet research scan from returning.
-        await reply(update, "🧠 Primary scan complete. Checking specialist match evidence (maximum 3 fixtures)…")
+        await reply(update, "🧠 Primary scan complete. Checking specialist match evidence (up to 20 distinct fixtures; same cap for every target)…")
         specialist_stats = {"reason": "Specialist research not configured or unavailable."}
         price_history_stats = {"matched": 0, "reason": "Stored odds history not checked."}
         try:
             rows, specialist_stats = await asyncio.wait_for(
-                asyncio.to_thread(enrich_specialist_candidates, rows, max_fixtures=3),
-                timeout=25,
+                asyncio.to_thread(enrich_specialist_candidates, rows, max_fixtures=20),
+                timeout=45,
             )
         except Exception as enrichment_error:
             logger.warning("Autobuild specialist enrichment failed: %s", enrichment_error)
@@ -2245,6 +2249,24 @@ async def autobuild_sportybet_command(update, context):
             )
             return
 
+        # Research every eligible row first; the target is used only by the
+        # accumulator search. Count fixtures, not market rows, before building.
+        qualified_fixture_keys = {
+            (str(x.get("day") or x.get("match_date") or "")[:10],
+             canonical_team_key(x.get("home")), canonical_team_key(x.get("away")))
+            for x in rows if x.get("home") and x.get("away")
+        }
+        if len(qualified_fixture_keys) < 2:
+            context.user_data.pop("pending_sportybet_booking", None)
+            await reply(
+                update,
+                f"🚫 NO QUALIFYING SLIP — {target:.2f} TARGET\n"
+                f"Research-qualified selections: {len(rows)} across {len(qualified_fixture_keys)} distinct fixtures.\n"
+                "At least two different matches are required. PUNTER will not count multiple markets "
+                "from one match as separate accumulator legs or weaken the research filters."
+            )
+            return
+
         build = build_accumulator(
             rows, target, min_legs=min_legs, max_legs=max_legs,
             ranking="value",
@@ -2264,12 +2286,19 @@ async def autobuild_sportybet_command(update, context):
             return
 
         resolved = await asyncio.to_thread(prepare_sportybet_candidates, chosen)
-        if len(resolved) != len(chosen):
+        resolved_fixture_keys = {
+            (str(x.get("day") or x.get("match_date") or "")[:10],
+             canonical_team_key(x.get("home") or x.get("fixture", "").split(" vs ")[0]),
+             canonical_team_key(x.get("away") or x.get("fixture", "").split(" vs ")[-1]))
+            for x in resolved
+        }
+        if len(resolved) != len(chosen) or len(resolved_fixture_keys) != len(chosen) or len(chosen) < 2:
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(
                 update,
-                f"🚫 SLIP VALIDATION FAILED\nPUNTER selected {len(chosen)} legs but SportyBet "
-                f"confirmed only {len(resolved)}. No partial slip or booking code was created."
+                f"🚫 SLIP VALIDATION FAILED\nPUNTER selected {len(chosen)} legs and SportyBet "
+                f"resolved {len(resolved)}; distinct resolved fixtures: {len(resolved_fixture_keys)}. "
+                "No partial slip or booking code was created."
             )
             return
 
