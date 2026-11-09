@@ -52,12 +52,14 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
         clean.append(item)
     if ranking not in {"value", "probability", "odds"}:
         raise ValueError("ranking must be value, probability or odds.")
+    # Grade A has complete recent-form and venue evidence. Grade B remains
+    # eligible but is ranked behind A rather than being treated as equal.
     if ranking == "probability":
-        clean.sort(key=lambda x: (x["probability"], x["_expected_factor"]), reverse=True)
+        clean.sort(key=lambda x: (x.get("research_grade") == "A", x["probability"], x["_expected_factor"]), reverse=True)
     elif ranking == "odds":
-        clean.sort(key=lambda x: (x["odds"], x["probability"]), reverse=True)
+        clean.sort(key=lambda x: (x.get("research_grade") == "A", x["odds"], x["probability"]), reverse=True)
     else:
-        clean.sort(key=lambda x: (x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
+        clean.sort(key=lambda x: (x.get("research_grade") == "A", x["_expected_factor"], x["probability"], x["odds"]), reverse=True)
     # Large target odds must be built as a multi-match parlay, not one or two
     # extreme longshots. For targets >= 10, cap each leg at 4.00 and let the
     # accumulator add independent fixtures until the requested total is reached.
@@ -111,13 +113,14 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
         def beam_score(state):
             picks, odds_now, probability_now, _, _ = state
             distance_bonus = -0.20 * abs(math.log(target / odds_now))
+            grade_a_legs = sum(1 for pick in picks if pick.get("research_grade") == "A")
             if ranking == "probability":
-                return (math.log(max(1e-15, probability_now)) + distance_bonus,
+                return (grade_a_legs, math.log(max(1e-15, probability_now)) + distance_bonus,
                         odds_now * probability_now, -len(picks))
             if ranking == "odds":
-                return (math.log(max(1e-15, odds_now)) + distance_bonus,
+                return (grade_a_legs, math.log(max(1e-15, odds_now)) + distance_bonus,
                         odds_now * probability_now, -len(picks))
-            return (math.log(max(1e-15, odds_now * probability_now)) + distance_bonus,
+            return (grade_a_legs, math.log(max(1e-15, odds_now * probability_now)) + distance_bonus,
                     probability_now, -len(picks))
         expanded.sort(key=beam_score, reverse=True)
         states = expanded[:beam_width]
@@ -126,8 +129,9 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=1800, max
         # Minimise overshoot first; ranking is only a tie-breaker.
         def completion_score(state):
             picks, odds_now, probability_now, _, _ = state
+            grade_a_legs = sum(1 for pick in picks if pick.get("research_grade") == "A")
             secondary = probability_now if ranking in {"probability", "odds"} else odds_now * probability_now
-            return (-((odds_now / target) - 1.0), secondary, probability_now, -len(picks))
+            return (-((odds_now / target) - 1.0), grade_a_legs, secondary, probability_now, -len(picks))
         best = max(completed, key=completion_score)
     else:
         # Strict target rule: never return a lower-odds partial as a slip.
