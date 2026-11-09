@@ -2118,7 +2118,7 @@ async def autobuild_sportybet_command(update, context):
             asyncio.to_thread(
                 scan_value_candidates, ("today", "tomorrow"), market_filter, "SportyBet"
             ),
-            timeout=150,
+            timeout=240,
         )
         rows = [
             x for x in rows
