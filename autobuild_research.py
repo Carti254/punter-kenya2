@@ -240,11 +240,28 @@ def assess_candidate(row: dict, marginal_ev_floor: float = 0.03, use_dixon_coles
             and bool(row.get("calibration_evidence")) else "B"
         ),
         "research_grade_reason": (
-            "Verified fixture and market mapping, adequate venue samples, H2H, standings, Elo and out-of-sample calibration evidence are present."
+            "Grade A requirements satisfied: verified fixture and market mapping, adequate venue samples, at least two H2H meetings, verified standings, Elo ratings and out-of-sample calibration."
             if venue_evidence_complete and row.get("fixture_match_verified") is True
+            and row.get("market_probability_verified") is True
             and h2h_n >= 2 and standings_available and elo_probability is not None
             and bool(row.get("calibration_evidence")) else
-            "Grade B: minimum selection gates passed, but independent evidence or calibration required for Grade A is missing."
+            "Grade B: selection passed the hard model/value gates, but Grade-A evidence is incomplete. Missing: "
+            + ", ".join(reason for condition, reason in (
+                (row.get("fixture_match_verified") is not True, "verified fixture identity"),
+                (row.get("market_probability_verified") is not True, "exact selected-market probability mapping"),
+                (not venue_evidence_complete, "3+ actual venue results per side"),
+                (h2h_n < 2, "at least two H2H meetings"),
+                (not standings_available, "verified standings for both teams"),
+                (elo_probability is None, "chronological Elo ratings"),
+                (not bool(row.get("calibration_evidence")), "out-of-sample probability calibration"),
+            ) if condition)
+        ),
+        "reported_model_confidence": row.get("model_confidence"),
+        "model_confidence": (
+            "HIGH" if str(row.get("model_confidence") or "").strip().upper() == "HIGH"
+            and bool(row.get("calibration_evidence"))
+            and row.get("fixture_match_verified") is True
+            and row.get("market_probability_verified") is True else "MODERATE"
         ),
         "implied_probability": implied,
         "fair_odds": 1.0 / probability,
