@@ -183,3 +183,80 @@ def read_slip_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> list[s
     if not lines:
         raise RuntimeError("No complete, clearly readable football selections were found.")
     return lines
+
+
+def review_fixture_evidence(fixtures: list[dict], max_fixtures: int = 12) -> dict:
+    """Gemini qualitative review of supplied, source-labelled evidence only.
+
+    This is an interpretation layer, not a live-data source. It cannot add injuries,
+    lineups, xG, odds movement or tactical facts that are absent from the payload.
+    """
+    if not ai_is_configured():
+        return {"enabled": False, "reason": "GEMINI_API_KEY is not configured."}
+    safe = []
+    for row in (fixtures or [])[:max(1, min(int(max_fixtures), 12))]:
+        evidence = row.get("research_evidence") or {}
+        safe.append({
+            "fixture": str(row.get("fixture") or f"{row.get('home','')} vs {row.get('away','')}")[:180],
+            "date": str(row.get("day") or row.get("match_date") or "")[:10],
+            "market": str(row.get("market") or "")[:100],
+            "selection": str(row.get("selection") or "")[:100],
+            "offered_odds": row.get("odds"),
+            "model_probability": row.get("probability"),
+            "implied_probability": row.get("implied_probability"),
+            "expected_value": row.get("ev"),
+            "probability_source": row.get("probability_source"),
+            "model_confidence": row.get("model_confidence"),
+            "recent_form": {
+                "home": evidence.get("home_form"), "away": evidence.get("away_form"),
+                "home_sample": evidence.get("home_sample"), "away_sample": evidence.get("away_sample"),
+                "home_scored_avg": evidence.get("home_scored_avg"),
+                "home_conceded_avg": evidence.get("home_conceded_avg"),
+                "away_scored_avg": evidence.get("away_scored_avg"),
+                "away_conceded_avg": evidence.get("away_conceded_avg"),
+            },
+            "venue_samples": [evidence.get("home_home_sample"), evidence.get("away_away_sample")],
+            "h2h_count": evidence.get("h2h_count"),
+            "specialist_evidence": evidence.get("specialist_evidence"),
+            "lineup_evidence": row.get("lineup_evidence"),
+            "team_news_evidence": row.get("team_news_evidence"),
+            "xg_evidence": row.get("xg_evidence"),
+            "odds_history_evidence": row.get("odds_history_evidence"),
+            "other_bookmaker_prices": row.get("other_bookmaker_prices"),
+            "tactical_evidence": row.get("tactical_evidence"),
+        })
+    if not safe:
+        return {"enabled": True, "reviewed": 0, "reviews": []}
+    prompt = (
+        "You are PUNTER KENYA's evidence auditor. Review only the JSON evidence supplied. "
+        "Do not browse, infer current team news, invent statistics, invent tactical facts, or alter numeric probabilities. "
+        "For each fixture return JSON object {reviews:[{fixture, assessment, risk_flags, evidence_used, evidence_missing, "
+        "confidence:'LOW'|'MEDIUM'|'HIGH'}]}. evidence_used must name only fields with actual non-null values. "
+        "evidence_missing must name absent material data (lineups, injuries, xG, odds history, tactical evidence, "
+        "H2H, venue splits, cross-bookmaker prices as applicable). Be conservative. An empty injury feed is NOT proof "
+        "of no injuries. A public social post is NOT confirmed team news. Statistical estimates are not guarantees. "
+        "Do not recommend increasing stake or claim a bet is safe. Input JSON:\\n"
+        + json.dumps(safe, ensure_ascii=False, default=str)
+    )
+    try:
+        data = _json_from_response(_generate([{"text": prompt}], max_tokens=2200))
+        reviews = data.get("reviews")
+        if not isinstance(reviews, list):
+            raise RuntimeError("Gemini evidence review omitted the reviews array.")
+        by_fixture = {}
+        allowed = {x["fixture"] for x in safe}
+        for item in reviews:
+            if not isinstance(item, dict) or str(item.get("fixture") or "") not in allowed:
+                continue
+            by_fixture[str(item["fixture"])] = {
+                "assessment": str(item.get("assessment") or "")[:500],
+                "risk_flags": [str(x)[:160] for x in (item.get("risk_flags") or [])[:5]],
+                "evidence_used": [str(x)[:120] for x in (item.get("evidence_used") or [])[:8]],
+                "evidence_missing": [str(x)[:120] for x in (item.get("evidence_missing") or [])[:8]],
+                "confidence": str(item.get("confidence") or "LOW").upper()
+                    if str(item.get("confidence") or "LOW").upper() in {"LOW", "MEDIUM", "HIGH"} else "LOW",
+            }
+        return {"enabled": True, "reviewed": len(by_fixture), "reviews": by_fixture}
+    except Exception as exc:
+        return {"enabled": True, "reviewed": 0, "reviews": {},
+                "reason": f"Gemini evidence review failed: {type(exc).__name__}"}
