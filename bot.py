@@ -1639,7 +1639,14 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
         if not legs:
             await query.message.reply_text("The research report has expired. Build the slip again to regenerate its evidence.")
             return
-        report = _format_autobuild_research_report(legs)
+        report_lines = ["📋 SELECTED SPORTYBET PRICES — NO MATCH PREDICTIONS", ""]
+        for index, leg in enumerate(legs, 1):
+            report_lines.append(f"{index}. {leg.get('home','')} vs {leg.get('away','')}")
+            report_lines.append(f"   {leg.get('market','')}: {leg.get('selection','')} @ {float(leg.get('odds') or 0):.2f}")
+            report_lines.append(f"   Event ID: {leg.get('event_id') or leg.get('eventId') or 'unavailable'}")
+            report_lines.append("")
+        report_lines.append("Selection method: SportyBet prices and exact market IDs only. No team analysis, historical model, probability or expected value.")
+        report = "\n".join(report_lines)
         for offset in range(0, len(report), 3500):
             await query.message.reply_text(report[offset:offset + 3500])
         return
