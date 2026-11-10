@@ -39,6 +39,7 @@ from user_portfolio import save_bankroll, get_settings, save_rollover, save_pref
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day, enrich_candidates_with_price_history
 from accumulator_engine import build_accumulator
 from autobuild_research import prepare_candidate_pool
+from probability_engine import assess_candidate as assess_probability_candidate
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
@@ -2101,9 +2102,8 @@ async def autobuild_sportybet_command(update, context):
         await reply(update, "PUNTER KENYA only builds target combined odds from 2.00 to 5.00.")
         return
 
-    # The target changes only the accumulator search objective. Every target
-    # uses the same SportyBet price-only scan and 2–20 distinct-fixture bounds.
-    # No probability or research score is calculated.
+    # The target changes only the accumulator objective. Every candidate must
+    # first pass the same historical-results probability and value assessment.
     min_legs = 2
     max_legs = 20
     market_filter = "all"
@@ -2120,8 +2120,8 @@ async def autobuild_sportybet_command(update, context):
         )
         scanned_count = len(rows)
 
-        # No league, historical-data, team-form or prediction filters are used.
-        # Only SportyBet's exact event/market/outcome identifiers are checked.
+        # The scanner scores each SportyBet price with the single probability engine.
+        # The following pool check enforces model value and executable IDs.
         rows, research_stats = await asyncio.to_thread(
             prepare_candidate_pool, rows, marginal_ev_floor=0.0
         )
@@ -2146,8 +2146,8 @@ async def autobuild_sportybet_command(update, context):
             )
             return
 
-        # Research every eligible row first; the target is used only by the
-        # accumulator search. Count fixtures, not market rows, before building.
+        # Every eligible row has a model probability, fair price and positive
+        # estimated value. Count fixtures, not market rows, before building.
         qualified_fixture_keys = {
             (str(x.get("day") or x.get("match_date") or "")[:10],
              canonical_team_key(x.get("home")), canonical_team_key(x.get("away")))
@@ -2169,7 +2169,7 @@ async def autobuild_sportybet_command(update, context):
 
         build = build_accumulator(
             rows, target, min_legs=min_legs, max_legs=max_legs,
-            ranking="odds",
+            ranking="value",
             # Keep a broader set of researched markets available to the
             # combination search; do not narrow the candidate pool prematurely.
             max_candidates=500,
@@ -2231,7 +2231,7 @@ async def autobuild_sportybet_command(update, context):
         # inspect the source evidence for every selected leg before creating a code.
         context.user_data["pending_sportybet_research"] = [dict(x) for x in resolved]
 
-        # Research remains active internally; Telegram shows only the match and selection.
+        # Preserve model evidence internally for the user's proof view.
         lines = [
             f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET",
             f"Combined odds: {combined:.2f}",
@@ -3586,9 +3586,33 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     for row in candidates:
         key=(row["event_id"],row["market_id"],row["outcome_id"])
         if key not in unique or row["odds"] > unique[key]["odds"]: unique[key]=row
-    result=list(unique.values())
-    diagnostics=[f"{len(games)} SportyBet events retrieved; {len(result)} exact market selections available.",
-                 "Historical models, team-form analysis, competition filters and external prediction feeds are disabled."]
+    raw_candidates=list(unique.values())
+    if not raw_candidates:
+        return [], [f"{len(games)} SportyBet events retrieved; no supported executable market prices were found."]
+    progress("Checking recent completed results and estimating selection probabilities…")
+    try:
+        history = fetch_openmatchday_team_history_rows()
+    except Exception as exc:
+        logger.warning("Probability engine history unavailable: %s", exc)
+        return [], [f"{len(games)} SportyBet events retrieved; probability engine unavailable: {type(exc).__name__}.",
+                    "No odds-only fallback is allowed because it cannot identify value."]
+    result=[]
+    rejected=Counter()
+    for row in raw_candidates:
+        assessed=assess_probability_candidate(row, history)
+        if assessed is None:
+            rejected["insufficient_history_unsupported_market_or_no_value"] += 1
+        else:
+            result.append(assessed)
+    result.sort(key=lambda x:(-float(x.get("expected_value") or 0),
+                              -float(x.get("model_probability") or 0),
+                              float(x.get("odds") or 99)))
+    diagnostics=[
+        f"{len(games)} SportyBet events retrieved; {len(raw_candidates)} executable prices assessed.",
+        f"{len(result)} selections passed the model's minimum 55% probability and +3% estimated-value thresholds.",
+        f"{rejected.get('insufficient_history_unsupported_market_or_no_value',0)} prices rejected for insufficient history, unsupported market or inadequate value.",
+        "Model: recent completed results with a Poisson score model; estimates are uncalibrated and are not guarantees.",
+    ]
     return result, diagnostics
 
 
