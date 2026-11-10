@@ -2166,14 +2166,35 @@ async def autobuild_sportybet_command(update, context):
         await reply(update, "PUNTER KENYA accepts one target between 2.00 and 5.00, for example /build 2.")
         return
 
-    # The target is not a leg count. Search all available fixtures today and tomorrow.
+    # Strict Kenya-calendar-day scope: never include tomorrow or stale fixtures.
     max_legs = 20
-    await reply(update, f"🔎 Scanning SportyBet fixtures for a statistically qualified {target:.2f} accumulator…")
+    today_eat = datetime.now(EAT).date()
+    now_eat = datetime.now(EAT)
+    await reply(update, f"🔎 Scanning SportyBet fixtures for today only ({today_eat.isoformat()}, Kenya time)…")
     try:
         rows, diagnostics = await asyncio.wait_for(
-            asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "all", "SportyBet"),
+            asyncio.to_thread(scan_value_candidates, ("today",), "all", "SportyBet"),
             timeout=180,
         )
+        # Enforce the date boundary again after retrieval. Only future,
+        # scheduled fixtures on today's Kenya date can enter model assessment.
+        filtered_rows = []
+        for candidate in rows:
+            try:
+                kickoff_text = str(candidate.get("kickoff") or "")
+                kickoff_dt = datetime.fromisoformat(kickoff_text.replace("Z", "+00:00"))
+                if kickoff_dt.tzinfo is None:
+                    kickoff_dt = kickoff_dt.replace(tzinfo=EAT)
+                else:
+                    kickoff_dt = kickoff_dt.astimezone(EAT)
+                if kickoff_dt.date() != today_eat or kickoff_dt <= now_eat:
+                    continue
+                candidate["day"] = today_eat.isoformat()
+                candidate["kickoff"] = kickoff_dt.isoformat()
+                filtered_rows.append(candidate)
+            except (TypeError, ValueError, OverflowError):
+                continue
+        rows = filtered_rows
         scanned_count = len(rows)
         if not rows:
             context.user_data.pop("pending_sportybet_booking", None)
@@ -2210,7 +2231,7 @@ async def autobuild_sportybet_command(update, context):
             return
 
         build = build_accumulator(
-            rows, target, min_legs=2, max_legs=max_legs,
+            rows, target, min_legs=1, max_legs=max_legs,
             ranking="quality", max_candidates=1000, beam_width=2500,
         )
         chosen = build.get("selections") or []
