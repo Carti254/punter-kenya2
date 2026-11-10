@@ -79,6 +79,44 @@ def _team_rows(history, team, cutoff):
     return found[:12]
 
 
+def _prepare_history(history):
+    """Index team results and calculate the shared scoring baseline once per scan."""
+    index = defaultdict(list)
+    league_home, league_away = [], []
+    for raw in history or []:
+        if not isinstance(raw, dict):
+            continue
+        match_day = _date(raw.get("date"))
+        home, away = _key(raw.get("home")), _key(raw.get("away"))
+        if not match_day or not home or not away:
+            continue
+        try:
+            hg, ag = int(raw.get("ft_home")), int(raw.get("ft_away"))
+            if hg < 0 or ag < 0:
+                continue
+        except (TypeError, ValueError, OverflowError):
+            continue
+        league_home.append(hg)
+        league_away.append(ag)
+        index[home].append({"date": match_day, "venue": "H", "gf": hg, "ga": ag})
+        index[away].append({"date": match_day, "venue": "A", "gf": ag, "ga": hg})
+    for rows in index.values():
+        rows.sort(key=lambda item: item["date"], reverse=True)
+    baseline = (
+        len(league_home),
+        sum(league_home) / len(league_home) if league_home else 0.0,
+        sum(league_away) / len(league_away) if league_away else 0.0,
+    )
+    return index, baseline
+
+
+def _indexed_team_rows(history_index, team, cutoff):
+    wanted = _key(team)
+    if not wanted:
+        return []
+    return [row for row in history_index.get(wanted, []) if row["date"] < cutoff][:12]
+
+
 def _blend(team_rows, venue, field, fallback):
     selected = [row for row in team_rows if row["venue"] == venue][:6]
     if len(selected) >= 3:
@@ -97,27 +135,14 @@ def _poisson(rate):
     return [value / total for value in values]
 
 
-def _prediction(home_rows, away_rows, history):
+def _prediction(home_rows, away_rows, history, baseline=None):
     if len(home_rows) < MIN_TEAM_MATCHES or len(away_rows) < MIN_TEAM_MATCHES:
         return None
-    league_home = []
-    league_away = []
-    # Use available historical scorelines as a broad scoring baseline. This
-    # is not a competition-specific xG estimate.
-    for row in history or []:
-        if not isinstance(row, dict):
-            continue
-        try:
-            hg, ag = int(row.get("ft_home")), int(row.get("ft_away"))
-            if hg >= 0 and ag >= 0:
-                league_home.append(hg)
-                league_away.append(ag)
-        except (TypeError, ValueError, OverflowError):
-            continue
-    if len(league_home) < 100:
+    if baseline is None:
+        history_index, baseline = _prepare_history(history)
+    baseline_count, home_avg, away_avg = baseline
+    if baseline_count < 100:
         return None
-    home_avg = sum(league_home) / len(league_home)
-    away_avg = sum(league_away) / len(league_away)
     if home_avg <= 0 or away_avg <= 0:
         return None
 
@@ -185,7 +210,7 @@ def _market_probability(row, prediction):
     return None, "market not covered by the model"
 
 
-def assess_candidate(row, history):
+def assess_candidate(row, history, history_index=None, baseline=None):
     """Attach a conservative model estimate and reject insufficient/negative value."""
     try:
         kickoff_day = _date(str(row.get("kickoff") or row.get("day") or "")[:10])
@@ -194,9 +219,11 @@ def assess_candidate(row, history):
         return None
     if not kickoff_day or not math.isfinite(odds) or odds <= 1:
         return None
-    home_rows = _team_rows(history, row.get("home"), kickoff_day)
-    away_rows = _team_rows(history, row.get("away"), kickoff_day)
-    prediction = _prediction(home_rows, away_rows, history)
+    if history_index is None or baseline is None:
+        history_index, baseline = _prepare_history(history)
+    home_rows = _indexed_team_rows(history_index, row.get("home"), kickoff_day)
+    away_rows = _indexed_team_rows(history_index, row.get("away"), kickoff_day)
+    prediction = _prediction(home_rows, away_rows, history, baseline)
     if prediction is None:
         return None
     probability, market_label = _market_probability(row, prediction)
@@ -219,3 +246,15 @@ def assess_candidate(row, history):
         "model_away_sample": prediction["away_sample"],
         "selection_method": "Recent-results Poisson estimate; uncalibrated; value threshold +3%",
     }
+
+
+
+def assess_candidates(rows, history):
+    """Assess a complete SportyBet candidate batch using one indexed history pass."""
+    history_index, baseline = _prepare_history(history)
+    qualified = []
+    for row in rows or []:
+        item = assess_candidate(row, history, history_index, baseline)
+        if item is not None:
+            qualified.append(item)
+    return qualified
