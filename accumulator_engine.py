@@ -28,7 +28,7 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=2500,
     if ranking not in {"price", "quality"}:
         raise ValueError("ranking must be 'price' or 'quality'.")
 
-    upper = min(target * 1.10, 5.0)
+    upper = min(target * (1.10 if ranking == "quality" else 1.20), 5.0)
     clean, seen = [], set()
     for row in candidates or []:
         try:
