@@ -3786,381 +3786,66 @@ def _selection_probability_key(market_key, selection, handicap=None):
     return _normal_market_text(selection) or None
 
 
-def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all", bookmaker_only=None, progress_callback=None):
-    """Fetch the fixture catalogue and SportyBet feed once, then score requested EAT dates."""
+def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all", bookmaker_only="sportybet", progress_callback=None):
+    """Read SportyBet's own fixtures and prices. Deliberately performs no match analysis."""
     def progress(message):
         if callable(progress_callback):
-            try:
-                progress_callback(str(message))
-            except Exception:
-                logger.debug("Autobuild progress callback failed.", exc_info=True)
-    progress("Step 1/4: downloading the fixture catalogue…")
-    candidates, diagnostics = [], []
+            try: progress_callback(str(message))
+            except Exception: logger.debug("Progress callback failed.", exc_info=True)
     today = datetime.now(EAT).date()
     target_dates = set()
-    for day in day_filters:
-        if day == "today":
-            target_dates.add(today)
-        elif day == "tomorrow":
-            target_dates.add(today + timedelta(days=1))
-        # The accumulator builder intentionally accepts today's fixtures only.
-        # Ignore other date strings rather than silently widening the scan window.
-    if not target_dates:
-        return [], ["No scan dates were requested."]
-
-    # Keep optional BSD/PitchAPI discovery out of the critical scan path.
-    # Those sources still enrich matched candidates later, but cannot block
-    # primary fixture retrieval and SportyBet price matching.
-    try:
-        raw_fixtures = fetch_openmatchday_fixture_rows(1, None, "today")
-        all_fixtures = upcoming_fixtures(raw_fixtures)
-        progress(f"Step 2/4: fixture catalogue ready ({len(all_fixtures)} upcoming fixtures). Fetching SportyBet prices…")
-    except Exception as exc:
-        raise RuntimeError(f"Fixture catalogue failed: {type(exc).__name__}: {str(exc)[:180]}") from exc
-
-    fixtures_by_day = {day: [] for day in target_dates}
-    for raw, fixture in all_fixtures:
-        # upcoming_fixtures() returns normalise_fixture() records; their
-        # canonical timestamp field is kickoff_at (naive UTC), not kickoffUtc.
-        kickoff = fixture.get("kickoff_at") or fixture.get("kickoffUtc")
-        try:
-            parsed = datetime.fromisoformat(str(kickoff).replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            local_day = parsed.astimezone(EAT).date()
-        except (TypeError, ValueError):
-            continue
-        if local_day in fixtures_by_day:
-            fixtures_by_day[local_day].append((raw, fixture))
-
-    for day in sorted(target_dates):
-        diagnostics.append(f"{day.isoformat()}: {len(fixtures_by_day[day])} upcoming fixture records")
-
-    try:
-        if str(bookmaker_only or "").casefold() == "sportybet":
-            priced_games = fetch_sportybet_odds(sorted(target_dates), max_pages=30)
-            feed_errors = {}
-            progress(f"Step 3/4: SportyBet returned {len(priced_games)} priced events. Matching fixtures and checking markets…")
+    for value in day_filters:
+        if value == "today": target_dates.add(today)
+        elif value == "tomorrow": target_dates.add(today + timedelta(days=1))
         else:
-            # Existing combined provider path remains available to other commands.
-            all_games = []
-            feed_errors = {}
-            for day in sorted(target_dates):
-                result = fetch_bookmaker_odds(day)
-                for provider in result.get("bookmakers", {}).values():
-                    all_games.extend(provider.get("games", []))
-                feed_errors.update(result.get("errors", {}))
-            priced_games = all_games
-    except Exception as exc:
-        raise RuntimeError(f"Bookmaker feed failed: {type(exc).__name__}: {str(exc)[:180]}") from exc
-
-    for day in sorted(target_dates):
-        day_fixtures = fixtures_by_day[day]
-        day_games = []
-        for game in priced_games:
-            kickoff = game.get("kickoff_eat")
-            if str(kickoff or "")[:10] == day.isoformat():
-                day_games.append(game)
-        # SportyBet is the price source and must also be a fixture-discovery
-        # source. The external open-matchday catalogue is incomplete for some
-        # dates/competitions; add its unmatched priced events rather than silently
-        # excluding them from research. Exact SportyBet names and kickoff are kept;
-        # evidence gates still decide whether any selection can qualify.
-        existing_pairs = {
-            (canonical_team_key(fixture.get("home_team")),
-             canonical_team_key(fixture.get("away_team")))
-            for _, fixture in day_fixtures
-        }
-        # Resolve SportyBet-only events to a real Open-Matchday competition
-        # before attempting model fitting. Never fit a generic synthetic league.
-        try:
-            known_leagues = fetch_all_leagues()
-        except Exception:
-            known_leagues = []
-        league_lookup = {}
-        league_country_lookup = {}
-        for league_row in known_leagues:
-            league_name = _normal_market_text(
-                league_row.get("leagueName") or league_row.get("name") or
-                league_row.get("competition") or ""
-            )
-            league_country = _normal_market_text(league_row.get("countryName") or "")
-            if league_name and league_row.get("leagueShortcut"):
-                league_lookup.setdefault(league_name, []).append(league_row)
-                if league_country:
-                    league_country_lookup.setdefault((league_name, league_country), []).append(league_row)
-        sportybet_added = 0
-        for game in day_games:
-            home = str(game.get("home") or "").strip()
-            away = str(game.get("away") or "").strip()
-            kickoff_text = str(game.get("kickoff_eat") or "").strip()
-            if not home or not away or not kickoff_text:
-                continue
-            pair = (canonical_team_key(home), canonical_team_key(away))
-            if pair in existing_pairs:
-                continue
-            try:
-                kickoff_local = datetime.fromisoformat(kickoff_text)
-                if kickoff_local.tzinfo is None:
-                    kickoff_local = kickoff_local.replace(tzinfo=EAT)
-                kickoff_utc = kickoff_local.astimezone(timezone.utc).replace(tzinfo=None)
-            except (TypeError, ValueError):
-                continue
-            competition = str(game.get("competition") or "SportyBet competition").strip()
-            competition_key = _normal_market_text(competition)
-            country = str(game.get("country") or "").strip()
-            country_key = _normal_market_text(country)
-            # Prefer an exact competition + country match. Fall back to a
-            # competition-only match only when it is globally unambiguous.
-            possible_leagues = (
-                league_country_lookup.get((competition_key, country_key), [])
-                if country_key else []
-            )
-            if len(possible_leagues) != 1:
-                possible_leagues = league_lookup.get(competition_key, [])
-            resolved_league = possible_leagues[0] if len(possible_leagues) == 1 else None
-            league_folder = str((resolved_league or {}).get("leagueShortcut") or "__sportybet_discovery__")
-            league_label = str(
-                (resolved_league or {}).get("leagueName") or competition
-            ).strip()
-            raw_sportybet = {
-                "id": f"sportybet:{game.get('event_id') or pair[0] + ':' + pair[1]}",
-                "home": home, "away": away,
-                "kickoffUtc": kickoff_utc.isoformat(),
-                "matchStatus": "Scheduled",
-                "leagueName": league_label,
-                "countryName": str((resolved_league or {}).get("countryName") or country),
-                "leagueShortcut": league_folder,
-            }
-            fixture_sportybet = {
-                "provider_match_id": raw_sportybet["id"],
-                "home_team": home, "away_team": away,
-                "kickoff_at": kickoff_utc,
-                "competition": league_label,
-                "country": raw_sportybet["countryName"],
-            }
-            day_fixtures.append((raw_sportybet, fixture_sportybet))
-            existing_pairs.add(pair)
-            sportybet_added += 1
-        diagnostics.append(
-            f"{day.isoformat()}: {len(day_fixtures)} research fixtures after adding "
-            f"{sportybet_added} unmatched SportyBet-native events; {len(day_games)} SportyBet events retrieved"
-        )
-        matched_events = 0
-        unsupported = set()
-        prediction_unavailable = 0
-        missing_history_fixtures = 0
-        history_failure_reasons = Counter()
-        market_rows_seen = 0
-        # Resolve live SportyBet matches first, then prefetch history only for
-        # the leagues that actually have matched events. Do this concurrently:
-        # serial per-league HTTP requests were a major cold-start bottleneck.
-        historical_cache = {}
-        matched_fixtures = []
-        history_folders = set()
-        for raw, fixture in day_fixtures:
-            matches = find_bookmaker_event(day_games, fixture["home_team"], fixture["away_team"])
-            if not matches:
-                continue
-            matched_fixtures.append((raw, fixture, matches))
-            folder = str(raw.get("leagueShortcut") or "").strip()
-            if folder:
-                history_folders.add(folder)
-
-        def fetch_history(folder):
-            try:
-                return folder, fetch_openmatchday_results_history(folder)
-            except Exception as exc:
-                logger.warning("Autobuild history fetch failed for %s: %s", folder, exc)
-                return folder, []
-
-        if history_folders:
-            with ThreadPoolExecutor(max_workers=min(12, len(history_folders))) as history_pool:
-                history_futures = [history_pool.submit(fetch_history, folder) for folder in sorted(history_folders)]
-                for future in as_completed(history_futures):
-                    folder, history_rows = future.result()
-                    historical_cache[folder] = history_rows
-
-        progress(f"Step 4/4: checking {len(matched_fixtures)} SportyBet-matched fixtures against {len(day_games)} priced events for {day.isoformat()}…")
-        for fixture_index, (raw, fixture, matches) in enumerate(matched_fixtures, 1):
-            home_name, away_name = fixture["home_team"], fixture["away_team"]
-            progress(f"{day.isoformat()}: fixture {fixture_index}/{len(day_fixtures)} — matching {home_name} vs {away_name}…")
-            # Fuzzy matches may discover candidates but must not supply betting prices.
-            exact_matches = [
-                game for game in matches
-                if _normal_market_text(game.get("home")) == _normal_market_text(home_name)
-                and _normal_market_text(game.get("away")) == _normal_market_text(away_name)
-                and bool(game.get("event_id"))
-            ]
-            if not exact_matches:
-                diagnostics.append(f"{day.isoformat()}: rejected unverified fixture match {home_name} vs {away_name}")
-                continue
-            matches = exact_matches
-            matched_events += len(matches)
-            folder = str(raw.get("leagueShortcut") or "").strip()
-            local_history = historical_cache.get(folder, [])
-            try:
-                prediction = build_openmatchday_prediction(
-                    raw, fixture, historical_rows=local_history,
-                    as_of_date=fixture.get("kickoff_at"),
-                    model_variant="venue_weighted"
-                )
-                # Do not silently merge another competition's results into this
-                # fixture's form sample. Team-name fuzzy matching across all
-                # competitions can mix reserve/youth/senior sides and tournaments.
-                # If this competition lacks five verified results per team, the
-                # fixture stays unmodelled until a team-ID-backed history source exists.
-                if not prediction.get("available"):
-                    missing_history_fixtures += 1
-                    history_failure_reasons[str(prediction.get("reason") or "insufficient same-competition history")[:240]] += 1
-            except Exception as exc:
-                prediction_unavailable += 1
-                logger.exception("Autobuild prediction failed for %s vs %s", home_name, away_name)
-                progress(f"{day.isoformat()}: prediction error for {home_name} vs {away_name} ({type(exc).__name__}).")
-                continue
-            if not prediction.get("available"):
-                prediction_unavailable += 1
-                # No verified pre-kickoff history means no model probability.
-                # Keep this fixture out of candidate generation rather than
-                # allowing a second feed or an empty prediction to bypass the model.
-                logger.info(
-                    "Skipping %s vs %s: Dixon-Coles history unavailable (%s)",
-                    home_name, away_name, prediction.get("reason") or "insufficient history"
-                )
-                continue
-            progress(f"{day.isoformat()}: matched {home_name} vs {away_name}; evaluating {sum(len(g.get('markets') or []) for g in matches)} market rows…")
-            for game in matches:
-                for row in game.get("markets", []):
-                    market_rows_seen += 1
-                    market_name = str(row.get("market") or "Unknown")
-                    selection_name = str(row.get("selection") or "Unknown")
-                    market_text_for_sources = _normal_market_text(
-                        market_name + " " + selection_name + " " + str(row.get("specifier") or row.get("handicap") or "")
-                    )
-                    # These exclusions apply at scan time as well as in the
-                    # research gate and accumulator engine.
-                    if ("btts" in market_text_for_sources or
-                            "both teams to score" in market_text_for_sources or
-                            ("under" in market_text_for_sources and "2.5" in market_text_for_sources) or
-                            "draw no bet" in market_text_for_sources or
-                            re.search(r"(?<![a-z])dnb(?![a-z])", market_text_for_sources) or
-                            (any(term in market_text_for_sources for term in ("total goals", "over under", "goals over", "goals under", "total match", "goal line", "asian handicap", "handicap"))
-                             and bool(re.search(r"(?<!\d)\d+\.0+(?!\d)|(?<!\d)\d+(?![\d.])", market_text_for_sources))) or
-                            "2up" in market_text_for_sources or
-                            "early payout" in market_text_for_sources):
-                        continue
-                    probability, reason = _market_probability_for_row(prediction, row)
-                    if probability is None:
-                        if reason:
-                            unsupported.add(market_name)
-                        continue
-                    if market_filter not in ("all", "safest"):
-                        aliases = {
-                            "btts": "both teams to score",
-                            "goals": "total goals",
-                            "totals": "total goals",
-                            "dnb": "draw no bet",
-                            "dc": "double chance",
-                            "correctscore": "correct score",
-                            "ht": "half time",
-                        }
-                        wanted_filters = [
-                            aliases.get(_normal_market_text(value), _normal_market_text(value))
-                            for value in str(market_filter).split(",") if value.strip()
-                        ]
-                        market_text = _normal_market_text(market_name)
-                        selection_text = _normal_market_text(selection_name)
-                        if wanted_filters and not any(
-                            wanted in market_text or wanted in selection_text
-                            for wanted in wanted_filters
-                        ):
-                            continue
-                    odds = row.get("odds")
-                    if not odds or odds <= 1:
-                        continue
-                    if probability is not None and (probability <= 0 or probability >= 1):
-                        continue
-                    ev = probability * odds - 1 if probability is not None else None
-                    candidates.append({
-                        "home": fixture["home_team"], "away": fixture["away_team"],
-                        "league": fixture.get("competition") or fixture.get("leagueName") or "Competition",
-                        "country": fixture.get("country") or fixture.get("countryName") or "",
-                        "day": day.isoformat(), "bookmaker": game.get("bookmaker"),
-                        "market": market_name, "selection": selection_name,
-                        "market_key": _normal_market_text(market_name) + "|" + _normal_market_text(selection_name),
-                        "odds": odds, "probability": probability, "ev": ev,
-                        "fair_odds": (1 / probability) if probability is not None else None,
-                        "model_confidence": prediction.get("confidence"),
-                        "model_version": prediction.get("model_version") or "dixon-coles-fitted-v1",
-                        "probability_source": "Fitted time-decayed Dixon-Coles" if probability is not None else None,
-                        "home_form": prediction.get("home_form"),
-                        "away_form": prediction.get("away_form"),
-                        "home_recent_matches": prediction.get("home_recent_matches") or [],
-                        "away_recent_matches": prediction.get("away_recent_matches") or [],
-                        "home_sample": prediction.get("home_results"),
-                        "away_sample": prediction.get("away_results"),
-                        "home_scored_avg": prediction.get("home_scored"),
-                        "home_conceded_avg": prediction.get("home_conceded"),
-                        "away_scored_avg": prediction.get("away_scored"),
-                        "away_conceded_avg": prediction.get("away_conceded"),
-                        "home_home_sample": prediction.get("home_home_sample"),
-                        "away_away_sample": prediction.get("away_away_sample"),
-                        "home_home_gf": prediction.get("home_home_gf"),
-                        "home_home_ga": prediction.get("home_home_ga"),
-                        "away_away_gf": prediction.get("away_away_gf"),
-                        "away_away_ga": prediction.get("away_away_ga"),
-                        "h2h_count": prediction.get("h2h_count", 0),
-                        "h2h_results": prediction.get("h2h_results", []),
-                        "lambda_home": prediction.get("lambda_home"),
-                        "lambda_away": prediction.get("lambda_away"),
-                        "rho": prediction.get("rho"),
-                        "training_sample": prediction.get("training_sample"),
-                        "training_teams": prediction.get("training_teams"),
-                        "kickoff": game.get("kickoff_eat") or fixture.get("kickoffUtc"),
-                        "url": game.get("url"),
-                        "event_id": game.get("event_id"),
-                        "sportybet_event_id": game.get("event_id"),
-                        "fixture_match_verified": True,
-                        "market_probability_verified": probability is not None,
-                        "market_id": row.get("market_id"),
-                        "outcome_id": row.get("outcome_id"),
-                        "specifier": row.get("specifier") or row.get("handicap"),
-                    })
-        diagnostics.append(
-            f"{day.isoformat()}: {matched_events} matched SportyBet events; "
-            f"{market_rows_seen} market rows inspected; {len(candidates)} total candidate rows accumulated; "
-            f"{prediction_unavailable} matched fixtures lacked usable model history"
-        )
-        if missing_history_fixtures:
-            diagnostics.append(
-                f"{day.isoformat()}: {missing_history_fixtures} fixtures had no usable "
-                "verified same-competition model history. No cross-competition model "
-                "fallback was run; unrelated competitions are not pooled."
-            )
-        if history_failure_reasons:
-            diagnostics.append(
-                "History failure details: " + "; ".join(
-                    f"{reason} ({count})"
-                    for reason, count in history_failure_reasons.most_common(4)
-                )
-            )
-        if not matched_events:
-            diagnostics.append(f"{day.isoformat()}: no confidently matched SportyBet events")
-        if unsupported:
-            diagnostics.append("Markets retrieved but not model-supported yet: " + ", ".join(sorted(unsupported)[:12]))
-
-    # External probability enrichment removed: the fitted Dixon-Coles model is the sole source.
-
-    for name, error in feed_errors.items():
-        diagnostics.append(f"{name}: {str(error)[:100]}")
-    candidates.sort(key=lambda x: (x["ev"] if x.get("ev") is not None else -1.0,
-                                   x["probability"] if x.get("probability") is not None else 0.0), reverse=True)
-    best = {}
-    for item in candidates:
-        key = (item["home"], item["away"], item["market_key"])
-        if key not in best or item["odds"] > best[key]["odds"]:
-            best[key] = item
-    return sorted(best.values(), key=lambda x: (x["ev"] if x["ev"] is not None else -1.0, x["probability"] if x["probability"] is not None else 0.0), reverse=True), diagnostics
+            try: target_dates.add(date.fromisoformat(str(value)[:10]))
+            except ValueError: pass
+    if not target_dates: return [], ["No valid scan dates."]
+    progress("Reading SportyBet fixtures and prices…")
+    games = fetch_sportybet_odds(sorted(target_dates), max_pages=30)
+    candidates = []
+    excluded = ("btts", "both teams to score", "under 2.5", "draw no bet", " dnb",
+                "2up", "two up", "early payout", "handicap", "corner", "card",
+                "booking", "shots", "player", "correct score", "half time", "first half")
+    filters = [x.strip().casefold() for x in str(market_filter or "all").split(",") if x.strip() and x.strip().casefold() != "all"]
+    for game in games:
+        kickoff = str(game.get("kickoff_eat") or "")
+        try: day = date.fromisoformat(kickoff[:10])
+        except ValueError: continue
+        if day not in target_dates: continue
+        home, away = str(game.get("home") or "").strip(), str(game.get("away") or "").strip()
+        event_id = str(game.get("event_id") or "").strip()
+        if not home or not away or not event_id: continue
+        for market in game.get("markets") or []:
+            name, selection = str(market.get("market") or "").strip(), str(market.get("selection") or "").strip()
+            text_value = (name + " " + selection + " " + str(market.get("specifier") or "")).casefold()
+            if not name or not selection or any(term in text_value for term in excluded): continue
+            if filters and not any(term in name.casefold() or term in selection.casefold() for term in filters): continue
+            try: odds = float(market.get("odds"))
+            except (TypeError, ValueError, OverflowError): continue
+            if not math.isfinite(odds) or not 1.01 < odds <= 10: continue
+            market_id, outcome_id = str(market.get("market_id") or ""), str(market.get("outcome_id") or "")
+            if not market_id or not outcome_id: continue
+            candidates.append({
+                "home":home,"away":away,"fixture":f"{home} vs {away}",
+                "league":str(game.get("competition") or "Competition"),
+                "country":str(game.get("country") or ""),"day":day.isoformat(),
+                "kickoff":kickoff,"bookmaker":"SportyBet","market":name,
+                "selection":selection,"specifier":market.get("specifier"),
+                "odds":odds,"event_id":event_id,"sportybet_event_id":event_id,
+                "eventId":event_id,"market_id":market_id,"marketId":market_id,
+                "outcome_id":outcome_id,"outcomeId":outcome_id,
+                "fixture_match_verified":True,"url":game.get("url"),
+                "selection_method":"SportyBet prices only; no match prediction performed"
+            })
+    unique = {}
+    for row in candidates:
+        key=(row["event_id"],row["market_id"],row["outcome_id"])
+        if key not in unique or row["odds"] > unique[key]["odds"]: unique[key]=row
+    result=list(unique.values())
+    diagnostics=[f"{len(games)} SportyBet events retrieved; {len(result)} exact market selections available.",
+                 "Historical models, team-form analysis, competition filters and external prediction feeds are disabled."]
+    return result, diagnostics
 
 
 async def topvalue_command(update, context):
