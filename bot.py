@@ -39,7 +39,7 @@ from user_portfolio import save_bankroll, get_settings, save_rollover, save_pref
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day, enrich_candidates_with_price_history
 from accumulator_engine import build_accumulator
 from autobuild_research import prepare_candidate_pool
-from probability_engine import assess_candidate as assess_probability_candidate
+from probability_engine import assess_candidates as assess_probability_candidates
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
@@ -2188,18 +2188,9 @@ async def autobuild_sportybet_command(update, context):
         if len(history) < 100:
             raise RuntimeError(f"Only {len(history)} historical scorelines are available; at least 100 are required for the model baseline.")
 
-        assessed = []
-        rejected_model = 0
-        for candidate in rows:
-            try:
-                scored = assess_probability_candidate(candidate, history)
-            except Exception:
-                logger.exception("Probability assessment failed for %s vs %s", candidate.get("home"), candidate.get("away"))
-                scored = None
-            if scored is None:
-                rejected_model += 1
-                continue
-            assessed.append(scored)
+        await reply(update, "🧮 Evaluating supported markets against the indexed historical results…")
+        assessed = await asyncio.to_thread(assess_probability_candidates, rows, history)
+        rejected_model = len(rows) - len(assessed)
 
         rows, research_stats = await asyncio.to_thread(prepare_candidate_pool, assessed)
         fixture_keys = {
