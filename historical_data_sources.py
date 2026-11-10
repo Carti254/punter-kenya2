@@ -15,9 +15,11 @@ from datetime import date, datetime
 from functools import lru_cache
 
 import requests
+import os
 
 LOG = logging.getLogger("punter_kenya.history_sources")
 BASE = "https://www.football-data.co.uk/mmz4281"
+PITCHAPI_BASE = "https://api.pitchapi.dev/v1"
 
 # Explicit division mapping. A match must identify one of these competitions;
 # no nearest-league or cross-country fallback is permitted.
@@ -148,18 +150,24 @@ def _download_season(season_code, division_code):
     return tuple(output)
 
 def fetch_competition_history(competition, country, as_of_date=None, seasons=6):
-    """Fetch historical results for one explicitly mapped competition only."""
+    """Try exact PitchAPI history first, then the explicit Football-Data map."""
+    pitch_rows, pitch_info = fetch_pitchapi_competition_history(
+        competition, country, as_of_date=as_of_date, seasons=min(seasons, 6)
+    )
+    if pitch_rows:
+        return pitch_rows, pitch_info
     code = competition_code(competition, country)
     if not code:
-        # Include the exact feed labels in scan diagnostics. This makes missing
-        # coverage actionable instead of collapsing every unknown league into
-        # the same generic message.
-        return [], {"source": "football-data.co.uk", "mapped": False,
-                    "reason": (
-                        "Unmapped competition/country: "
-                        + str(competition or "<blank>")[:90]
-                        + " / " + str(country or "<blank>")[:60]
-                    )}
+        return [], {
+            "source": "PitchAPI + football-data.co.uk",
+            "mapped": False,
+            "reason": (
+                str(pitch_info.get("reason") or "PitchAPI has no verified match")
+                + "; Unmapped competition/country: "
+                + str(competition or "<blank>")[:90]
+                + " / " + str(country or "<blank>")[:60]
+            ),
+        }
     rows, errors = [], []
     cutoff = str(as_of_date or date.today())[:10]
     for season in _season_codes(as_of_date, max(1, min(int(seasons), 8))):
@@ -177,3 +185,137 @@ def fetch_competition_history(competition, country, as_of_date=None, seasons=6):
     return result, {"source": "football-data.co.uk", "mapped": True,
                     "competition_code": code, "seasons_checked": _season_codes(as_of_date, max(1, min(int(seasons), 8))),
                     "valid_results": len(result), "errors": errors}
+
+
+# PitchAPI provides a broader competition catalogue and stable provider team IDs.
+# It is queried only when a key is configured, and only exact competition +
+# country-code matches are accepted. No nearest-league or cross-competition fit.
+_COUNTRY_CODES = {
+    "england": {"eng", "gb-eng"}, "scotland": {"sco", "gb-sct"},
+    "wales": {"wal", "gb-wls"}, "northern ireland": {"nir", "gb-nir"},
+    "spain": {"esp"}, "germany": {"deu"}, "italy": {"ita"},
+    "france": {"fra"}, "netherlands": {"nld"}, "belgium": {"bel"},
+    "portugal": {"prt"}, "turkey": {"tur"}, "greece": {"grc"},
+    "kenya": {"ken"}, "south africa": {"zaf"}, "nigeria": {"nga"},
+    "egypt": {"egy"}, "morocco": {"mar"}, "algeria": {"dza"},
+    "brazil": {"bra"}, "argentina": {"arg"}, "mexico": {"mex"},
+    "united states": {"usa"}, "usa": {"usa"}, "japan": {"jpn"},
+    "south korea": {"kor"}, "australia": {"aus"}, "ireland": {"irl"},
+    "sweden": {"swe"}, "norway": {"nor"}, "denmark": {"dnk"},
+    "finland": {"fin"}, "switzerland": {"che"}, "austria": {"aut"},
+    "poland": {"pol"}, "czech republic": {"cze"}, "romania": {"rou"},
+    "croatia": {"hrv"}, "serbia": {"srb"}, "ukraine": {"ukr"},
+    "russia": {"rus"}, "china": {"chn"}, "india": {"ind"},
+    "thailand": {"tha"}, "indonesia": {"idn"}, "malaysia": {"mys"},
+    "saudi arabia": {"sau"}, "united arab emirates": {"are"},
+    "qatar": {"qat"}, "iran": {"irn"}, "cyprus": {"cyp"},
+    "iceland": {"isl"}, "slovenia": {"svn"}, "slovakia": {"svk"},
+    "hungary": {"hun"}, "bulgaria": {"bgr"}, "uk": {"eng", "sco", "wal", "nir"},
+}
+
+def _pitchapi_request(path, params=None):
+    key = os.getenv("PITCHAPI_API_KEY")
+    if not key:
+        raise RuntimeError("PITCHAPI_API_KEY is not configured")
+    response = requests.get(
+        f"{PITCHAPI_BASE}/{path.lstrip('/')}",
+        headers={"X-API-KEY": key, "Accept": "application/json",
+                 "User-Agent": "PunterKenya/1.0"},
+        params=params or {}, timeout=(5, 20),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or "data" not in payload:
+        raise ValueError("PitchAPI returned an unexpected response envelope")
+    return payload["data"]
+
+@lru_cache(maxsize=1)
+def _pitchapi_leagues():
+    data = _pitchapi_request("leagues")
+    leagues = data.get("leagues", []) if isinstance(data, dict) else []
+    if not isinstance(leagues, list):
+        raise ValueError("PitchAPI league catalogue is not a list")
+    return tuple(item for item in leagues if isinstance(item, dict))
+
+def fetch_pitchapi_competition_history(competition, country, as_of_date=None, seasons=3):
+    """Fetch results from the exact PitchAPI league; never guess a league match."""
+    if not os.getenv("PITCHAPI_API_KEY"):
+        return [], {"source": "PitchAPI", "configured": False,
+                    "reason": "PITCHAPI_API_KEY is not configured"}
+    country_name, league_name = _split_competition_country(competition, country)
+    wanted_country_codes = _COUNTRY_CODES.get(country_name, set())
+    wanted_league = _key(league_name)
+    if not wanted_country_codes or not wanted_league:
+        return [], {"source": "PitchAPI", "mapped": False,
+                    "reason": "Competition/country cannot be resolved exactly"}
+    try:
+        matches = [
+            league for league in _pitchapi_leagues()
+            if _key(league.get("name")) == wanted_league
+            and str(league.get("country_code") or "").casefold() in wanted_country_codes
+        ]
+    except Exception as exc:
+        return [], {"source": "PitchAPI", "mapped": False,
+                    "reason": f"League catalogue request failed: {type(exc).__name__}"}
+    if len(matches) != 1:
+        return [], {"source": "PitchAPI", "mapped": False,
+                    "reason": ("No exact PitchAPI competition/country match"
+                               if not matches else "Ambiguous PitchAPI competition/country match")}
+    league = matches[0]
+    available_seasons = league.get("seasons") or []
+    cutoff = str(as_of_date or date.today())[:10]
+    try:
+        cutoff_date = date.fromisoformat(cutoff)
+    except ValueError:
+        cutoff_date = date.today()
+    min_year = cutoff_date.year - max(1, min(int(seasons), 6))
+    selected = []
+    for season in available_seasons:
+        text_season = str(season)
+        years = re.findall(r"20\\d{2}", text_season)
+        if years and int(years[0]) >= min_year and int(years[0]) <= cutoff_date.year:
+            selected.append(text_season)
+    rows, errors = [], []
+    for season in selected:
+        try:
+            data = _pitchapi_request(
+                f"leagues/{league.get('id')}/matches",
+                params={"season": season, "status": "played"},
+            )
+            items = data.get("matches", []) if isinstance(data, dict) else []
+            for item in items if isinstance(items, list) else []:
+                if not isinstance(item, dict) or str(item.get("status") or "").casefold() not in {"finished", "played"}:
+                    continue
+                day = str(item.get("date") or item.get("time_utc") or "")[:10]
+                home, away = item.get("home_team") or {}, item.get("away_team") or {}
+                try:
+                    hg, ag = int(item.get("score_home")), int(item.get("score_away"))
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if not day or day >= cutoff or not home.get("name") or not away.get("name"):
+                    continue
+                if not (0 <= hg <= 15 and 0 <= ag <= 15):
+                    continue
+                rows.append({
+                    "date": day, "home": str(home["name"]), "away": str(away["name"]),
+                    "ft_home": hg, "ft_away": ag,
+                    "_history_source": "PitchAPI",
+                    "_history_competition_id": str(league.get("id")),
+                    "_history_home_team_id": str(home.get("id") or ""),
+                    "_history_away_team_id": str(away.get("id") or ""),
+                })
+        except Exception as exc:
+            errors.append(f"{season}: {type(exc).__name__}")
+    deduped = {}
+    for row in rows:
+        key = (row["date"], row["_history_home_team_id"], row["_history_away_team_id"])
+        deduped[key] = row
+    result = sorted(deduped.values(), key=lambda item: item["date"])
+    return result, {
+        "source": "PitchAPI", "mapped": True,
+        "competition_id": str(league.get("id")),
+        "competition_name": str(league.get("name")),
+        "country_code": str(league.get("country_code") or ""),
+        "seasons_checked": selected, "valid_results": len(result),
+        "errors": errors,
+    }
