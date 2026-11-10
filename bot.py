@@ -3940,8 +3940,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         matched_events = 0
         unsupported = set()
         prediction_unavailable = 0
-        history_fallback_attempted = 0
-        history_fallback_recovered = 0
+        missing_history_fixtures = 0
         history_failure_reasons = Counter()
         market_rows_seen = 0
         # Resolve live SportyBet matches first, then prefetch history only for
@@ -4003,7 +4002,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
                 # If this competition lacks five verified results per team, the
                 # fixture stays unmodelled until a team-ID-backed history source exists.
                 if not prediction.get("available"):
-                    history_fallback_attempted += 1
+                    missing_history_fixtures += 1
                     history_failure_reasons[str(prediction.get("reason") or "insufficient same-competition history")[:240]] += 1
             except Exception as exc:
                 prediction_unavailable += 1
@@ -4123,14 +4122,15 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             f"{market_rows_seen} market rows inspected; {len(candidates)} total candidate rows accumulated; "
             f"{prediction_unavailable} matched fixtures lacked usable model history"
         )
-        if history_fallback_attempted:
+        if missing_history_fixtures:
             diagnostics.append(
-                f"{day.isoformat()}: cross-competition history fallback attempted for "
-                f"{history_fallback_attempted} fixtures; recovered {history_fallback_recovered}"
+                f"{day.isoformat()}: {missing_history_fixtures} fixtures had no usable "
+                "verified same-competition model history. No cross-competition model "
+                "fallback was run; unrelated competitions are not pooled."
             )
         if history_failure_reasons:
             diagnostics.append(
-                "History fallback details: " + "; ".join(
+                "History failure details: " + "; ".join(
                     f"{reason} ({count})"
                     for reason, count in history_failure_reasons.most_common(4)
                 )
