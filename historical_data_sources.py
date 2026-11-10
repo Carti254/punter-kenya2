@@ -150,14 +150,23 @@ def _download_season(season_code, division_code):
     return tuple(output)
 
 def fetch_competition_history(competition, country, as_of_date=None, seasons=6):
-    """Try exact PitchAPI history first, then the explicit Football-Data map."""
+    """Use the strongest verified history sample for this exact competition."""
     pitch_rows, pitch_info = fetch_pitchapi_competition_history(
         competition, country, as_of_date=as_of_date, seasons=min(seasons, 6)
     )
-    if pitch_rows:
+    # A full sample from the broader provider is preferred. Smaller samples may
+    # still be useful if no second exact source exists, but do not block a
+    # better explicitly mapped Football-Data sample.
+    if len(pitch_rows) >= 50:
         return pitch_rows, pitch_info
     code = competition_code(competition, country)
     if not code:
+        if pitch_rows:
+            pitch_info["reason"] = (
+                f"PitchAPI exact competition supplied {len(pitch_rows)} results; "
+                "no second mapped source is available"
+            )
+            return pitch_rows, pitch_info
         return [], {
             "source": "PitchAPI + football-data.co.uk",
             "mapped": False,
