@@ -151,10 +151,12 @@ def _market_probability(row, prediction):
     market = re.sub(r"[^a-z0-9.+]", " ", str(row.get("market") or "").casefold())
     selection = re.sub(r"[^a-z0-9.+]", " ", str(row.get("selection") or "").casefold())
     combined = market + " " + selection
-    if any(term in combined for term in ("btts", "both teams", "under", "draw no bet",
-                                          "handicap", "corner", "card", "player",
-                                          "correct score", "half time", "first half",
-                                          "second half", "early payout", "2up")):
+    if (any(term in combined for term in ("btts", "both teams", "draw no bet",
+                                           "handicap", "corner", "card", "player",
+                                           "correct score", "half time", "first half",
+                                           "second half", "early payout", "2up"))
+            or "under" in selection
+            or ("under" in market and "over" not in selection)):
         return None, "unsupported or excluded market"
     if "double chance" in market:
         if selection in ("home or draw", "1x", "home draw"):
