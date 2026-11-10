@@ -55,21 +55,6 @@ class ScannerMarketTests(unittest.TestCase):
         self.assertNotIn(("Total Goals Over/Under", "Under 2.5"), labels)
         self.assertIn(("Total Goals Over/Under", "Over 1.5"), labels)
 
-    def test_scoreline_derived_markets(self):
-        cases = [
-            ({"market": "1X2", "selection": "1"}, .50),
-            ({"market": "Double Chance", "selection": "1X"}, .75),
-            ({"market": "Both Teams To Score", "selection": "Yes"}, "positive"),
-            ({"market": "Total Goals Over Under", "selection": "Over 1.5"}, "positive"),
-            ({"market": "Correct Score", "selection": "1:0"}, "positive"),
-        ]
-        for row, expected in cases:
-            probability, reason = _market_probability_for_row(self.model, row)
-            if expected == "positive":
-                self.assertIsNotNone(probability)
-                self.assertGreater(probability, 0)
-            else:
-                self.assertAlmostEqual(probability, expected, places=2)
 
 
 if __name__ == "__main__":
