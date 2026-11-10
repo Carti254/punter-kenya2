@@ -2288,14 +2288,14 @@ async def accumulator_status_command(update, context):
         rows,diagnostics=await asyncio.to_thread(scan_value_candidates,("today","tomorrow"),"all","SportyBet")
         rows,research_stats=prepare_candidate_pool(rows)
     except Exception as exc:
-        logger.exception("Odds-only accumulator scan failed")
+        logger.exception("Model-qualified accumulator scan failed")
         await reply(update,f"❌ SPORTYBET SCAN FAILED: {type(exc).__name__}: {str(exc)[:220]}")
         return
     fixture_count=len({(str(x.get("day") or "")[:10],canonical_team_key(x.get("home")),canonical_team_key(x.get("away"))) for x in rows})
     if not rows or fixture_count<2:
         await reply(update,"NO SLIP: fewer than two distinct SportyBet fixtures have usable, exact market identifiers.\n"+"\n".join(diagnostics[:4]))
         return
-    build=build_accumulator(rows,target,max_legs=20,ranking="odds")
+    build=build_accumulator(rows,target,max_legs=20,ranking="value")
     chosen,combined=build["selections"],build["combined_odds"]
     if not chosen or not build.get("target_reached"):
         await reply(update,f"NO SLIP: available SportyBet prices did not reach {target:.2f} within the 20% target band. No filler legs were added.")
@@ -5256,8 +5256,8 @@ async def marketsim_command(update, context):
 async def sources_command(update, context):
     await reply(update,
         "🔌 PUNTER KENYA — ACTIVE SELECTION SOURCE\\n\\n"
-        "SportyBet: used for fixtures, current prices and executable market IDs.\\n"
-        "Recent completed Open-Matchday results feed one Poisson probability model. SportyBet supplies executable fixtures, current prices and market IDs.\\n\\n"
+        "SportyBet: fixtures, current prices and executable market IDs.\\n"
+        "Recent completed Open-Matchday results feed one Poisson probability model.\\n\\n"
         "The model is not yet calibrated against a sufficiently large settled prediction sample. Probability and value figures are estimates, not guarantees."
     )
 
