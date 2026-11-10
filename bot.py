@@ -5234,7 +5234,7 @@ async def sources_command(update, context):
     await reply(update,
         "🔌 PUNTER KENYA — ACTIVE SELECTION SOURCE\\n\\n"
         "SportyBet: fixtures, current prices and executable market IDs.\\n"
-        "Recent completed Open-Matchday results feed one Poisson probability model.\\n\\n"
+        "The /build workflow uses executable SportyBet prices and market/ID validation only. It does not generate predictions.\\n\\n"
         "The model is not yet calibrated against a sufficiently large settled prediction sample. Probability and value figures are estimates, not guarantees."
     )
 
