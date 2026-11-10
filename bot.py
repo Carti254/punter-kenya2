@@ -40,7 +40,6 @@ from premium_tracking import save_price_observations, capture_current_prices, cl
 from accumulator_engine import build_accumulator
 from autobuild_research import prepare_candidate_pool, candidate_research_summary
 from free_football_sources import fetch_provider_fixtures as fetch_free_provider_fixtures, provider_key_status
-from historical_data_sources import fetch_competition_history as fetch_supplementary_competition_history
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
