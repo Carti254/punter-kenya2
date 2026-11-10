@@ -210,33 +210,45 @@ def _market_probability(row, prediction):
     return None, "market not covered by the model"
 
 
-def assess_candidate(row, history, history_index=None, baseline=None):
-    """Attach a conservative model estimate and reject insufficient/negative value."""
+def assess_candidate_detailed(row, history, history_index=None, baseline=None):
+    """Return (qualified_row, rejection_code); every candidate gets one reason."""
     try:
         kickoff_day = _date(str(row.get("kickoff") or row.get("day") or "")[:10])
         odds = float(row.get("odds"))
     except (TypeError, ValueError, OverflowError):
-        return None
-    if not kickoff_day or not math.isfinite(odds) or odds <= 1:
-        return None
+        return None, "invalid_date_or_odds"
+    if not kickoff_day:
+        return None, "invalid_fixture_date"
+    if not math.isfinite(odds) or odds <= 1:
+        return None, "invalid_odds"
     if history_index is None or baseline is None:
         history_index, baseline = _prepare_history(history)
+    baseline_count = baseline[0]
+    if baseline_count < 30:
+        return None, "history_baseline_below_30"
     home_rows = _indexed_team_rows(history_index, row.get("home"), kickoff_day)
     away_rows = _indexed_team_rows(history_index, row.get("away"), kickoff_day)
+    if len(home_rows) < MIN_TEAM_MATCHES:
+        return None, "insufficient_home_team_history"
+    if len(away_rows) < MIN_TEAM_MATCHES:
+        return None, "insufficient_away_team_history"
     prediction = _prediction(home_rows, away_rows, history, baseline)
     if prediction is None:
-        return None
+        return None, "model_prediction_unavailable"
     probability, market_label = _market_probability(row, prediction)
-    if probability is None or not math.isfinite(probability) or not 0 < probability <= 1:
-        return None
-    implied = 1.0 / odds
+    if probability is None:
+        return None, "unsupported_or_unmapped_market"
+    if not math.isfinite(probability) or not 0 < probability <= 1:
+        return None, "invalid_model_probability"
     expected_value = probability * odds - 1.0
-    if probability < MIN_SELECTION_PROBABILITY or expected_value < MIN_VALUE_EDGE:
-        return None
-    return {
+    if probability < MIN_SELECTION_PROBABILITY:
+        return None, "below_probability_threshold"
+    if expected_value < MIN_VALUE_EDGE:
+        return None, "below_value_threshold"
+    return ({
         **row,
         "model_probability": probability,
-        "implied_probability": implied,
+        "implied_probability": 1.0 / odds,
         "fair_odds": 1.0 / probability,
         "expected_value": expected_value,
         "model_market": market_label,
@@ -244,17 +256,44 @@ def assess_candidate(row, history, history_index=None, baseline=None):
         "model_away_rate": prediction["away_rate"],
         "model_home_sample": prediction["home_sample"],
         "model_away_sample": prediction["away_sample"],
-        "selection_method": "Relaxed recent-results Poisson screen; uncalibrated; probability >=52%, estimated EV >=0%; not a proven edge.",
+        "selection_method": (
+            f"Recent-results Poisson screen; uncalibrated; probability >= "
+            f"{MIN_SELECTION_PROBABILITY:.0%}, estimated EV >= {MIN_VALUE_EDGE:.0%}; "
+            "not a proven edge."
+        ),
+    }, "qualified")
+
+
+def assess_candidate(row, history, history_index=None, baseline=None):
+    item, _reason = assess_candidate_detailed(row, history, history_index, baseline)
+    return item
+
+
+def assess_candidates_with_diagnostics(rows, history):
+    """Assess all rows and return qualified rows plus transparent rejection counts."""
+    from collections import Counter
+    history_index, baseline = _prepare_history(history)
+    qualified = []
+    reasons = Counter()
+    for row in rows or []:
+        item, reason = assess_candidate_detailed(row, history, history_index, baseline)
+        reasons[reason] += 1
+        if item is not None:
+            qualified.append(item)
+    return qualified, {
+        "scanned": len(rows or []),
+        "qualified": len(qualified),
+        "rejected": sum(count for reason, count in reasons.items() if reason != "qualified"),
+        "reasons": dict(reasons),
+        "history_scorelines": baseline[0],
+        "baseline_minimum": 30,
+        "team_match_minimum": MIN_TEAM_MATCHES,
+        "probability_minimum": MIN_SELECTION_PROBABILITY,
+        "value_minimum": MIN_VALUE_EDGE,
     }
 
 
-
 def assess_candidates(rows, history):
-    """Assess a complete SportyBet candidate batch using one indexed history pass."""
-    history_index, baseline = _prepare_history(history)
-    qualified = []
-    for row in rows or []:
-        item = assess_candidate(row, history, history_index, baseline)
-        if item is not None:
-            qualified.append(item)
+    """Backward-compatible qualified-only assessment API."""
+    qualified, _diagnostics = assess_candidates_with_diagnostics(rows, history)
     return qualified
