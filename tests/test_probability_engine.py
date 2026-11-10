@@ -5,13 +5,15 @@ from probability_engine import (
     _market_probability,
     _prepare_history,
     _indexed_team_rows,
-    MIN_SELECTION_PROBABILITY,
+    MIN_SELECTION_PROBABILITY, MIN_TEAM_MATCHES, MIN_VALUE_EDGE,
 )
 
 
 class ProbabilityEngineTests(unittest.TestCase):
-    def test_minimum_selection_probability_is_conservative(self):
-        self.assertEqual(MIN_SELECTION_PROBABILITY, 0.60)
+    def test_relaxed_screening_thresholds_are_applied(self):
+        self.assertEqual(MIN_SELECTION_PROBABILITY, 0.52)
+        self.assertEqual(MIN_TEAM_MATCHES, 4)
+        self.assertEqual(MIN_VALUE_EDGE, 0.00)
 
     def test_1x2_accepts_the_actual_sportybet_team_name(self):
         prediction = {"home": 0.52, "draw": 0.27, "away": 0.21}
