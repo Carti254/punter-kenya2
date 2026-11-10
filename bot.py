@@ -909,39 +909,64 @@ def fetch_openmatchday_results_history(folder):
     return combined
 
 
+OPENMATCHDAY_HISTORY_LOADING = False
+
+def _load_openmatchday_team_history_background():
+    """Warm historical results cache outside the Telegram request thread."""
+    global OPENMATCHDAY_HISTORY_LOADING
+    collected = []
+    try:
+        leagues = fetch_all_leagues()
+        def fetch_one(league):
+            folder = str(league.get("leagueShortcut") or "").strip()
+            if not folder:
+                return []
+            try:
+                return fetch_openmatchday_results_history(folder)
+            except Exception as exc:
+                logger.info("Cross-competition history unavailable for %s: %s", folder, exc)
+                return []
+        pool = ThreadPoolExecutor(max_workers=min(24, max(1, len(leagues))))
+        futures = [pool.submit(fetch_one, league) for league in leagues]
+        try:
+            for future in as_completed(futures, timeout=75):
+                try:
+                    collected.extend(future.result())
+                except Exception:
+                    continue
+        except TimeoutError:
+            logger.warning("Historical-results warm-up reached its 75-second limit; using completed competitions only.")
+        finally:
+            # Do not hold up Telegram or process shutdown for slow provider requests.
+            pool.shutdown(wait=False, cancel_futures=True)
+        with OPENMATCHDAY_TEAM_HISTORY_LOCK:
+            OPENMATCHDAY_TEAM_HISTORY_CACHE["saved_at"] = time.time()
+            OPENMATCHDAY_TEAM_HISTORY_CACHE["rows"] = list(collected)
+        logger.info("Historical-results warm-up finished with %s scorelines.", len(collected))
+    except Exception:
+        logger.exception("Historical-results warm-up failed.")
+    finally:
+        OPENMATCHDAY_HISTORY_LOADING = False
+
+
 def fetch_openmatchday_team_history_rows(max_age_seconds=1800):
-    """Load a cached cross-competition results pool for team-form fallback."""
+    """Return cached history immediately; start a daemon warm-up when cache is cold."""
+    global OPENMATCHDAY_HISTORY_LOADING
     with OPENMATCHDAY_TEAM_HISTORY_LOCK:
         cached_at = float(OPENMATCHDAY_TEAM_HISTORY_CACHE.get("saved_at") or 0)
         cached_rows = OPENMATCHDAY_TEAM_HISTORY_CACHE.get("rows") or []
-        if cached_at and time.time() - cached_at < max_age_seconds:
+        if cached_at and time.time() - cached_at < max_age_seconds and cached_rows:
             return list(cached_rows)
-
-    leagues = fetch_all_leagues()
-    collected = []
-
-    def fetch_one(league):
-        folder = str(league.get("leagueShortcut") or "").strip()
-        if not folder:
-            return []
-        try:
-            return fetch_openmatchday_results_history(folder)
-        except Exception as exc:
-            logger.info("Cross-competition history unavailable for %s: %s", folder, exc)
-            return []
-
-    with ThreadPoolExecutor(max_workers=min(24, max(1, len(leagues)))) as pool:
-        futures = [pool.submit(fetch_one, league) for league in leagues]
-        for future in as_completed(futures):
-            try:
-                collected.extend(future.result())
-            except Exception:
-                continue
-
-    with OPENMATCHDAY_TEAM_HISTORY_LOCK:
-        OPENMATCHDAY_TEAM_HISTORY_CACHE["saved_at"] = time.time()
-        OPENMATCHDAY_TEAM_HISTORY_CACHE["rows"] = list(collected)
-    return collected
+        if OPENMATCHDAY_HISTORY_LOADING:
+            raise RuntimeError("Historical results are still loading. Retry the scan in about one minute.")
+        OPENMATCHDAY_HISTORY_LOADING = True
+    thread = threading.Thread(
+        target=_load_openmatchday_team_history_background,
+        name="punter-history-warmup",
+        daemon=True,
+    )
+    thread.start()
+    raise RuntimeError("Historical results are being loaded in the background. Retry the scan in about one minute.")
 
 
 def fetch_openmatchday_fixture_rows(days=14, league_id=None, day_filter=None):
