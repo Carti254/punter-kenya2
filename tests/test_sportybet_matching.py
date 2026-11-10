@@ -261,7 +261,7 @@ class SportyBetTotalOutcomeTests(unittest.TestCase):
     def test_booking_fixture_catalogue_rejects_malformed_envelope(self):
         from sportybet_client import _get_fixtures
         with patch("sportybet_client.SESSION.get", return_value=FakeResponse({"bizCode": 10000, "data": {}})):
-            with self.assertRaisesRegex(SportyBetError, "valid tournament catalogue"):
+            with self.assertRaisesRegex(SportyBetError, "schema changed"):
                 _get_fixtures()
 
 
