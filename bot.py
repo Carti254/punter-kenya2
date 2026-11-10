@@ -3050,9 +3050,11 @@ def team_name_matches_query(query_name, actual_name):
 
     # Allow moderate spelling/abbreviation variation, but never fuzzy-match
     # short single-word clubs or names sharing only one token.
-    if min(len(wanted_phrase), len(actual_phrase)) >= 8 and overlap >= 1:
+    if min(len(wanted_phrase), len(actual_phrase)) >= 8:
         ratio = SequenceMatcher(None, wanted_phrase, actual_phrase).ratio()
-        if ratio >= 0.82 and containment >= 0.50:
+        # A single-character typo in a one-word team name has no token overlap.
+        # Accept only a very close full-name match; short names remain exact-only.
+        if ratio >= 0.86 and (overlap >= 1 or (len(wanted) == 1 and len(actual) == 1)):
             return True
     return False
 
