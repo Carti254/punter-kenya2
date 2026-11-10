@@ -2126,9 +2126,8 @@ async def autobuild_sportybet_command(update, context):
             # Research and feed diagnostics stay internal; Telegram gets a clean result.
             logger.info(
                 "SportyBet autobuild: no eligible rows; scanned=%s rejected=%s "
-                "big_five_excluded=%s specialist=%s diagnostics=%s",
-                scanned_count, research_stats.get("rejected", 0),
-                big_five_excluded, specialist_stats.get("reason"), diagnostics,
+                "price_id_rejected=%s diagnostics=%s",
+                scanned_count, research_stats.get("rejected", 0), diagnostics,
             )
             diagnostic_lines = [str(item) for item in (diagnostics or []) if str(item).strip()]
             diagnostic_text = "\\n".join(f"• {item[:220]}" for item in diagnostic_lines[-8:])
@@ -2137,7 +2136,7 @@ async def autobuild_sportybet_command(update, context):
                 f"🚫 NO SPORTYBET SELECTIONS — {target:.2f} TARGET\\n"
                 f"Candidate rows produced: {scanned_count}\\n"
                 f"Rejected by basic price/ID checks: {research_stats.get('rejected', 0)}\\n"
-                f"League exclusions: {big_five_excluded}\\n\\n"
+                
                 "🔬 SPORTYBET FEED DIAGNOSTICS\\n"
                 + (diagnostic_text or "• No stage diagnostics were returned by the scanner.")
                 + "\\n\\nNo selection will be fabricated to fill the target."
@@ -3073,183 +3072,14 @@ def build_pre_match_prediction(raw_fixture, fixture):
 
 
 def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as_of_date=None, model_variant="current", include_monte_carlo=False, team_history_rows=None):
-    """Fit and apply the single competition-specific Dixon-Coles model."""
-    from dixon_coles_engine import fit_dixon_coles, predict_fixture
-    folder = str(raw_fixture.get("leagueShortcut") or "").strip()
-    if historical_rows is not None:
-        rows = list(historical_rows)
-    elif folder and folder != "__sportybet_discovery__":
-        try:
-            rows = fetch_openmatchday_csv(folder, "results")
-        except Exception as exc:
-            logger.warning("Could not load Open-Matchday history for %s: %s", folder, exc)
-            rows = []
-    else:
-        rows = []
-
-    # First fit the fixture's own competition. If that source is missing or
-    # insufficient, retrieve a separately mapped Football-Data.co.uk history.
-    # The supplemental rows replace the primary rows; competitions are never mixed.
-    competition = (
-        raw_fixture.get("leagueName") or raw_fixture.get("competition")
-        or fixture.get("competition") or ""
-    )
-    country = raw_fixture.get("countryName") or raw_fixture.get("country") or fixture.get("country") or ""
-
-    cache = globals().setdefault("_DIXON_COLES_FIT_CACHE", {})
-    cutoff_key = str(as_of_date)[:10] if as_of_date is not None else "latest"
-    # SportyBet discovery fixtures share a pseudo-folder. Include competition
-    # identity so one fixture can never reuse another competition's fitted model.
-    cache_key = (
-        folder or "__unmapped__",
-        str(competition).casefold().strip(),
-        str(country).casefold().strip(),
-        cutoff_key,
-        "open-matchday",
-    )
-    # Explicit caller-supplied history may differ for the same competition;
-    # fit it without putting it into the shared process cache.
-    fit = None if historical_rows is not None else cache.get(cache_key)
-    if fit is None:
-        fit = fit_dixon_coles(rows, before_date=as_of_date, min_matches=50, min_team_matches=3)
-        if historical_rows is None:
-            if len(cache) >= 200:
-                cache.clear()
-            cache[cache_key] = fit
-
-    history_source = "Open-Matchday"
-    if not fit.get("available"):
-        try:
-            supplementary_rows, source_info = fetch_supplementary_competition_history(
-                competition, country, as_of_date=as_of_date, seasons=6
-            )
-        except Exception as exc:
-            logger.warning("Supplementary history source failed for %s (%s): %s",
-                           competition, country, exc)
-            supplementary_rows, source_info = [], {"reason": type(exc).__name__}
-        if supplementary_rows:
-            source_code = (
-                source_info.get("competition_id")
-                or source_info.get("competition_code")
-                or _normal_market_text(competition) + "|" + _normal_market_text(country)
-            )
-            source_name = str(source_info.get("source") or "supplementary")
-            supplementary_key = (
-                f"{source_name}:{source_code}",
-                cutoff_key,
-                source_name,
-            )
-            supplementary_fit = cache.get(supplementary_key)
-            if supplementary_fit is None:
-                supplementary_fit = fit_dixon_coles(
-                    supplementary_rows, before_date=as_of_date,
-                    min_matches=50, min_team_matches=3
-                )
-                cache[supplementary_key] = supplementary_fit
-            if supplementary_fit.get("available"):
-                rows, fit = supplementary_rows, supplementary_fit
-                history_source = str(source_info.get("source") or "supplementary history")
-            else:
-                logger.info("Football-Data history for %s unavailable: %s",
-                            competition, supplementary_fit.get("reason"))
-        if not fit.get("available"):
-            return {
-                "available": False,
-                "training_sample": fit.get("sample_size", 0),
-                "history_source": history_source,
-                "supplementary_history": source_info,
-                "reason": (
-                    str(fit.get("reason") or "Competition history unavailable.")
-                    + " Supplementary source: "
-                    + str(source_info.get("reason") or (
-                        f"{source_info.get('source')} mapped to {source_info.get('competition_code')}; "
-                        f"{source_info.get('valid_results', 0)} prior results"
-                    ))
-                ),
-            }
-    forecast = predict_fixture(fit, fixture.get("home_team"), fixture.get("away_team"))
-    if not forecast.get("available"):
-        return {
-            **forecast,
-            "history_source": history_source,
-            "training_sample": fit.get("sample_size", 0),
-        }
-    cutoff = as_of_date.date() if isinstance(as_of_date, datetime) else (
-        datetime.strptime(str(as_of_date)[:10], "%Y-%m-%d").date() if as_of_date else date.today()
-    )
-    team_rows = list(team_history_rows) if team_history_rows is not None else rows
-    histories = {}
-    for team in (fixture.get("home_team"), fixture.get("away_team")):
-        parsed = []
-        for item in team_rows:
-            try:
-                d = datetime.strptime(str(item.get("date") or "")[:10], "%Y-%m-%d").date()
-                hg, ag = int(item.get("ft_home")), int(item.get("ft_away"))
-            except (TypeError, ValueError):
-                continue
-            if d >= cutoff:
-                continue
-            hname, aname = str(item.get("home") or "").strip(), str(item.get("away") or "").strip()
-            if team_name_matches_query(team, hname):
-                gf, ga, venue, opponent = hg, ag, "H", aname
-            elif team_name_matches_query(team, aname):
-                gf, ga, venue, opponent = ag, hg, "A", hname
-            else:
-                continue
-            parsed.append({"date": d, "opponent": opponent, "venue": venue,
-                           "score": f"{hg}-{ag}", "gf": gf, "ga": ga,
-                           "result": "W" if gf > ga else "D" if gf == ga else "L"})
-        parsed.sort(key=lambda x: x["date"], reverse=True)
-        histories[team] = parsed[:10]
-    home_results = histories.get(fixture.get("home_team"), [])
-    away_results = histories.get(fixture.get("away_team"), [])
-    def avg(items, key):
-        return sum(x[key] for x in items) / len(items) if items else None
-    home_venue = [x for x in home_results if x["venue"] == "H"]
-    away_venue = [x for x in away_results if x["venue"] == "A"]
-    h2h = []
-    home_name, away_name = fixture.get("home_team"), fixture.get("away_team")
-    for item in rows:
-        hname, aname = str(item.get("home") or "").strip(), str(item.get("away") or "").strip()
-        direct = team_name_matches_query(home_name, hname) and team_name_matches_query(away_name, aname)
-        reverse = team_name_matches_query(home_name, aname) and team_name_matches_query(away_name, hname)
-        if not (direct or reverse):
-            continue
-        try:
-            d = datetime.strptime(str(item.get("date") or "")[:10], "%Y-%m-%d").date()
-            hg, ag = int(item.get("ft_home")), int(item.get("ft_away"))
-        except (TypeError, ValueError):
-            continue
-        if d >= cutoff:
-            continue
-        h2h.append({"date": d.isoformat(), "home_goals": hg if direct else ag,
-                    "away_goals": ag if direct else hg})
-    h2h.sort(key=lambda x: x["date"], reverse=True)
+    """Legacy compatibility stub: match-prediction engines have been removed."""
     return {
-        **forecast, "home_results": len(home_results), "away_results": len(away_results),
-        "home_sample": len(home_results), "away_sample": len(away_results),
-        "home_scored": avg(home_results, "gf"), "home_conceded": avg(home_results, "ga"),
-        "away_scored": avg(away_results, "gf"), "away_conceded": avg(away_results, "ga"),
-        "home_form": "".join(x["result"] for x in reversed(home_results)),
-        "away_form": "".join(x["result"] for x in reversed(away_results)),
-        "home_recent_matches": home_results, "away_recent_matches": away_results,
-        "home_home_sample": len(home_venue), "away_away_sample": len(away_venue),
-        "home_home_gf": avg(home_venue, "gf"), "home_home_ga": avg(home_venue, "ga"),
-        "away_away_gf": avg(away_venue, "gf"), "away_away_ga": avg(away_venue, "ga"),
-        "h2h_count": len(h2h), "h2h_results": h2h[:5],
-        "confidence": "MODERATE", "model_confidence": "MODERATE",
-        "training_sample": fit["sample_size"], "training_teams": fit["team_count"],
-        "rho": fit["rho"], "model_version": "dixon-coles-fitted-v1",
-        "probability_source": "Fitted time-decayed Dixon-Coles",
-        "history_source": history_source,
-        "monte_carlo": None, "elo_home_rating": None, "elo_away_rating": None,
+        "available": False,
+        "reason": "Match prediction and historical-analysis engines are disabled in this version.",
+        "training_sample": 0,
+        "history_source": "disabled",
     }
 
-
-# ============================================================
-# PUNTER KENYA — MATCH ANALYSIS COMMANDS
-# Historical-result analysis only; no unsupported live/odds claims.
-# ============================================================
 
 def load_competition_analysis(raw_fixture, fixture):
     folder = str(raw_fixture.get("leagueShortcut") or "").strip()
@@ -3760,39 +3590,30 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
 
 
 async def topvalue_command(update, context):
-    args = [x.casefold() for x in (context.args or [])]
-    market = args[0] if args and args[0] not in ("today", "tomorrow") else "all"
-    day_arg = next((x for x in args if x in ("today", "tomorrow")), "both")
-    day = day_arg
-    days = (day,) if day != "both" else ("today", "tomorrow")
+    """List current SportyBet prices; this command makes no predictions."""
+    args=[str(x).casefold() for x in (context.args or [])]
+    market=args[0] if args and args[0] not in ("today","tomorrow") else "all"
+    day_arg=next((x for x in args if x in ("today","tomorrow")),"both")
+    days=(day_arg,) if day_arg!="both" else ("today","tomorrow")
     try:
-        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, days, market)
+        rows,diagnostics=await asyncio.to_thread(scan_value_candidates,days,market,"SportyBet")
     except Exception as exc:
-        logger.exception("Value scanner failed")
-        await reply(update, f"❌ VALUE SCAN FAILED: {type(exc).__name__}: {str(exc)[:250]}")
+        logger.exception("SportyBet price listing failed")
+        await reply(update,f"❌ SPORTYBET PRICE SCAN FAILED: {type(exc).__name__}: {str(exc)[:220]}")
         return
-    if market == "safest":
-        rows.sort(key=lambda x: (x["probability"], x["ev"]), reverse=True)
     if not rows:
-        await reply(update,
-            "⚠️ NO MODEL-SUPPORTED, MATCHED PRICES FOUND\n\n"
-            "No responsible ranked pick is available because fixture, model or bookmaker data could not be matched.\n\n"
-            + ("Feed notes: " + "; ".join(diagnostics[:6]) if diagnostics else "No usable bookmaker prices were matched."))
+        await reply(update,"No matching SportyBet prices were returned.\\n"+"\\n".join(diagnostics[:5]))
         return
-    lines = ["🧠 PUNTER KENYA — RANKED PREDICTIONS", f"Market: {market.upper()} | Dates: {', '.join(days)}",
-             "Positive EV is a value indicator, not a condition for showing a prediction.", ""]
-    for n, item in enumerate(rows[:12], 1):
+    rows.sort(key=lambda x:(float(x["odds"]),x["home"],x["away"]))
+    lines=["📋 PUNTER KENYA — SPORTYBET PRICES",f"Market filter: {market.upper()} | Dates: {', '.join(days)}",""]
+    for n,item in enumerate(rows[:25],1):
         lines.append(f"{n}. {item['home']} vs {item['away']} — {item['league']}")
-        lines.append(f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item['bookmaker']})")
-        value_label = "POSITIVE ESTIMATED VALUE" if item["ev"] > 0 else "NEGATIVE ESTIMATED VALUE"
-        lines.append(f"   Model: {item['probability']:.1%} | Fair odds: {item['fair_odds']:.2f} | Est. EV: {item['ev']:+.1%} ({value_label})")
-        lines.append(f"   Kick-off: {item['kickoff'] or 'Not supplied'}")
-        if item.get("url"): lines.append(f"   {item['url']}")
+        lines.append(f"   {item['market']}: {item['selection']} @ {item['odds']:.2f}")
+        lines.append(f"   Kick-off: {item.get('kickoff') or 'Not supplied'}")
         lines.append("")
-    lines.append("Important: forecasts remain experimental and are not historically calibrated. Historical results are not xG or lineup-adjusted. Estimated EV is not proof of an edge. Verify prices and rules. Market availability depends on the bookmaker feed and model evidence.")
-    message = "\n".join(lines)
-    for offset in range(0, len(message), 3600):
-        await reply(update, message[offset:offset+3600])
+    lines.append("These are bookmaker prices only. No team analysis, probability, fair odds or expected value is calculated.")
+    message="\\n".join(lines)
+    for offset in range(0,len(message),3600): await reply(update,message[offset:offset+3600])
 
 
 async def aipicks_status_command(update, context):
@@ -4800,207 +4621,8 @@ async def error_handler(
 # APPLICATION STARTUP
 # ============================================================
 
-def collect_walk_forward_forecasts(max_matches=2000):
-    """Reconstruct current and venue-weighted Dixon-Coles forecasts before each match date."""
-    from dixon_coles_engine import selected_outcome_probability
-    samples = []
-    leagues = fetch_all_leagues()
-    for league in leagues:
-        folder = str(league.get("leagueShortcut") or "").strip()
-        if not folder:
-            continue
-        try:
-            rows = fetch_openmatchday_csv(folder, "results")
-        except Exception as exc:
-            logger.warning("Backtest skipped %s: %s", folder, str(exc)[:160])
-            continue
-        completed = []
-        for row in rows:
-            try:
-                match_date = datetime.strptime(str(row.get("date") or ""), "%Y-%m-%d").date()
-                hg, ag = int(row.get("ft_home")), int(row.get("ft_away"))
-            except (TypeError, ValueError):
-                continue
-            home, away = str(row.get("home") or "").strip(), str(row.get("away") or "").strip()
-            if home and away and hg >= 0 and ag >= 0:
-                completed.append((match_date, home, away, hg, ag))
-        completed.sort(key=lambda item: item[0])
-        for match_date, home, away, hg, ag in completed:
-            prediction = build_openmatchday_prediction(
-                {"leagueShortcut": folder},
-                {"home_team": home, "away_team": away},
-                historical_rows=rows,
-                as_of_date=match_date,
-                include_monte_carlo=False,
-            )
-            candidate = build_openmatchday_prediction(
-                {"leagueShortcut": folder},
-                {"home_team": home, "away_team": away},
-                historical_rows=rows,
-                as_of_date=match_date,
-                model_variant="venue_weighted",
-                include_monte_carlo=False,
-            )
-            if not prediction.get("available") or not candidate.get("available"):
-                continue
-            # The deployable candidate is venue-weighted Dixon-Coles. Backtest
-            # exactly the same 1X2 probability vector that the live gate uses.
-            try:
-                lh, la = float(candidate["lambda_home"]), float(candidate["lambda_away"])
-                candidate_vector = [
-                    selected_outcome_probability(lh, la, "1", home, away),
-                    selected_outcome_probability(lh, la, "X", home, away),
-                    selected_outcome_probability(lh, la, "2", home, away),
-                ]
-            except (KeyError, TypeError, ValueError, ArithmeticError):
-                continue
-            if not all(value is not None and math.isfinite(float(value)) and 0 <= float(value) <= 1
-                       for value in candidate_vector) or sum(candidate_vector) <= 0:
-                continue
-            samples.append({
-                "match_date": match_date,
-                "p_home": prediction["home_win"],
-                "p_draw": prediction["draw"],
-                "p_away": prediction["away_win"],
-                "candidate_home": candidate_vector[0],
-                "candidate_draw": candidate_vector[1],
-                "candidate_away": candidate_vector[2],
-                "actual_home_goals": hg,
-                "actual_away_goals": ag,
-            })
-            if len(samples) >= max_matches:
-                return sorted(samples, key=lambda item: item["match_date"])
-    return sorted(samples, key=lambda item: item["match_date"])
-
-
-def evaluate_historical_calibration():
-    """Evaluate reconstructed pre-match forecasts and cache the result for six hours.
-
-    The reconstruction is intentionally expensive and is not repeated on every
-    accumulator request. Historical simulations omit Monte Carlo because the
-    calibration target is the deterministic 1X2 scoreline probability vector.
-    """
-    cache = globals().setdefault("_WALK_FORWARD_CALIBRATION_CACHE", {})
-    if cache.get("result") is not None and time.time() - cache.get("timestamp", 0) < 21600:
-        return dict(cache["result"])
-
-    rows = collect_walk_forward_forecasts()
-    source = "walk-forward reconstruction from historical competition results"
-    rows = sorted(rows, key=lambda row: row["match_date"])
-    probabilities, outcomes = [], []
-    usable = []
-    for row in rows:
-        try:
-            hg, ag = int(row["actual_home_goals"]), int(row["actual_away_goals"])
-            vector = [float(row["p_home"]), float(row["p_draw"]), float(row["p_away"])]
-            match_date = row["match_date"]
-        except (KeyError, TypeError, ValueError, OverflowError):
-            continue
-        if hg < 0 or ag < 0 or not all(math.isfinite(p) and 0 <= p <= 1 for p in vector) or sum(vector) <= 0:
-            continue
-        candidate_vector = [
-            float(row.get("candidate_home", 0)),
-            float(row.get("candidate_draw", 0)),
-            float(row.get("candidate_away", 0)),
-        ]
-        if not all(math.isfinite(p) and 0 <= p <= 1 for p in candidate_vector) or sum(candidate_vector) <= 0:
-            continue
-        usable.append((match_date, vector, 0 if hg > ag else 1 if hg == ag else 2, candidate_vector))
-
-    count = len(usable)
-    dates = sorted({row[0] for row in usable})
-    date_split = int(len(dates) * 0.70)
-    if date_split < 1 or date_split >= len(dates):
-        result = {"ready": False, "count": count, "train": 0, "holdout": 0, "source": source}
-        cache.update({"timestamp": time.time(), "result": result})
-        return dict(result)
-    cutoff = dates[date_split]
-    train = [row for row in usable if row[0] < cutoff]
-    holdout = [row for row in usable if row[0] >= cutoff]
-    if len(train) < 50 or len(holdout) < 30:
-        result = {"ready": False, "count": count, "train": len(train),
-                  "holdout": len(holdout), "source": source}
-        cache.update({"timestamp": time.time(), "result": result})
-        return dict(result)
-
-    train_p = [row[1] for row in train]
-    train_y = [row[2] for row in train]
-    test_p = [row[1] for row in holdout]
-    test_y = [row[2] for row in holdout]
-
-    # Fit temperature on the venue-weighted Dixon-Coles candidate itself,
-    # never on the older model and then transfer that temperature to a different model.
-    candidate_train_p = [row[3] for row in train]
-    candidate_p = [row[3] for row in holdout]
-    fitted = fit_temperature(candidate_train_p, train_y, minimum_samples=50)
-    candidate_calibrated = [
-        apply_temperature(p, fitted["temperature"]) for p in candidate_p
-    ]
-    candidate_brier = brier_score(candidate_p, test_y)
-    candidate_logloss = log_loss(candidate_p, test_y)
-    candidate_calibrated_brier = brier_score(candidate_calibrated, test_y)
-    candidate_calibrated_logloss = log_loss(candidate_calibrated, test_y)
-
-    # A training-only prevalence baseline is a minimum reference, not a deployable model.
-    baseline = [sum(1 for y in train_y if y == outcome) / len(train_y) for outcome in range(3)]
-    baseline_p = [baseline for _ in test_y]
-    result = {
-        "ready": True, "count": count, "train": len(train),
-        "holdout": len(holdout), "source": source,
-        "temperature": fitted["temperature"],
-        "raw_brier": brier_score(test_p, test_y),
-        "raw_logloss": log_loss(test_p, test_y),
-        "calibrated_brier": candidate_calibrated_brier,
-        "calibrated_logloss": candidate_calibrated_logloss,
-        "candidate_brier": candidate_brier,
-        "candidate_logloss": candidate_logloss,
-        "candidate_calibrated_brier": candidate_calibrated_brier,
-        "candidate_calibrated_logloss": candidate_calibrated_logloss,
-        "baseline_brier": brier_score(baseline_p, test_y),
-        "baseline_logloss": log_loss(baseline_p, test_y),
-    }
-    cache.update({"timestamp": time.time(), "result": result})
-    return dict(result)
-
-
 async def calibrate_command(update, context):
-    await reply(update, "🧪 Evaluating historical 1X2 forecasts using an earlier-train / later-holdout split...")
-    try:
-        result = await asyncio.to_thread(evaluate_historical_calibration)
-        if not result["ready"]:
-            await reply(update,
-                "NOT ENOUGH HISTORICAL DATA TO CALIBRATE\n\n"
-                f"Forecast sample: {result['count']}\n"
-                f"Training sample: {result['train']} (minimum 50)\n"
-                f"Out-of-sample holdout: {result['holdout']} (minimum 30)\n\n"
-                "No calibration parameter has been fitted or applied. Keep the model labelled experimental.")
-            return
-        improved = (
-            result["candidate_calibrated_brier"] < result["candidate_brier"]
-            and result["candidate_calibrated_logloss"] < result["candidate_logloss"]
-        )
-        candidate_improved = (
-            result["candidate_brier"] < result["raw_brier"]
-            and result["candidate_logloss"] < result["raw_logloss"]
-            and result["candidate_brier"] < result["baseline_brier"]
-            and result["candidate_logloss"] < result["baseline_logloss"]
-        )
-        await reply(update,
-            "📊 HISTORICAL MODEL VALIDATION\\n\\n"
-            f"Forecast sample: {result['count']} | Train: {result['train']} | Holdout: {result['holdout']}\\n"
-            f"Data source: {result['source']}\\n"
-            f"Fitted temperature (not applied): {result['temperature']:.2f}\\n\\n"
-            f"Current model Brier: {result['raw_brier']:.4f} | log loss: {result['raw_logloss']:.4f}\\n"
-            f"Venue-weighted Dixon-Coles candidate: Brier {result['candidate_brier']:.4f} | log loss {result['candidate_logloss']:.4f}\\n"
-            f"Candidate after temperature calibration: Brier {result['candidate_calibrated_brier']:.4f} | log loss {result['candidate_calibrated_logloss']:.4f}\\n"
-            f"Training-prevalence baseline: Brier {result['baseline_brier']:.4f} | log loss {result['baseline_logloss']:.4f}\\n\\n"
-            + ("Candidate beat both the current model and baseline on both metrics; it may proceed to further validation." if candidate_improved else "Candidate did not beat both the current model and baseline on both metrics. Do not promote it; keep the model experimental.")
-            + "\\n"
-            + ("Temperature calibration improved both holdout metrics." if improved else "Temperature calibration did not improve both holdout metrics and remains disabled.")
-            + "\\n\\nNo live prediction settings are changed automatically.")
-    except Exception as exc:
-        await reply(update, f"⚠️ Calibration evaluation failed: {type(exc).__name__}: {str(exc)[:250]}")
-
+    await reply(update,"Prediction calibration has been removed. PUNTER now lists and combines SportyBet prices only.")
 
 
 def refresh_pending_bet_records(user_id=None):
