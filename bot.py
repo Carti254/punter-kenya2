@@ -2210,7 +2210,7 @@ async def autobuild_sportybet_command(update, context):
             return
 
         build = build_accumulator(
-            rows, target, min_legs=1, max_legs=max_legs,
+            rows, target, min_legs=2, max_legs=max_legs,
             ranking="quality", max_candidates=1000, beam_width=2500,
         )
         chosen = build.get("selections") or []
