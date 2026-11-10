@@ -38,8 +38,7 @@ from premium_intelligence import market_probabilities, assess_price, rollover_pr
 from user_portfolio import save_bankroll, get_settings, save_rollover, save_preferences, calculate_user_stake
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day, enrich_candidates_with_price_history
 from accumulator_engine import build_accumulator
-from autobuild_research import prepare_candidate_pool, candidate_research_summary
-from free_football_sources import fetch_provider_fixtures as fetch_free_provider_fixtures, provider_key_status
+from autobuild_research import prepare_candidate_pool
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
@@ -2103,9 +2102,8 @@ async def autobuild_sportybet_command(update, context):
         return
 
     # The target changes only the accumulator search objective. Every target
-    # uses the same research pipeline and the same 2–20 distinct-fixture bounds.
-    # Do not force five legs for larger targets; let the odds/probability search
-    # determine the smallest odds-only combination.
+    # uses the same SportyBet price-only scan and 2–20 distinct-fixture bounds.
+    # No probability or research score is calculated.
     min_legs = 2
     max_legs = 20
     market_filter = "all"
@@ -3553,7 +3551,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     excluded = ("btts", "both teams to score", "under 2.5", "draw no bet", " dnb",
                 "2up", "two up", "early payout", "handicap", "corner", "card",
                 "booking", "shots", "player", "correct score", "half time", "first half")
-    filters = [x.strip().casefold() for x in str(market_filter or "all").split(",") if x.strip() and x.strip().casefold() != "all"]
+    filters = [x.strip().casefold() for x in str(market_filter or "all").split(",") if x.strip() and x.strip().casefold() not in ("all", "safest")]
     for game in games:
         kickoff = str(game.get("kickoff_eat") or "")
         try: day = date.fromisoformat(kickoff[:10])
