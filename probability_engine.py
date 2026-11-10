@@ -170,6 +170,12 @@ def _market_probability(row, prediction):
         mapping = {"home": prediction["home"], "home win": prediction["home"], "1": prediction["home"],
                    "draw": prediction["draw"], "x": prediction["draw"],
                    "away": prediction["away"], "away win": prediction["away"], "2": prediction["away"]}
+        home_name, away_name = _key(row.get("home")), _key(row.get("away"))
+        selected_name = _key(row.get("selection"))
+        if selected_name and selected_name == home_name:
+            return prediction["home"], "1X2 home"
+        if selected_name and selected_name == away_name:
+            return prediction["away"], "1X2 away"
         return (mapping[selection], "1X2") if selection in mapping else (None, "unrecognised 1X2 selection")
     if "over" in selection or "over" in market:
         if "1.5" in selection or "1.5" in market:
