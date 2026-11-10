@@ -950,23 +950,47 @@ def _load_openmatchday_team_history_background():
 
 
 def fetch_openmatchday_team_history_rows(max_age_seconds=1800):
-    """Return cached history immediately; start a daemon warm-up when cache is cold."""
+    """Return cached history, or wait for the first background warm-up to finish."""
     global OPENMATCHDAY_HISTORY_LOADING
     with OPENMATCHDAY_TEAM_HISTORY_LOCK:
         cached_at = float(OPENMATCHDAY_TEAM_HISTORY_CACHE.get("saved_at") or 0)
         cached_rows = OPENMATCHDAY_TEAM_HISTORY_CACHE.get("rows") or []
         if cached_at and time.time() - cached_at < max_age_seconds and cached_rows:
             return list(cached_rows)
-        if OPENMATCHDAY_HISTORY_LOADING:
-            raise RuntimeError("Historical results are still loading. Retry the scan in about one minute.")
-        OPENMATCHDAY_HISTORY_LOADING = True
-    thread = threading.Thread(
-        target=_load_openmatchday_team_history_background,
-        name="punter-history-warmup",
-        daemon=True,
+        start_loader = not OPENMATCHDAY_HISTORY_LOADING
+        if start_loader:
+            OPENMATCHDAY_HISTORY_LOADING = True
+
+    if start_loader:
+        thread = threading.Thread(
+            target=_load_openmatchday_team_history_background,
+            name="punter-history-warmup",
+            daemon=True,
+        )
+        thread.start()
+
+    # A cold deployment previously returned RuntimeError immediately, so the
+    # first /build could never reach the model. Wait for the shared warm-up
+    # instead of forcing the user to retry a command that is otherwise valid.
+    deadline = time.monotonic() + 82
+    while time.monotonic() < deadline:
+        with OPENMATCHDAY_TEAM_HISTORY_LOCK:
+            loading = OPENMATCHDAY_HISTORY_LOADING
+            cached_at = float(OPENMATCHDAY_TEAM_HISTORY_CACHE.get("saved_at") or 0)
+            cached_rows = OPENMATCHDAY_TEAM_HISTORY_CACHE.get("rows") or []
+            if not loading:
+                if cached_at and cached_rows:
+                    return list(cached_rows)
+                raise RuntimeError(
+                    "Open-Matchday history warm-up finished without usable results. "
+                    "Check Railway logs for historical-results warm-up errors."
+                )
+        time.sleep(0.5)
+
+    raise RuntimeError(
+        "Open-Matchday history is still loading after 82 seconds. "
+        "Check Railway logs for provider/network errors, then retry."
     )
-    thread.start()
-    raise RuntimeError("Historical results are being loaded in the background. Retry the scan in about one minute.")
 
 
 def fetch_openmatchday_fixture_rows(days=14, league_id=None, day_filter=None):
@@ -2143,7 +2167,7 @@ async def autobuild_sportybet_command(update, context):
             asyncio.to_thread(
                 scan_value_candidates, scan_days, market_filter, "SportyBet",
             ),
-            timeout=75,
+            timeout=165,
         )
         scanned_count = len(rows)
 
