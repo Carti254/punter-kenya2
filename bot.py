@@ -3217,8 +3217,17 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
                            competition, country, exc)
             supplementary_rows, source_info = [], {"reason": type(exc).__name__}
         if supplementary_rows:
-            source_code = source_info.get("competition_code") or "unknown"
-            supplementary_key = (f"football-data:{source_code}", cutoff_key, "football-data")
+            source_code = (
+                source_info.get("competition_id")
+                or source_info.get("competition_code")
+                or _normal_market_text(competition) + "|" + _normal_market_text(country)
+            )
+            source_name = str(source_info.get("source") or "supplementary")
+            supplementary_key = (
+                f"{source_name}:{source_code}",
+                cutoff_key,
+                source_name,
+            )
             supplementary_fit = cache.get(supplementary_key)
             if supplementary_fit is None:
                 supplementary_fit = fit_dixon_coles(
@@ -3228,7 +3237,7 @@ def build_openmatchday_prediction(raw_fixture, fixture, historical_rows=None, as
                 cache[supplementary_key] = supplementary_fit
             if supplementary_fit.get("available"):
                 rows, fit = supplementary_rows, supplementary_fit
-                history_source = "Football-Data.co.uk"
+                history_source = str(source_info.get("source") or "supplementary history")
             else:
                 logger.info("Football-Data history for %s unavailable: %s",
                             competition, supplementary_fit.get("reason"))
