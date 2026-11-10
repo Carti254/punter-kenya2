@@ -272,7 +272,7 @@ def fetch_pitchapi_competition_history(competition, country, as_of_date=None, se
     selected = []
     for season in available_seasons:
         text_season = str(season)
-        years = re.findall(r"20\\d{2}", text_season)
+        years = re.findall(r"20\d{2}", text_season)
         if years and int(years[0]) >= min_year and int(years[0]) <= cutoff_date.year:
             selected.append(text_season)
     rows, errors = [], []
