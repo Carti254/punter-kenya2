@@ -6,6 +6,7 @@ from probability_engine import (
     _prepare_history,
     _indexed_team_rows,
     MIN_SELECTION_PROBABILITY, MIN_TEAM_MATCHES, MIN_VALUE_EDGE,
+    assess_candidate_detailed, assess_candidates_with_diagnostics,
 )
 
 
@@ -65,6 +66,26 @@ class ProbabilityEngineTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["gf"], 2)
         self.assertEqual(baseline[0], 2)
+
+
+    def test_diagnostics_explain_invalid_candidate_instead_of_silent_none(self):
+        item, reason = assess_candidate_detailed(
+            {"kickoff": "not-a-date", "odds": "1.80"}, []
+        )
+        self.assertIsNone(item)
+        self.assertEqual(reason, "invalid_fixture_date")
+
+    def test_batch_diagnostics_count_every_candidate(self):
+        rows = [
+            {"kickoff": "not-a-date", "odds": "1.80"},
+            {"kickoff": "2026-11-11", "odds": "1.80", "home": "A", "away": "B"},
+        ]
+        qualified, diagnostics = assess_candidates_with_diagnostics(rows, [])
+        self.assertEqual(qualified, [])
+        self.assertEqual(diagnostics["scanned"], 2)
+        self.assertEqual(diagnostics["rejected"], 2)
+        self.assertEqual(diagnostics["reasons"]["invalid_fixture_date"], 1)
+        self.assertEqual(diagnostics["reasons"]["history_baseline_below_30"], 1)
 
 
 if __name__ == "__main__":
