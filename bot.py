@@ -3034,8 +3034,6 @@ def team_name_matches_query(query_name, actual_name):
     if not wanted or not actual:
         return False
     overlap = len(wanted & actual)
-    if overlap == 0:
-        return False
 
     # A complete shorter name contained in the longer name is a strong match.
     if wanted.issubset(actual) or actual.issubset(wanted):
