@@ -74,11 +74,11 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=2500,
                 away_sample = int(row.get("model_away_sample") or 0)
             except (TypeError, ValueError, OverflowError):
                 continue
-            if not math.isfinite(probability) or not 0.60 <= probability < 1.0:
+            if not math.isfinite(probability) or not 0.52 <= probability < 1.0:
                 continue
-            if not math.isfinite(edge) or edge < 0.03:
+            if not math.isfinite(edge) or edge < 0.00:
                 continue
-            if home_sample < 6 or away_sample < 6:
+            if home_sample < 4 or away_sample < 4:
                 continue
         home, away = str(row.get("home") or "").strip(), str(row.get("away") or "").strip()
         if not home or not away:
@@ -164,7 +164,7 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=2500,
         "combined_odds": product,
         "target_reached": True,
         "selection_method": (
-            "Statistically qualified SportyBet selections; model probability and estimated value ranking."
+            "Relaxed-screen SportyBet selections; uncalibrated model ranking, not a proven edge."
             if ranking == "quality" else
             "Executable SportyBet price and market-rule accumulator; no probability prediction."
         ),
