@@ -2143,7 +2143,7 @@ async def autobuild_sportybet_command(update, context):
             asyncio.to_thread(
                 scan_value_candidates, scan_days, market_filter, "SportyBet",
             ),
-            timeout=180,
+            timeout=75,
         )
         scanned_count = len(rows)
 
@@ -3576,7 +3576,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             except ValueError: pass
     if not target_dates: return [], ["No valid scan dates."]
     progress("Reading SportyBet fixtures and prices…")
-    games = fetch_sportybet_odds(sorted(target_dates), max_pages=30)
+    games = fetch_sportybet_odds(sorted(target_dates), max_pages=4)
     candidates = []
     excluded = ("btts", "both teams to score", "under 2.5", "draw no bet", " dnb",
                 "2up", "two up", "early payout", "handicap", "corner", "card",
