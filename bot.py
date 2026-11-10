@@ -1688,15 +1688,15 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
         if not legs:
             await query.message.reply_text("The research report has expired. Build the slip again to regenerate its evidence.")
             return
-        report_lines = ["📋 SELECTED SPORTYBET PRICES — MODEL EVIDENCE", ""]
+        report_lines = ["📋 SELECTED SPORTYBET PRICES", ""]
         for index, leg in enumerate(legs, 1):
             report_lines.append(f"{index}. {leg.get('home','')} vs {leg.get('away','')}")
             report_lines.append(f"   {leg.get('market','')}: {leg.get('selection','')} @ {float(leg.get('odds') or 0):.2f}")
-            report_lines.append(f"   Model probability: {float(leg.get('model_probability') or 0):.1%} | Fair odds: {float(leg.get('fair_odds') or 0):.2f}")
-            report_lines.append(f"   Estimated value: {float(leg.get('expected_value') or 0):+.1%} | Samples: {leg.get('model_home_sample', 0)} / {leg.get('model_away_sample', 0)}")
             report_lines.append(f"   Event ID: {leg.get('event_id') or leg.get('eventId') or 'unavailable'}")
+            report_lines.append(f"   Market ID: {leg.get('market_id') or leg.get('marketId') or 'unavailable'}")
+            report_lines.append(f"   Outcome ID: {leg.get('outcome_id') or leg.get('outcomeId') or 'unavailable'}")
             report_lines.append("")
-        report_lines.append("Selection method: recent completed results and a Poisson score model. Probabilities and value estimates are uncalibrated; they are not guarantees.")
+        report_lines.append("These are bookmaker prices, not predictions or guarantees.")
         report = "\n".join(report_lines)
         for offset in range(0, len(report), 3500):
             await query.message.reply_text(report[offset:offset + 3500])
@@ -2153,8 +2153,7 @@ async def autobuild_sportybet_command(update, context):
         await reply(update, "PUNTER KENYA only builds target combined odds from 2.00 to 5.00.")
         return
 
-    # The target changes only the accumulator objective. Every candidate must
-    # first pass the same historical-results probability and value assessment.
+    # Target controls only the combined price. No prediction model is required.
     min_legs = 2
     max_legs = 20
     market_filter = "all"
@@ -2171,75 +2170,44 @@ async def autobuild_sportybet_command(update, context):
         )
         scanned_count = len(rows)
 
-        # The scanner scores each SportyBet price with the single probability engine.
-        # The following pool check enforces model value and executable IDs.
-        rows, research_stats = await asyncio.to_thread(
-            prepare_candidate_pool, rows, marginal_ev_floor=0.0
-        )
+        # Keep the scanner and accumulator independent of optional prediction services.
+        rows, research_stats = await asyncio.to_thread(prepare_candidate_pool, rows)
         if not rows:
             context.user_data.pop("pending_sportybet_booking", None)
-            # Research and feed diagnostics stay internal; Telegram gets a clean result.
-            logger.info(
-                "SportyBet autobuild: no eligible rows; scanned=%s rejected=%s diagnostics=%s",
-                scanned_count, research_stats.get("rejected", 0), diagnostics,
-            )
-            diagnostic_lines = [str(item) for item in (diagnostics or []) if str(item).strip()]
-            diagnostic_text = "\\n".join(f"• {item[:220]}" for item in diagnostic_lines[-8:])
-            await reply(
-                update,
+            logger.info("SportyBet autobuild: no executable rows; scanned=%s stats=%s diagnostics=%s",
+                        scanned_count, research_stats, diagnostics)
+            diagnostic_text = "\\n".join(f"• {str(item)[:220]}" for item in (diagnostics or [])[-8:])
+            await reply(update,
                 f"🚫 NO SPORTYBET SELECTIONS — {target:.2f} TARGET\\n"
-                f"Candidate rows produced: {scanned_count}\\n"
-                f"Rejected by basic price/ID checks: {research_stats.get('rejected', 0)}\\n"
-                
-                "🔬 SPORTYBET FEED DIAGNOSTICS\\n"
-                + (diagnostic_text or "• No stage diagnostics were returned by the scanner.")
-                + "\\n\\nNo selection will be fabricated to fill the target."
+                f"SportyBet rows scanned: {scanned_count}\\n"
+                + (diagnostic_text or "No feed diagnostics were returned.")
             )
             return
 
-        # Every eligible row has a model probability, fair price and positive
-        # estimated value. Count fixtures, not market rows, before building.
-        qualified_fixture_keys = {
+        fixture_keys = {
             (str(x.get("day") or x.get("match_date") or "")[:10],
              canonical_team_key(x.get("home")), canonical_team_key(x.get("away")))
             for x in rows if x.get("home") and x.get("away")
         }
-        if len(qualified_fixture_keys) < 2:
+        if len(fixture_keys) < 2:
             context.user_data.pop("pending_sportybet_booking", None)
-            logger.info(
-                "SportyBet autobuild: only %s qualifying fixture(s); rows=%s stats=%s diagnostics=%s",
-                len(qualified_fixture_keys), len(rows), research_stats, diagnostics,
-            )
-            await reply(
-                update,
-                f"🚫 NOT ENOUGH QUALIFIED FIXTURES — {target:.2f} TARGET\\n"
-                f"Qualified fixtures: {len(qualified_fixture_keys)}; at least 2 distinct fixtures are required.\\n"
-                f"Qualified market selections: {len(rows)}."
+            await reply(update,
+                f"🚫 NOT ENOUGH DISTINCT FIXTURES — {target:.2f} TARGET\\n"
+                f"Usable fixtures: {len(fixture_keys)}; at least 2 are required."
             )
             return
 
         build = build_accumulator(
             rows, target, min_legs=min_legs, max_legs=max_legs,
-            ranking="value",
-            # Keep a broader set of researched markets available to the
-            # combination search; do not narrow the candidate pool prematurely.
-            max_candidates=500,
-            beam_width=1200,
+            ranking="price", max_candidates=500, beam_width=1200,
         )
         chosen = build["selections"]
         if not chosen or not build.get("target_reached"):
             context.user_data.pop("pending_sportybet_booking", None)
-            fixture_count = len({(x.get("day"), x.get("home"), x.get("away")) for x in rows})
-            logger.info(
-                "SportyBet autobuild: no target-reaching combination; rows=%s fixtures=%s stats=%s",
-                len(rows), fixture_count, research_stats,
-            )
-            await reply(
-                update,
-                f"🚫 NO  {target:.2f} COMBINATION FOUND\\n"
-                f"Qualified fixtures: {fixture_count}; eligible selections: {len(rows)}.\\n"
-                f"Reason: no combination of distinct fixtures reached the target within the permitted odds range.\\n"
-                "No weak filler selections were added."
+            await reply(update,
+                f"🚫 NO {target:.2f} COMBINATION FOUND\\n"
+                f"Usable selections: {len(rows)} across {len(fixture_keys)} fixtures.\\n"
+                "No combination of distinct fixtures reached the permitted target band."
             )
             return
 
@@ -2282,7 +2250,6 @@ async def autobuild_sportybet_command(update, context):
         # inspect the source evidence for every selected leg before creating a code.
         context.user_data["pending_sportybet_research"] = [dict(x) for x in resolved]
 
-        # Preserve model evidence internally for the user's proof view.
         lines = [
             f"🎟️ SPORTYBET PARLAY — {target:.2f} TARGET",
             f"Combined odds: {combined:.2f}",
@@ -2291,10 +2258,8 @@ async def autobuild_sportybet_command(update, context):
         ]
         for i, leg in enumerate(resolved, 1):
             lines.append(
-                f"{i}. {leg['fixture']} — {leg['market']}: "
-                f"{leg['selection']} @ {leg['odds']:.2f} "
-                f"(model {float(leg.get('model_probability') or 0):.1%}; "
-                f"value {float(leg.get('expected_value') or 0):+.1%})"
+                f"{i}. {leg.get('fixture') or (str(leg.get('home','')) + ' vs ' + str(leg.get('away','')))} — "
+                f"{leg.get('market','')}: {leg.get('selection','')} @ {float(leg.get('odds') or 0):.2f}"
             )
 
         markup = InlineKeyboardMarkup([
@@ -2323,42 +2288,40 @@ async def autobuild_sportybet_command(update, context):
         await reply(update, f"SportyBet scan failed: {type(exc).__name__}: {str(exc)[:180]}")
 
 async def accumulator_status_command(update, context):
-    """Build a value-ranked combination from model-qualified SportyBet selections."""
-    args=[str(x).strip() for x in (context.args or [])]
-    target=3.0
+    """Show an odds-only SportyBet accumulator using executable prices."""
+    args = [str(x).strip() for x in (context.args or [])]
+    target = 3.0
     if args:
         try:
-            target=float(args[0])
-            if not 2.0 <= target <= 5.0: raise ValueError
+            target = float(args[0])
+            if not 2.0 <= target <= 5.0:
+                raise ValueError
         except ValueError:
-            await reply(update,"Usage: /accumulator [target decimal odds, 2.00–5.00]. Example: /accumulator 3.00")
+            await reply(update, "Usage: /accumulator [target decimal odds, 2.00–5.00]. Example: /accumulator 3.00")
             return
     try:
-        rows,diagnostics=await asyncio.to_thread(scan_value_candidates,("today","tomorrow"),"all","SportyBet")
-        rows,research_stats=prepare_candidate_pool(rows)
+        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today",), "all", "SportyBet")
+        rows, _ = prepare_candidate_pool(rows)
     except Exception as exc:
-        logger.exception("Model-qualified accumulator scan failed")
-        await reply(update,f"❌ SPORTYBET SCAN FAILED: {type(exc).__name__}: {str(exc)[:220]}")
+        logger.exception("SportyBet accumulator scan failed")
+        await reply(update, f"❌ SPORTYBET SCAN FAILED: {type(exc).__name__}: {str(exc)[:220]}")
         return
-    fixture_count=len({(str(x.get("day") or "")[:10],canonical_team_key(x.get("home")),canonical_team_key(x.get("away"))) for x in rows})
-    if not rows or fixture_count<2:
-        await reply(update,"NO SLIP: fewer than two distinct SportyBet fixtures have usable, exact market identifiers.\n"+"\n".join(diagnostics[:4]))
+    fixture_count = len({(str(x.get("day") or "")[:10], canonical_team_key(x.get("home")), canonical_team_key(x.get("away"))) for x in rows})
+    if not rows or fixture_count < 2:
+        await reply(update, "NO SLIP: fewer than two distinct fixtures have usable SportyBet prices.\\n" + "\\n".join(diagnostics[:4]))
         return
-    build=build_accumulator(rows,target,max_legs=20,ranking="value")
-    chosen,combined=build["selections"],build["combined_odds"]
+    build = build_accumulator(rows, target, max_legs=20, ranking="price")
+    chosen, combined = build["selections"], build["combined_odds"]
     if not chosen or not build.get("target_reached"):
-        await reply(update,f"NO SLIP: available SportyBet prices did not reach {target:.2f} within the 20% target band. No filler legs were added.")
+        await reply(update, f"NO SLIP: available prices did not reach {target:.2f} within the permitted target band.")
         return
-    lines=["🎟️ PUNTER KENYA — MODEL-QUALIFIED COMBINATION",
-           f"Target: {target:.2f} | Combined odds: {combined:.2f}",
-           f"Automatic legs: {len(chosen)} | Available fixtures: {fixture_count}",""]
-    for n,item in enumerate(chosen,1):
+    lines = ["🎟️ PUNTER KENYA — SPORTYBET PRICE COMBINATION",
+             f"Target: {target:.2f} | Combined odds: {combined:.2f}",
+             f"Automatic legs: {len(chosen)} | Available fixtures: {fixture_count}", ""]
+    for n, item in enumerate(chosen, 1):
         lines.append(f"{n}. {item['home']} vs {item['away']} — {item['market']}: {item['selection']} @ {item['odds']:.2f}")
-        lines.append(f"   Model {item['model_probability']:.1%} | Fair {item['fair_odds']:.2f} | Estimated value {item['expected_value']:+.1%}")
-    lines.extend(["","Method: recent completed results, a Poisson score model, model probability and estimated value.",
-                  "Estimates are uncalibrated and may be wrong; combined-leg probabilities are not multiplied or guaranteed.",
-                  "Only selections meeting the model's +3% estimated-value and 55% probability thresholds are considered."])
-    await reply(update,"\n".join(lines))
+    lines.extend(["", "Selections are assembled from available bookmaker prices; no prediction or winning guarantee is implied."])
+    await reply(update, "\\n".join(lines))
 
 
 async def fullintel_callback(update, context):
@@ -3637,32 +3600,31 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
     return rows, diagnostics
 
 async def topvalue_command(update, context):
-    """List SportyBet selections that pass the probability and value model."""
-    args=[str(x).casefold() for x in (context.args or [])]
-    market=args[0] if args and args[0] not in ("today","tomorrow") else "all"
-    day_arg=next((x for x in args if x in ("today","tomorrow")),"both")
-    days=(day_arg,) if day_arg!="both" else ("today","tomorrow")
+    """List executable SportyBet prices without claiming model predictions."""
+    args = [str(x).casefold() for x in (context.args or [])]
+    market = args[0] if args and args[0] not in ("today", "tomorrow") else "all"
+    day_arg = next((x for x in args if x in ("today", "tomorrow")), "both")
+    days = (day_arg,) if day_arg != "both" else ("today", "tomorrow")
     try:
-        rows,diagnostics=await asyncio.to_thread(scan_value_candidates,days,market,"SportyBet")
+        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, days, market, "SportyBet")
     except Exception as exc:
         logger.exception("SportyBet price listing failed")
-        await reply(update,f"❌ SPORTYBET PRICE SCAN FAILED: {type(exc).__name__}: {str(exc)[:220]}")
+        await reply(update, f"❌ SPORTYBET PRICE SCAN FAILED: {type(exc).__name__}: {str(exc)[:220]}")
         return
     if not rows:
-        await reply(update,"No matching SportyBet prices were returned.\\n"+"\\n".join(diagnostics[:5]))
+        await reply(update, "No matching SportyBet prices were returned.\\n" + "\\n".join(diagnostics[:5]))
         return
-    rows.sort(key=lambda x:(float(x["odds"]),x["home"],x["away"]))
-    rows.sort(key=lambda x: (-float(x.get("expected_value") or 0), -float(x.get("model_probability") or 0)))
-    lines=["📊 PUNTER KENYA — MODEL-QUALIFIED SPORTYBET PICKS",f"Market filter: {market.upper()} | Dates: {', '.join(days)}",""]
-    for n,item in enumerate(rows[:25],1):
-        lines.append(f"{n}. {item['home']} vs {item['away']} — {item['league']}")
+    rows.sort(key=lambda x: (float(x["odds"]), x["home"], x["away"]))
+    lines = ["📊 PUNTER KENYA — SPORTYBET AVAILABLE PRICES",
+             f"Market filter: {market.upper()} | Dates: {', '.join(days)}", ""]
+    for n, item in enumerate(rows[:25], 1):
+        lines.append(f"{n}. {item['home']} vs {item['away']} — {item.get('league', 'Competition unavailable')}")
         lines.append(f"   {item['market']}: {item['selection']} @ {item['odds']:.2f}")
-        lines.append(f"   Model probability: {item['model_probability']:.1%} | Fair odds: {item['fair_odds']:.2f}")
-        lines.append(f"   Estimated value: {item['expected_value']:+.1%} | Recent matches: {item['model_home_sample']} home-team / {item['model_away_sample']} away-team")
         lines.append("")
-    lines.append("Ranked by estimated value. The recent-results Poisson model is uncalibrated; estimates are uncertain and not guaranteed.")
-    message="\\n".join(lines)
-    for offset in range(0,len(message),3600): await reply(update,message[offset:offset+3600])
+    lines.append("These are bookmaker prices, not model predictions or recommendations.")
+    message = "\\n".join(lines)
+    for offset in range(0, len(message), 3600):
+        await reply(update, message[offset:offset + 3600])
 
 
 async def aipicks_status_command(update, context):
