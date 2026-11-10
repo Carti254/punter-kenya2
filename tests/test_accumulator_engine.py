@@ -50,5 +50,40 @@ class AccumulatorEngineTests(unittest.TestCase):
         self.assertEqual(len(result["selections"]), 2)
         self.assertEqual(len({x["event_id"] for x in result["selections"]}), 2)
 
+    def test_quality_ranking_prefers_higher_joint_probability(self):
+        def qualified(home, odds, probability, event):
+            item = row(home, "Away", odds, event)
+            item.update({"model_probability": probability,
+                         "expected_value": probability * odds - 1,
+                         "model_home_sample": 10, "model_away_sample": 10})
+            return item
+        candidates = [
+            qualified("Low A", 1.40, 0.65, "e1"),
+            qualified("Low B", 1.50, 0.62, "e2"),
+            qualified("High A", 1.40, 0.78, "e3"),
+            qualified("High B", 1.50, 0.75, "e4"),
+        ]
+        result = build_accumulator(candidates, 2.0, ranking="quality")
+        self.assertTrue(result["target_reached"])
+        self.assertEqual({x["event_id"] for x in result["selections"]}, {"e3", "e4"})
+        self.assertGreater(result["combined_probability"], 0.5)
+
+    def test_quality_mode_can_choose_more_than_two_legs(self):
+        candidates = []
+        for i in range(3):
+            item = row(f"Team{i}", f"Opponent{i}", 1.30, f"e{i}")
+            item.update({"model_probability": 0.80, "expected_value": 0.04,
+                         "model_home_sample": 10, "model_away_sample": 10})
+            candidates.append(item)
+        result = build_accumulator(candidates, 2.0, ranking="quality", max_legs=5)
+        self.assertTrue(result["target_reached"])
+        self.assertEqual(len(result["selections"]), 3)
+
+    def test_quality_mode_rejects_unassessed_candidates(self):
+        result = build_accumulator([row("A", "B", 1.8, "e1"),
+                                    row("C", "D", 1.8, "e2")],
+                                   2.0, ranking="quality")
+        self.assertFalse(result["target_reached"])
+
 if __name__ == "__main__":
     unittest.main()
