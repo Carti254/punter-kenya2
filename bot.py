@@ -1639,13 +1639,15 @@ async def sportybet_build_callback(update: Update, context: ContextTypes.DEFAULT
         if not legs:
             await query.message.reply_text("The research report has expired. Build the slip again to regenerate its evidence.")
             return
-        report_lines = ["📋 SELECTED SPORTYBET PRICES — NO MATCH PREDICTIONS", ""]
+        report_lines = ["📋 SELECTED SPORTYBET PRICES — MODEL EVIDENCE", ""]
         for index, leg in enumerate(legs, 1):
             report_lines.append(f"{index}. {leg.get('home','')} vs {leg.get('away','')}")
             report_lines.append(f"   {leg.get('market','')}: {leg.get('selection','')} @ {float(leg.get('odds') or 0):.2f}")
+            report_lines.append(f"   Model probability: {float(leg.get('model_probability') or 0):.1%} | Fair odds: {float(leg.get('fair_odds') or 0):.2f}")
+            report_lines.append(f"   Estimated value: {float(leg.get('expected_value') or 0):+.1%} | Samples: {leg.get('model_home_sample', 0)} / {leg.get('model_away_sample', 0)}")
             report_lines.append(f"   Event ID: {leg.get('event_id') or leg.get('eventId') or 'unavailable'}")
             report_lines.append("")
-        report_lines.append("Selection method: SportyBet prices and exact market IDs only. No team analysis, historical model, probability or expected value.")
+        report_lines.append("Selection method: recent completed results and a Poisson score model. Probabilities and value estimates are uncalibrated; they are not guarantees.")
         report = "\n".join(report_lines)
         for offset in range(0, len(report), 3500):
             await query.message.reply_text(report[offset:offset + 3500])
@@ -2241,7 +2243,9 @@ async def autobuild_sportybet_command(update, context):
         for i, leg in enumerate(resolved, 1):
             lines.append(
                 f"{i}. {leg['fixture']} — {leg['market']}: "
-                f"{leg['selection']} @ {leg['odds']:.2f}"
+                f"{leg['selection']} @ {leg['odds']:.2f} "
+                f"(model {float(leg.get('model_probability') or 0):.1%}; "
+                f"value {float(leg.get('expected_value') or 0):+.1%})"
             )
 
         markup = InlineKeyboardMarkup([
@@ -3532,7 +3536,7 @@ def _selection_probability_key(market_key, selection, handicap=None):
 
 
 def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all", bookmaker_only="sportybet", progress_callback=None):
-    """Read SportyBet's own fixtures and prices. Deliberately performs no match analysis."""
+    """Scan SportyBet prices, then assess them with the single recent-results model."""
     def progress(message):
         if callable(progress_callback):
             try: progress_callback(str(message))
