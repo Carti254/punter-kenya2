@@ -55,7 +55,7 @@ class AccumulatorEngineTests(unittest.TestCase):
             item = row(home, "Away", odds, event)
             item.update({"model_probability": probability,
                          "expected_value": probability * odds - 1,
-                         "model_home_sample": 10, "model_away_sample": 10})
+                         "model_home_sample": 4, "model_away_sample": 4})
             return item
         candidates = [
             qualified("Low A", 1.40, 0.65, "e1"),
@@ -72,7 +72,7 @@ class AccumulatorEngineTests(unittest.TestCase):
         candidates = []
         for i in range(3):
             item = row(f"Team{i}", f"Opponent{i}", 1.30, f"e{i}")
-            item.update({"model_probability": 0.80, "expected_value": 0.04,
+            item.update({"model_probability": 0.80, "expected_value": 0.00,
                          "model_home_sample": 10, "model_away_sample": 10})
             candidates.append(item)
         result = build_accumulator(candidates, 2.0, ranking="quality", max_legs=5)
