@@ -6,6 +6,7 @@ leg counts instead of stopping at the first two-leg combination.
 """
 from __future__ import annotations
 import math
+from probability_engine import MIN_SELECTION_PROBABILITY, MIN_VALUE_EDGE, MIN_TEAM_MATCHES
 
 
 def _fixture_key(row):
@@ -74,11 +75,11 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=2500,
                 away_sample = int(row.get("model_away_sample") or 0)
             except (TypeError, ValueError, OverflowError):
                 continue
-            if not math.isfinite(probability) or not 0.52 <= probability < 1.0:
+            if not math.isfinite(probability) or not MIN_SELECTION_PROBABILITY <= probability < 1.0:
                 continue
-            if not math.isfinite(edge) or edge < 0.00:
+            if not math.isfinite(edge) or edge < MIN_VALUE_EDGE:
                 continue
-            if home_sample < 4 or away_sample < 4:
+            if home_sample < MIN_TEAM_MATCHES or away_sample < MIN_TEAM_MATCHES:
                 continue
         home, away = str(row.get("home") or "").strip(), str(row.get("away") or "").strip()
         if not home or not away:
