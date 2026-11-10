@@ -34,37 +34,26 @@ class ScannerMarketTests(unittest.TestCase):
 
 
     def test_scanner_excludes_btts_and_under_25_from_slip_candidates(self):
-        raw = {"id": "fixture-1"}
         today_eat = datetime.now(timezone.utc).astimezone(ZoneInfo("Africa/Nairobi")).date().isoformat()
-        fixture = {
-            "home_team": "Brighton", "away_team": "Brentford",
-            "competition": "Premier League", "kickoff_at": datetime.fromisoformat(f"{today_eat}T12:00:00"),
-        }
         game = {
             "bookmaker": "SportyBet", "kickoff_eat": f"{today_eat} 23:00",
-            "event_id": "event-1",
+            "event_id": "event-1", "home": "Brighton", "away": "Brentford",
+            "competition": "Test League",
             "markets": [
                 {"market": "Both Teams To Score", "selection": "Yes", "odds": 1.95,
                  "market_id": "btts", "outcome_id": "yes"},
                 {"market": "Total Goals Over/Under", "selection": "Under 2.5", "odds": 2.10,
                  "market_id": "totals", "outcome_id": "under25", "specifier": "total=2.5"},
+                {"market": "Total Goals Over/Under", "selection": "Over 1.5", "odds": 1.35,
+                 "market_id": "totals", "outcome_id": "over15", "specifier": "total=1.5"},
             ],
         }
-        prediction = {
-            "available": True, "lambda_home": 1.7, "lambda_away": 1.1,
-            "home_win": 0.50, "draw": 0.25, "away_win": 0.25,
-        }
-        with patch("bot.fetch_openmatchday_fixture_rows", return_value=[raw]), \
-             patch("bot.upcoming_fixtures", return_value=[(raw, fixture)]), \
-             patch("bot.build_openmatchday_prediction", return_value=prediction), \
-             patch("bot.fetch_bookmaker_odds", return_value={
-                 "bookmakers": {"SportyBet": {"games": [game]}}, "errors": {}
-             }), \
-             patch("bot.find_bookmaker_event", return_value=[game]):
+        with patch("bot.fetch_sportybet_odds", return_value=[game]):
             rows, _ = scan_value_candidates(("today",), "all")
         labels = {(row["market"], row["selection"]) for row in rows}
         self.assertNotIn(("Both Teams To Score", "Yes"), labels)
         self.assertNotIn(("Total Goals Over/Under", "Under 2.5"), labels)
+        self.assertIn(("Total Goals Over/Under", "Over 1.5"), labels)
 
     def test_scoreline_derived_markets(self):
         cases = [
