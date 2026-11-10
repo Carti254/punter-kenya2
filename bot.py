@@ -2226,7 +2226,7 @@ async def autobuild_sportybet_command(update, context):
             )
             return
 
-                context.user_data["pending_sportybet_booking"] = resolved
+        context.user_data["pending_sportybet_booking"] = resolved
         # Keep the exact assessed rows alongside the clean preview so the user can
         # inspect the source evidence for every selected leg before creating a code.
         context.user_data["pending_sportybet_research"] = [dict(x) for x in resolved]
