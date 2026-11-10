@@ -949,6 +949,25 @@ def _load_openmatchday_team_history_background():
         OPENMATCHDAY_HISTORY_LOADING = False
 
 
+def start_openmatchday_history_warmup():
+    """Start historical-results loading in the background during bot startup."""
+    global OPENMATCHDAY_HISTORY_LOADING
+    with OPENMATCHDAY_TEAM_HISTORY_LOCK:
+        if OPENMATCHDAY_HISTORY_LOADING:
+            return False
+        cached_at = float(OPENMATCHDAY_TEAM_HISTORY_CACHE.get("saved_at") or 0)
+        cached_rows = OPENMATCHDAY_TEAM_HISTORY_CACHE.get("rows") or []
+        if cached_at and cached_rows and time.time() - cached_at < 1800:
+            return False
+        OPENMATCHDAY_HISTORY_LOADING = True
+    threading.Thread(
+        target=_load_openmatchday_team_history_background,
+        name="punter-history-startup-warmup",
+        daemon=True,
+    ).start()
+    return True
+
+
 def fetch_openmatchday_team_history_rows(max_age_seconds=1800):
     """Return cached history, or wait for the first background warm-up to finish."""
     global OPENMATCHDAY_HISTORY_LOADING
@@ -5261,8 +5280,8 @@ async def sources_command(update, context):
     await reply(update,
         "🔌 PUNTER KENYA — ACTIVE SELECTION SOURCE\\n\\n"
         "SportyBet: fixtures, current prices and executable market IDs.\\n"
-        "The /build workflow uses executable SportyBet prices and market/ID validation only. It does not generate predictions.\\n\\n"
-        "The model is not yet calibrated against a sufficiently large settled prediction sample. Probability and value figures are estimates, not guarantees."
+        "The /build workflow uses historical-results probability estimates, a minimum 60% per-selection model probability, a minimum +3% estimated value screen, automatic variable leg counts, and live SportyBet price/ID revalidation.\\n\\n"
+        "The model is experimental and not yet proven profitable or fully calibrated. If evidence is insufficient, /build returns no slip rather than an odds-only substitute."
     )
 
 
@@ -5294,6 +5313,7 @@ def main():
         )
 
     logger.info("open-matchday provider selected; no API key required.")
+    start_openmatchday_history_warmup()
 
     database_enabled = acquire_polling_lock()
     if database_enabled:
