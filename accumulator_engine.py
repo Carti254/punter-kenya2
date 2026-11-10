@@ -16,6 +16,18 @@ def build_accumulator(candidates, target_odds, max_legs=20, beam_width=2500, max
         if str(row.get("bookmaker") or "").casefold().replace(" ", "") != "sportybet": continue
         if not (row.get("eventId") or row.get("event_id")) or not (row.get("marketId") or row.get("market_id")) or not (row.get("outcomeId") or row.get("outcome_id")): continue
         if row.get("fixture_match_verified") is not True: continue
+        market_text = " ".join(str(row.get(k) or "") for k in ("market", "selection", "specifier")).casefold()
+        excluded = ("btts", "both teams to score", "under 2.5", "draw no bet", " dnb",
+                    "2up", "early payout", "handicap", "corner", "card", "booking",
+                    "shots", "player", "correct score", "half time", "first half", "second half")
+        if any(term in market_text for term in excluded): continue
+        market_name = str(row.get("market") or "").casefold()
+        selection_name = str(row.get("selection") or "").casefold()
+        supported = any(term in market_name for term in ("1x2", "match result", "full time result", "fulltime result", "double chance")) or (
+            ("total goals" in market_name or "over/under" in market_name or "over under" in market_name)
+            and any(term in (market_name + " " + selection_name) for term in ("over 1.5", "over 2.5"))
+        )
+        if not supported: continue
         home, away = str(row.get("home") or "").strip(), str(row.get("away") or "").strip()
         if not home or not away: continue
         fixture = (str(row.get("day") or "")[:10], home.casefold(), away.casefold())
