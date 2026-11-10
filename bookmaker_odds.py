@@ -26,6 +26,14 @@ RETRY = Retry(
     allowed_methods=frozenset({"GET"}), respect_retry_after_header=True,
 )
 SESSION.mount("https://", HTTPAdapter(max_retries=RETRY))
+# SportyBet's undocumented catalogue can stall on individual pages. Use a
+# separate no-retry session with short timeouts so a scan fails fast and clearly.
+SPORTYBET_SESSION = requests.Session()
+SPORTYBET_SESSION.mount("https://", HTTPAdapter(max_retries=0))
+SPORTYBET_SESSION.headers.update({
+    "Accept": "application/json, text/plain, */*",
+    "User-Agent": "Mozilla/5.0 (compatible; PunterKenya/1.0)",
+})
 SESSION.headers.update({
     "Accept": "application/json, text/plain, */*",
     "User-Agent": "Mozilla/5.0 (compatible; PunterKenya/1.0)",
@@ -103,13 +111,10 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
     }
     games, seen = [], set()
     for page in range(1, max_pages + 1):
-        payload = _get(
+        response = SPORTYBET_SESSION.get(
             SPORTYBET_BASE + "/factsCenter/pcUpcomingEvents",
             params={
                 "sportId": "sr:sport:1",
-                # SportyBet's web feed expects an explicit market catalogue.
-                # These IDs cover the common pre-match football markets; each
-                # event's returned markets are still parsed dynamically.
                 "marketId": "1,18,10,29,11,26,36,14,60100",
                 "pageSize": 100,
                 "pageNum": page,
@@ -117,8 +122,10 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
                 "timeline": 720,
                 "_t": int(time.time() * 1000),
             },
-            headers=headers, timeout=(8, 20),
+            headers=headers, timeout=(4, 8),
         )
+        response.raise_for_status()
+        payload = response.json()
         if not isinstance(payload, dict) or int(payload.get("bizCode", 0) or 0) != 10000:
             code = payload.get("bizCode") if isinstance(payload, dict) else "invalid"
             raise ValueError(f"SportyBet rejected the public feed (bizCode={code}).")
@@ -173,7 +180,7 @@ def fetch_sportybet(day: date | None = None, max_pages=30):
         total = int(data.get("totalNum", 0) or 0) if isinstance(data, dict) else 0
         if not tournaments or page_events == 0 or (total and len(seen) >= total):
             break
-        time.sleep(0.25)
+        # No delay: the scan is bounded by the page cap and per-request timeout.
     return games
 
 
