@@ -191,6 +191,12 @@ def fetch_competition_history(competition, country, as_of_date=None, seasons=6):
         key = (row["date"], _key(row["home"]), _key(row["away"]))
         deduped[key] = row
     result = sorted(deduped.values(), key=lambda item: item["date"])
+    if len(pitch_rows) > len(result):
+        pitch_info["reason"] = (
+            f"PitchAPI supplied the larger exact-competition sample "
+            f"({len(pitch_rows)} vs {len(result)} Football-Data results)"
+        )
+        return pitch_rows, pitch_info
     return result, {"source": "football-data.co.uk", "mapped": True,
                     "competition_code": code, "seasons_checked": _season_codes(as_of_date, max(1, min(int(seasons), 8))),
                     "valid_results": len(result), "errors": errors}
