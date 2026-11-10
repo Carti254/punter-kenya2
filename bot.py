@@ -5257,9 +5257,8 @@ async def sources_command(update, context):
     await reply(update,
         "🔌 PUNTER KENYA — ACTIVE SELECTION SOURCE\\n\\n"
         "SportyBet: used for fixtures, current prices and executable market IDs.\\n"
-        "Historical results, PitchAPI, Open-Matchday history, team-form models and specialist prediction feeds "
-        "are not used by automatic slip construction.\\n\\n"
-        "The automatic builder is odds-only. It does not estimate win probability, fair odds or expected value."
+        "Recent completed Open-Matchday results feed one Poisson probability model. SportyBet supplies executable fixtures, current prices and market IDs.\\n\\n"
+        "The model is not yet calibrated against a sufficiently large settled prediction sample. Probability and value figures are estimates, not guarantees."
     )
 
 
