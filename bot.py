@@ -39,7 +39,7 @@ from user_portfolio import save_bankroll, get_settings, save_rollover, save_pref
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day, enrich_candidates_with_price_history
 from accumulator_engine import build_accumulator
 from autobuild_research import prepare_candidate_pool
-from probability_engine import assess_candidates as assess_probability_candidates
+from probability_engine import (assess_candidates as assess_probability_candidates, MIN_TEAM_MATCHES, MIN_SELECTION_PROBABILITY, MIN_VALUE_EDGE)
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
@@ -2206,9 +2206,6 @@ async def autobuild_sportybet_command(update, context):
             asyncio.to_thread(fetch_openmatchday_team_history_rows),
             timeout=100,
         )
-        if len(history) < 100:
-            raise RuntimeError(f"Only {len(history)} historical scorelines are available; at least 100 are required for the model baseline.")
-
         await reply(update, "🧮 Evaluating supported markets against the indexed historical results…")
         assessed = await asyncio.to_thread(assess_probability_candidates, rows, history)
         rejected_model = len(rows) - len(assessed)
@@ -2224,7 +2221,7 @@ async def autobuild_sportybet_command(update, context):
             await reply(update,
                 f"🚫 NO MODEL-QUALIFIED SPORTYBET SELECTIONS — {target:.2f} TARGET\n"
                 f"SportyBet prices scanned: {scanned_count}\n"
-                "Required: historical team samples, model probability ≥60%, and estimated value ≥3%.\n"
+                f"Required: {MIN_TEAM_MATCHES}+ team matches, model probability ≥{MIN_SELECTION_PROBABILITY:.0%}, and estimated value ≥{MIN_VALUE_EDGE:.0%}.\n"
                 f"Candidates rejected for insufficient history, unsupported market, probability or value: {rejected_model}\n"
                 "No odds-only fallback is used; the bot will not invent a confident selection."
             )
@@ -2267,7 +2264,7 @@ async def autobuild_sportybet_command(update, context):
             live_odds = float(live_leg.get("odds") or 0)
             probability = float(live_leg.get("model_probability") or 0)
             live_ev = probability * live_odds - 1.0
-            if live_odds <= 1 or probability < 0.60 or live_ev < 0.03:
+            if live_odds <= 1 or probability < MIN_SELECTION_PROBABILITY or live_ev < MIN_VALUE_EDGE:
                 context.user_data.pop("pending_sportybet_booking", None)
                 await reply(update,
                     f"🚫 LIVE PRICE NO LONGER QUALIFIES\n{live_leg.get('home')} vs {live_leg.get('away')} changed price. "
@@ -5292,7 +5289,7 @@ async def sources_command(update, context):
     await reply(update,
         "🔌 PUNTER KENYA — ACTIVE SELECTION SOURCE\\n\\n"
         "SportyBet: fixtures, current prices and executable market IDs.\\n"
-        "The /build workflow uses historical-results probability estimates, a minimum 60% per-selection model probability, a minimum +3% estimated value screen, automatic variable leg counts, and live SportyBet price/ID revalidation.\\n\\n"
+        f"The /build workflow uses historical-results probability estimates, at least {MIN_TEAM_MATCHES} prior matches per team, a minimum {MIN_SELECTION_PROBABILITY:.0%} model probability, and estimated value of at least {MIN_VALUE_EDGE:.0%}, with automatic variable leg counts and live SportyBet price/ID revalidation.\\n\\n"
         "The model is experimental and not yet proven profitable or fully calibrated. If evidence is insufficient, /build returns no slip rather than an odds-only substitute."
     )
 
