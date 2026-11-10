@@ -2105,7 +2105,7 @@ async def autobuild_sportybet_command(update, context):
     # The target changes only the accumulator search objective. Every target
     # uses the same research pipeline and the same 2–20 distinct-fixture bounds.
     # Do not force five legs for larger targets; let the odds/probability search
-    # determine the smallest qualifying combination without weakening evidence.
+    # determine the smallest odds-only combination.
     min_legs = 2
     max_legs = 20
     market_filter = "all"
@@ -2131,8 +2131,7 @@ async def autobuild_sportybet_command(update, context):
             context.user_data.pop("pending_sportybet_booking", None)
             # Research and feed diagnostics stay internal; Telegram gets a clean result.
             logger.info(
-                "SportyBet autobuild: no eligible rows; scanned=%s rejected=%s "
-                "price_id_rejected=%s diagnostics=%s",
+                "SportyBet autobuild: no eligible rows; scanned=%s rejected=%s diagnostics=%s",
                 scanned_count, research_stats.get("rejected", 0), diagnostics,
             )
             diagnostic_lines = [str(item) for item in (diagnostics or []) if str(item).strip()]
@@ -5226,26 +5225,13 @@ async def marketsim_command(update, context):
 
 
 async def sources_command(update, context):
-    """Show which optional research providers have keys configured in Railway."""
-    status = provider_key_status()
-    lines = [
-        "🔌 PUNTER KENYA — RESEARCH SOURCES",
-        "",
-        "BSD football API: " + ("KEY CONFIGURED" if status["BSD_API_KEY"] else "KEY MISSING"),
-        "PitchAPI: " + ("KEY CONFIGURED" if status["PITCHAPI_API_KEY"] else "KEY MISSING"),
-        "API-Football: " + ("KEY CONFIGURED" if status["API_FOOTBALL_KEY"] else "KEY MISSING"),
-        "Open-Meteo: no key required (not used to create betting probabilities).",
-        "",
-        "A configured key is not proof that the provider accepted it or covers a particular fixture. "
-        "Provider failures and missing statistics are logged internally; SportyBet remains the source "
-        "of the prices used in slip previews.",
-        "",
-        "Free key registration:",
-        "BSD: https://sports.bzzoiro.com/register/",
-        "PitchAPI: https://pitchapi.dev/",
-        "API-Football: https://www.api-football.com/",
-    ]
-    await reply(update, "\n".join(lines))
+    await reply(update,
+        "🔌 PUNTER KENYA — ACTIVE SELECTION SOURCE\\n\\n"
+        "SportyBet: used for fixtures, current prices and executable market IDs.\\n"
+        "Historical results, PitchAPI, Open-Matchday history, team-form models and specialist prediction feeds "
+        "are not used by automatic slip construction.\\n\\n"
+        "The automatic builder is odds-only. It does not estimate win probability, fair odds or expected value."
+    )
 
 
 async def set_bot_commands(application):
