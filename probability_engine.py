@@ -12,9 +12,9 @@ import math
 import re
 import unicodedata
 
-MIN_TEAM_MATCHES = 6
-MIN_VALUE_EDGE = 0.03
-MIN_SELECTION_PROBABILITY = 0.60
+MIN_TEAM_MATCHES = 4
+MIN_VALUE_EDGE = 0.00
+MIN_SELECTION_PROBABILITY = 0.52
 MAX_GOALS = 8
 
 
@@ -141,7 +141,7 @@ def _prediction(home_rows, away_rows, history, baseline=None):
     if baseline is None:
         history_index, baseline = _prepare_history(history)
     baseline_count, home_avg, away_avg = baseline
-    if baseline_count < 100:
+    if baseline_count < 30:
         return None
     if home_avg <= 0 or away_avg <= 0:
         return None
@@ -244,7 +244,7 @@ def assess_candidate(row, history, history_index=None, baseline=None):
         "model_away_rate": prediction["away_rate"],
         "model_home_sample": prediction["home_sample"],
         "model_away_sample": prediction["away_sample"],
-        "selection_method": "Recent-results Poisson estimate; uncalibrated; value threshold +3%",
+        "selection_method": "Relaxed recent-results Poisson screen; uncalibrated; probability >=52%, estimated EV >=0%; not a proven edge.",
     }
 
 
