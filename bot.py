@@ -39,7 +39,7 @@ from user_portfolio import save_bankroll, get_settings, save_rollover, save_pref
 from premium_tracking import save_price_observations, capture_current_prices, closing_line_value, rollover_status, record_rollover_day, enrich_candidates_with_price_history
 from accumulator_engine import build_accumulator
 from autobuild_research import prepare_candidate_pool
-from probability_engine import (assess_candidates as assess_probability_candidates, MIN_TEAM_MATCHES, MIN_SELECTION_PROBABILITY, MIN_VALUE_EDGE)
+from probability_engine import (assess_candidates_with_diagnostics as assess_probability_candidates, MIN_TEAM_MATCHES, MIN_SELECTION_PROBABILITY, MIN_VALUE_EDGE)
 from forecast_tracker import record_forecast, settle_forecast, forecast_performance, refresh_specialist_forecasts
 
 # ============================================================
@@ -2207,8 +2207,7 @@ async def autobuild_sportybet_command(update, context):
             timeout=100,
         )
         await reply(update, "🧮 Evaluating supported markets against the indexed historical results…")
-        assessed = await asyncio.to_thread(assess_probability_candidates, rows, history)
-        rejected_model = len(rows) - len(assessed)
+        assessed, model_stats = await asyncio.to_thread(assess_probability_candidates, rows, history)
 
         rows, research_stats = await asyncio.to_thread(prepare_candidate_pool, assessed)
         fixture_keys = {
@@ -2222,8 +2221,10 @@ async def autobuild_sportybet_command(update, context):
                 f"🚫 NO MODEL-QUALIFIED SPORTYBET SELECTIONS — {target:.2f} TARGET\n"
                 f"SportyBet prices scanned: {scanned_count}\n"
                 f"Required: {MIN_TEAM_MATCHES}+ team matches, model probability ≥{MIN_SELECTION_PROBABILITY:.0%}, and estimated value ≥{MIN_VALUE_EDGE:.0%}.\n"
-                f"Candidates rejected for insufficient history, unsupported market, probability or value: {rejected_model}\n"
-                "No odds-only fallback is used; the bot will not invent a confident selection."
+                f"Historical scorelines: {model_stats['history_scorelines']} (minimum baseline: {model_stats['baseline_minimum']})\n"
+                f"Qualified: {model_stats['qualified']} | Rejected: {model_stats['rejected']}\n"
+                + "\n".join(f"• {reason.replace('_', ' ')}: {count}" for reason, count in sorted(model_stats['reasons'].items()) if reason != 'qualified')
+                + "\nNo odds-only fallback is used; no pick is fabricated."
             )
             return
 
