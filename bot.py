@@ -2176,10 +2176,10 @@ async def autobuild_sportybet_command(update, context):
             context.user_data.pop("pending_sportybet_booking", None)
             logger.info("SportyBet autobuild: no executable rows; scanned=%s stats=%s diagnostics=%s",
                         scanned_count, research_stats, diagnostics)
-            diagnostic_text = "\\n".join(f"• {str(item)[:220]}" for item in (diagnostics or [])[-8:])
+            diagnostic_text = "\n".join(f"• {str(item)[:220]}" for item in (diagnostics or [])[-8:])
             await reply(update,
-                f"🚫 NO SPORTYBET SELECTIONS — {target:.2f} TARGET\\n"
-                f"SportyBet rows scanned: {scanned_count}\\n"
+                f"🚫 NO SPORTYBET SELECTIONS — {target:.2f} TARGET\n"
+                f"SportyBet rows scanned: {scanned_count}\n"
                 + (diagnostic_text or "No feed diagnostics were returned.")
             )
             return
@@ -2192,7 +2192,7 @@ async def autobuild_sportybet_command(update, context):
         if len(fixture_keys) < 2:
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(update,
-                f"🚫 NOT ENOUGH DISTINCT FIXTURES — {target:.2f} TARGET\\n"
+                f"🚫 NOT ENOUGH DISTINCT FIXTURES — {target:.2f} TARGET\n"
                 f"Usable fixtures: {len(fixture_keys)}; at least 2 are required."
             )
             return
@@ -2205,8 +2205,8 @@ async def autobuild_sportybet_command(update, context):
         if not chosen or not build.get("target_reached"):
             context.user_data.pop("pending_sportybet_booking", None)
             await reply(update,
-                f"🚫 NO {target:.2f} COMBINATION FOUND\\n"
-                f"Usable selections: {len(rows)} across {len(fixture_keys)} fixtures.\\n"
+                f"🚫 NO {target:.2f} COMBINATION FOUND\n"
+                f"Usable selections: {len(rows)} across {len(fixture_keys)} fixtures.\n"
                 "No combination of distinct fixtures reached the permitted target band."
             )
             return
@@ -2308,7 +2308,7 @@ async def accumulator_status_command(update, context):
         return
     fixture_count = len({(str(x.get("day") or "")[:10], canonical_team_key(x.get("home")), canonical_team_key(x.get("away"))) for x in rows})
     if not rows or fixture_count < 2:
-        await reply(update, "NO SLIP: fewer than two distinct fixtures have usable SportyBet prices.\\n" + "\\n".join(diagnostics[:4]))
+        await reply(update, "NO SLIP: fewer than two distinct fixtures have usable SportyBet prices.\n" + "\n".join(diagnostics[:4]))
         return
     build = build_accumulator(rows, target, max_legs=20, ranking="price")
     chosen, combined = build["selections"], build["combined_odds"]
@@ -2321,7 +2321,7 @@ async def accumulator_status_command(update, context):
     for n, item in enumerate(chosen, 1):
         lines.append(f"{n}. {item['home']} vs {item['away']} — {item['market']}: {item['selection']} @ {item['odds']:.2f}")
     lines.extend(["", "Selections are assembled from available bookmaker prices; no prediction or winning guarantee is implied."])
-    await reply(update, "\\n".join(lines))
+    await reply(update, "\n".join(lines))
 
 
 async def fullintel_callback(update, context):
@@ -3612,7 +3612,7 @@ async def topvalue_command(update, context):
         await reply(update, f"❌ SPORTYBET PRICE SCAN FAILED: {type(exc).__name__}: {str(exc)[:220]}")
         return
     if not rows:
-        await reply(update, "No matching SportyBet prices were returned.\\n" + "\\n".join(diagnostics[:5]))
+        await reply(update, "No matching SportyBet prices were returned.\n" + "\n".join(diagnostics[:5]))
         return
     rows.sort(key=lambda x: (float(x["odds"]), x["home"], x["away"]))
     lines = ["📊 PUNTER KENYA — SPORTYBET AVAILABLE PRICES",
@@ -3622,7 +3622,7 @@ async def topvalue_command(update, context):
         lines.append(f"   {item['market']}: {item['selection']} @ {item['odds']:.2f}")
         lines.append("")
     lines.append("These are bookmaker prices, not model predictions or recommendations.")
-    message = "\\n".join(lines)
+    message = "\n".join(lines)
     for offset in range(0, len(message), 3600):
         await reply(update, message[offset:offset + 3600])
 
