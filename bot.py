@@ -2270,7 +2270,7 @@ async def autobuild_sportybet_command(update, context):
         await reply(update, f"SportyBet scan failed: {type(exc).__name__}: {str(exc)[:180]}")
 
 async def accumulator_status_command(update, context):
-    """Build an odds-only SportyBet combination; no outcome probability is calculated."""
+    """Build a value-ranked combination from model-qualified SportyBet selections."""
     args=[str(x).strip() for x in (context.args or [])]
     target=3.0
     if args:
@@ -2296,14 +2296,15 @@ async def accumulator_status_command(update, context):
     if not chosen or not build.get("target_reached"):
         await reply(update,f"NO SLIP: available SportyBet prices did not reach {target:.2f} within the 20% target band. No filler legs were added.")
         return
-    lines=["🎟️ PUNTER KENYA — SPORTYBET ODDS-ONLY COMBINATION",
+    lines=["🎟️ PUNTER KENYA — MODEL-QUALIFIED COMBINATION",
            f"Target: {target:.2f} | Combined odds: {combined:.2f}",
            f"Automatic legs: {len(chosen)} | Available fixtures: {fixture_count}",""]
     for n,item in enumerate(chosen,1):
         lines.append(f"{n}. {item['home']} vs {item['away']} — {item['market']}: {item['selection']} @ {item['odds']:.2f}")
-    lines.extend(["","Method: current SportyBet prices and exact market IDs only.",
-                  "No team analysis, historical model, win probability or expected-value estimate was used.",
-                  "Odds-only construction is not a prediction or guarantee."])
+        lines.append(f"   Model {item['model_probability']:.1%} | Fair {item['fair_odds']:.2f} | Estimated value {item['expected_value']:+.1%}")
+    lines.extend(["","Method: recent completed results, a Poisson score model, model probability and estimated value.",
+                  "Estimates are uncalibrated and may be wrong; combined-leg probabilities are not multiplied or guaranteed.",
+                  "Only selections meeting the model's +3% estimated-value and 55% probability thresholds are considered."])
     await reply(update,"\n".join(lines))
 
 
@@ -3617,7 +3618,7 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
 
 
 async def topvalue_command(update, context):
-    """List current SportyBet prices; this command makes no predictions."""
+    """List SportyBet selections that pass the probability and value model."""
     args=[str(x).casefold() for x in (context.args or [])]
     market=args[0] if args and args[0] not in ("today","tomorrow") else "all"
     day_arg=next((x for x in args if x in ("today","tomorrow")),"both")
@@ -3632,13 +3633,15 @@ async def topvalue_command(update, context):
         await reply(update,"No matching SportyBet prices were returned.\\n"+"\\n".join(diagnostics[:5]))
         return
     rows.sort(key=lambda x:(float(x["odds"]),x["home"],x["away"]))
-    lines=["📋 PUNTER KENYA — SPORTYBET PRICES",f"Market filter: {market.upper()} | Dates: {', '.join(days)}",""]
+    rows.sort(key=lambda x: (-float(x.get("expected_value") or 0), -float(x.get("model_probability") or 0)))
+    lines=["📊 PUNTER KENYA — MODEL-QUALIFIED SPORTYBET PICKS",f"Market filter: {market.upper()} | Dates: {', '.join(days)}",""]
     for n,item in enumerate(rows[:25],1):
         lines.append(f"{n}. {item['home']} vs {item['away']} — {item['league']}")
         lines.append(f"   {item['market']}: {item['selection']} @ {item['odds']:.2f}")
-        lines.append(f"   Kick-off: {item.get('kickoff') or 'Not supplied'}")
+        lines.append(f"   Model probability: {item['model_probability']:.1%} | Fair odds: {item['fair_odds']:.2f}")
+        lines.append(f"   Estimated value: {item['expected_value']:+.1%} | Recent matches: {item['model_home_sample']} home-team / {item['model_away_sample']} away-team")
         lines.append("")
-    lines.append("These are bookmaker prices only. No team analysis, probability, fair odds or expected value is calculated.")
+    lines.append("Ranked by estimated value. The recent-results Poisson model is uncalibrated; estimates are uncertain and not guaranteed.")
     message="\\n".join(lines)
     for offset in range(0,len(message),3600): await reply(update,message[offset:offset+3600])
 
