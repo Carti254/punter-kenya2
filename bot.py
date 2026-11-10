@@ -3585,7 +3585,7 @@ def _selection_probability_key(market_key, selection, handicap=None):
 
 
 def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all", bookmaker_only="sportybet", progress_callback=None):
-    """Scan SportyBet prices, then assess them with the single recent-results model."""
+    """Read executable SportyBet prices only; no history or probability model."""
     def progress(message):
         if callable(progress_callback):
             try: progress_callback(str(message))
@@ -3599,12 +3599,10 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
             try: target_dates.add(date.fromisoformat(str(value)[:10]))
             except ValueError: pass
     if not target_dates: return [], ["No valid scan dates."]
-    progress("Reading SportyBet fixtures and prices…")
+    progress("Reading SportyBet fixtures and executable prices…")
     games = fetch_sportybet_odds(sorted(target_dates), max_pages=4)
     candidates = []
-    excluded = ("btts", "both teams to score", "under 2.5", "draw no bet", " dnb",
-                "2up", "two up", "early payout", "handicap", "corner", "card",
-                "booking", "shots", "player", "correct score", "half time", "first half")
+    excluded = ("btts", "both teams to score", "under 2.5", "draw no bet", " dnb", "2up", "early payout", "handicap", "corner", "card", "booking", "shots", "player", "correct score", "half time", "first half", "second half")
     filters = [x.strip().casefold() for x in str(market_filter or "all").split(",") if x.strip() and x.strip().casefold() not in ("all", "safest")]
     for game in games:
         kickoff = str(game.get("kickoff_eat") or "")
@@ -3616,59 +3614,27 @@ def scan_value_candidates(day_filters=("today", "tomorrow"), market_filter="all"
         if not home or not away or not event_id: continue
         for market in game.get("markets") or []:
             name, selection = str(market.get("market") or "").strip(), str(market.get("selection") or "").strip()
-            text_value = (name + " " + selection + " " + str(market.get("specifier") or "")).casefold()
+            specifier = str(market.get("specifier") or "").strip()
+            text_value = (name + " " + selection + " " + specifier).casefold()
             if not name or not selection or any(term in text_value for term in excluded): continue
             if filters and not any(term in name.casefold() or term in selection.casefold() for term in filters): continue
+            market_text, selection_text = name.casefold(), selection.casefold()
+            supported = any(term in market_text for term in ("1x2", "match result", "full time result", "fulltime result", "double chance")) or (("total goals" in market_text or "over/under" in market_text or "over under" in market_text) and ("over 1.5" in selection_text or "over 2.5" in selection_text or "over 1.5" in market_text or "over 2.5" in market_text))
+            if not supported: continue
             try: odds = float(market.get("odds"))
             except (TypeError, ValueError, OverflowError): continue
-            if not math.isfinite(odds) or not 1.01 < odds <= 10: continue
-            market_id, outcome_id = str(market.get("market_id") or ""), str(market.get("outcome_id") or "")
+            if not math.isfinite(odds) or not 1.15 <= odds <= 3.50: continue
+            market_id, outcome_id = str(market.get("market_id") or "").strip(), str(market.get("outcome_id") or "").strip()
             if not market_id or not outcome_id: continue
-            candidates.append({
-                "home":home,"away":away,"fixture":f"{home} vs {away}",
-                "league":str(game.get("competition") or "Competition"),
-                "country":str(game.get("country") or ""),"day":day.isoformat(),
-                "kickoff":kickoff,"bookmaker":"SportyBet","market":name,
-                "selection":selection,"specifier":market.get("specifier"),
-                "odds":odds,"event_id":event_id,"sportybet_event_id":event_id,
-                "eventId":event_id,"market_id":market_id,"marketId":market_id,
-                "outcome_id":outcome_id,"outcomeId":outcome_id,
-                "fixture_match_verified":True,"url":game.get("url"),
-                "selection_method":"SportyBet prices only; no match prediction performed"
-            })
+            candidates.append({"home":home,"away":away,"fixture":f"{home} vs {away}","league":str(game.get("competition") or "Competition"),"country":str(game.get("country") or ""),"day":day.isoformat(),"kickoff":kickoff,"bookmaker":"SportyBet","market":name,"selection":selection,"specifier":market.get("specifier"),"odds":odds,"event_id":event_id,"sportybet_event_id":event_id,"eventId":event_id,"market_id":market_id,"marketId":market_id,"outcome_id":outcome_id,"outcomeId":outcome_id,"fixture_match_verified":True,"url":game.get("url"),"selection_method":"Executable SportyBet price and market-rule screen; no prediction"})
     unique = {}
     for row in candidates:
-        key=(row["event_id"],row["market_id"],row["outcome_id"])
-        if key not in unique or row["odds"] > unique[key]["odds"]: unique[key]=row
-    raw_candidates=list(unique.values())
-    if not raw_candidates:
-        return [], [f"{len(games)} SportyBet events retrieved; no supported executable market prices were found."]
-    progress("Checking recent completed results and estimating selection probabilities…")
-    try:
-        history = fetch_openmatchday_team_history_rows()
-    except Exception as exc:
-        logger.warning("Probability engine history unavailable: %s", exc)
-        return [], [f"{len(games)} SportyBet events retrieved; probability engine unavailable: {type(exc).__name__}.",
-                    "No odds-only fallback is allowed because it cannot identify value."]
-    result=[]
-    rejected=Counter()
-    for row in raw_candidates:
-        assessed=assess_probability_candidate(row, history)
-        if assessed is None:
-            rejected["insufficient_history_unsupported_market_or_no_value"] += 1
-        else:
-            result.append(assessed)
-    result.sort(key=lambda x:(-float(x.get("expected_value") or 0),
-                              -float(x.get("model_probability") or 0),
-                              float(x.get("odds") or 99)))
-    diagnostics=[
-        f"{len(games)} SportyBet events retrieved; {len(raw_candidates)} executable prices assessed.",
-        f"{len(result)} selections passed the model's minimum 55% probability and +3% estimated-value thresholds.",
-        f"{rejected.get('insufficient_history_unsupported_market_or_no_value',0)} prices rejected for insufficient history, unsupported market or inadequate value.",
-        "Model: recent completed results with a Poisson score model; estimates are uncalibrated and are not guarantees.",
-    ]
-    return result, diagnostics
-
+        key = (row["event_id"], row["market_id"], row["outcome_id"])
+        if key not in unique or row["odds"] > unique[key]["odds"]: unique[key] = row
+    rows = list(unique.values())
+    rows.sort(key=lambda x: (x["odds"], x["day"], x["home"], x["away"]))
+    diagnostics = [f"{len(games)} SportyBet events retrieved; {len(rows)} executable prices passed market and ID checks.", "No historical-results download, Poisson model, probability threshold or estimated-value threshold is used.", "Excluded: BTTS, Under 2.5, DNB, handicaps, corners, cards, player and half-time markets."]
+    return rows, diagnostics
 
 async def topvalue_command(update, context):
     """List SportyBet selections that pass the probability and value model."""
