@@ -9,7 +9,7 @@ Telegram-based football fixtures, match research, bookmaker-odds inspection and 
 - Provides form, goals, home/away, head-to-head, matchup, risk and match-intelligence reports where source data is available.
 - Reads public, undocumented Betika Kenya and SportyBet Kenya football odds feeds when those feeds are accessible.
 - Lets a user resolve selections against current SportyBet fixture/market IDs, review the selections and confirm creation of a genuine SportyBet share/booking code.
-- Includes manual and AI-assisted SportyBet slip management, calculator, bet logging, automatic results settlement and experimental model-based analysis.
+- Includes manual and AI-assisted SportyBet slip management, calculator, bet logging, automatic results settlement and an odds-only SportyBet accumulator builder.
 
 **Important limitations:** SportyBet endpoints are undocumented and can change, rate-limit or block requests. The bot does not log in to bookmaker accounts, deposit funds or place bets. A booking/share code is not a placed bet. Model probabilities are experimental and uncalibrated; they are not guarantees or financial advice. Unsupported or unavailable data must be shown as unavailable, not invented.
 
@@ -106,8 +106,8 @@ The database account needs permission to create and write the tables used by the
 - `/form`, `/goals`, `/homeaway`, `/h2h`, `/strength`, `/matchup`, `/markets`, `/risk`, `/scenarios`, `/deepdive` — match research commands.
 - `/bookies` — check both Betika and SportyBet public feeds.
 - `/odds HOME vs AWAY [today|tomorrow]` — inspect matched prices.
-- `/topvalue`, `/aipicks`, `/accumulator` — experimental scanner tools; may correctly return NO BET.
-- `/autobuild TARGET [MARKET FILTER] [rank=value|odds|probability]` — build a SportyBet preview from a target combined decimal odd. Enter the target only; PUNTER automatically chooses the number of legs from qualified, distinct fixtures and available value/risk evidence. Leg-count controls are intentionally disabled: the bot must not force a leg count, pad a slip with weak/negative-value picks, or claim the target was reached when it was not. Example: `/autobuild 5` or `/autobuild 10 market=1X2 rank=value`. `/build` and `/slip` preserve the target-only workflow. Every leg shows the PUNTER model estimate and research gaps; the combined estimate assumes independence between matches and remains experimental/uncalibrated, not a guarantee.
+- `/topvalue`, `/aipicks`, `/accumulator` — list current SportyBet prices or construct an odds-only combination. These commands do not predict match outcomes.
+- `/autobuild TARGET [MARKET FILTER] [rank=value|odds|probability]` — build a SportyBet preview from a target combined decimal odd. Enter the target only; PUNTER automatically chooses the number of legs from qualified, distinct fixtures and available value/risk evidence. Leg-count controls are intentionally disabled: the bot must not force a leg count, pad a slip with weak/negative-value picks, or claim the target was reached when it was not. Example: `/autobuild 5` or `/autobuild 10 market=1X2 rank=value`. `/build` and `/slip` preserve the target-only workflow. The builder uses only current SportyBet prices and exact event/market/outcome identifiers. It does not calculate win probabilities, expected value or confidence, and an odds-only combination is not a prediction.
 - `/calculator ODDS STAKE` — calculate implied probability and potential return.
 - `/record`, `/oddshistory`, `/myslips` — prediction history, odds history and saved slips; require the optional database.
 - `/calibrate` — run a date-ordered walk-forward evaluation using only matches before each test date; compare the current Poisson model, a venue-weighted/shrunk candidate and a training-only prevalence baseline on the final 30% holdout. Temperature calibration is reported separately. It requires at least 50 training and 30 holdout forecasts and never changes live model settings automatically.
@@ -135,7 +135,7 @@ The bot must show the resolved current selections and obtain confirmation before
 
 ## Free multi-provider research sources
 
-The automatic SportyBet scan silently unions upcoming fixtures from these optional free football APIs with the existing open-matchday catalogue, deduplicates them, and enriches exact SportyBet matches. The providers supply research evidence only; SportyBet remains the source of the odds used to build a SportyBet preview.
+The automatic SportyBet scan now reads SportyBet fixtures and prices directly. Historical-model, PitchAPI, Open-Matchday history, team-form and specialist-prediction filters have been removed from automatic slip construction. SportyBet remains the source of executable event, market and outcome identifiers.
 
 - \`BSD_API_KEY\` — free Bzzoiro Sports Data football API key. Register at https://sports.bzzoiro.com/register/. The published free tier advertises 7,500 football requests/day, fixtures, lineups, statistics, xG, model forecasts and consensus odds across its covered competitions. The free tier does not expose named bookmaker prices or best-price comparison; those are paid features. See https://sports.bzzoiro.com/docs/football/ and https://sports.bzzoiro.com/pricing/.
 - \`PITCHAPI_API_KEY\` — free PitchAPI key. Register at https://pitchapi.dev/ and copy the key from the account dashboard. Its documentation advertises a free football API with no request allowance, 77 leagues and historical data from 2021, including match stats, shots, player stats, lineups, events and advanced analytics. Coverage varies by league and match. See https://pitchapi.dev/.
