@@ -2116,40 +2116,8 @@ async def autobuild_sportybet_command(update, context):
         )
         scanned_count = len(rows)
 
-        # User preference: exclude the Big-Five domestic top divisions.
-        # Cup competitions remain eligible; the filter is country + competition aware.
-        big_five_top_flights = {
-            "england": ("premier league",),
-            "spain": ("laliga", "la liga", "primera division"),
-            "germany": ("bundesliga",),
-            "italy": ("serie a",),
-            "france": ("ligue 1", "ligue1"),
-        }
-        country_aliases = {
-            "united kingdom": "england", "england": "england",
-            "españa": "spain", "spain": "spain",
-            "deutschland": "germany", "germany": "germany",
-            "italia": "italy", "italy": "italy", "france": "france",
-        }
-        def is_big_five_top_flight(row):
-            country = country_aliases.get(str(row.get("country") or "").casefold(),
-                                          str(row.get("country") or "").casefold())
-            league = str(row.get("league") or "").casefold()
-            terms = big_five_top_flights.get(country)
-            if terms:
-                return any(term in league for term in terms)
-            # Country-less records: exclude only unmistakable labels.
-            return any(term in league for term in (
-                "english premier league", "la liga", "laliga", "bundesliga",
-                "italian serie a", "ligue 1",
-            ))
-        before_big_five_filter = len(rows)
-        rows = [row for row in rows if not is_big_five_top_flight(row)]
-        big_five_excluded = before_big_five_filter - len(rows)
-
-        # Specialist and secondary prediction layers are disabled.
-        specialist_stats = {"enabled": False, "reason": "Single fitted Dixon-Coles model only."}
-        price_history_stats = {"matched": 0, "reason": "Not used for prediction."}
+        # No league, historical-data, team-form or prediction filters are used.
+        # Only SportyBet's exact event/market/outcome identifiers are checked.
         rows, research_stats = await asyncio.to_thread(
             prepare_candidate_pool, rows, marginal_ev_floor=0.0
         )
@@ -2166,11 +2134,11 @@ async def autobuild_sportybet_command(update, context):
             diagnostic_text = "\\n".join(f"• {item[:220]}" for item in diagnostic_lines[-8:])
             await reply(
                 update,
-                f"🚫 NO MODEL-QUALIFIED SPORTYBET SELECTIONS — {target:.2f} TARGET\\n"
+                f"🚫 NO SPORTYBET SELECTIONS — {target:.2f} TARGET\\n"
                 f"Candidate rows produced: {scanned_count}\\n"
-                f"Rejected by research checks: {research_stats.get('rejected', 0)}\\n"
-                f"Big-Five top-flight exclusions: {big_five_excluded}\\n\\n"
-                "🔬 FEED / EXTERNAL-HISTORY DIAGNOSTICS\\n"
+                f"Rejected by basic price/ID checks: {research_stats.get('rejected', 0)}\\n"
+                f"League exclusions: {big_five_excluded}\\n\\n"
+                "🔬 SPORTYBET FEED DIAGNOSTICS\\n"
                 + (diagnostic_text or "• No stage diagnostics were returned by the scanner.")
                 + "\\n\\nNo selection will be fabricated to fill the target."
             )
@@ -2199,7 +2167,7 @@ async def autobuild_sportybet_command(update, context):
 
         build = build_accumulator(
             rows, target, min_legs=min_legs, max_legs=max_legs,
-            ranking="value",
+            ranking="odds",
             # Keep a broader set of researched markets available to the
             # combination search; do not narrow the candidate pool prematurely.
             max_candidates=500,
@@ -2243,8 +2211,8 @@ async def autobuild_sportybet_command(update, context):
             "eventId", "marketId", "specifier", "outcomeId",
             "fixture", "market", "selection", "odds", "startTime",
         }
-        for live_leg, model_leg in zip(resolved, chosen):
-            live_leg.update({key: value for key, value in model_leg.items() if key not in protected_keys})
+        for live_leg, selected_leg in zip(resolved, chosen):
+            live_leg.update({key: value for key, value in selected_leg.items() if key not in protected_keys})
 
         combined = math.prod(float(x["odds"]) for x in resolved)
         if not (target <= combined <= min(target * 1.20, 5.0)):
@@ -2256,15 +2224,7 @@ async def autobuild_sportybet_command(update, context):
             )
             return
 
-        combined_probability = float(
-            build.get("combined_probability") or
-            math.prod(float(x["probability"]) for x in resolved)
-        )
-        naive_probability = float(
-            build.get("naive_independent_probability") or combined_probability
-        )
-        correlation_factor = float(build.get("correlation_adjustment_factor") or 1.0)
-        context.user_data["pending_sportybet_booking"] = resolved
+                context.user_data["pending_sportybet_booking"] = resolved
         # Keep the exact assessed rows alongside the clean preview so the user can
         # inspect the source evidence for every selected leg before creating a code.
         context.user_data["pending_sportybet_research"] = [dict(x) for x in resolved]
@@ -2283,7 +2243,7 @@ async def autobuild_sportybet_command(update, context):
             )
 
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📊 Show research evidence", callback_data="sb:proof")],
+            [InlineKeyboardButton("📋 Show selected prices", callback_data="sb:proof")],
             [InlineKeyboardButton("Generate SportyBet code", callback_data="sb:confirm"),
              InlineKeyboardButton("Cancel", callback_data="sb:cancel")],
         ])
@@ -2308,90 +2268,41 @@ async def autobuild_sportybet_command(update, context):
         await reply(update, f"SportyBet scan failed: {type(exc).__name__}: {str(exc)[:180]}")
 
 async def accumulator_status_command(update, context):
-    """Build a cautious combination only from scanner-qualified selections."""
-    args = [str(x).strip() for x in (context.args or [])]
-    target = 3.0
+    """Build an odds-only SportyBet combination; no outcome probability is calculated."""
+    args=[str(x).strip() for x in (context.args or [])]
+    target=3.0
     if args:
         try:
-            target = float(args[0])
-            if not 1.50 <= target <= 50:
-                raise ValueError
+            target=float(args[0])
+            if not 2.0 <= target <= 5.0: raise ValueError
         except ValueError:
-            await reply(update, "Usage: /accumulator [target decimal odds, 1.50–50]. Example: /accumulator 3.00")
+            await reply(update,"Usage: /accumulator [target decimal odds, 2.00–5.00]. Example: /accumulator 3.00")
             return
-
     try:
-        rows, diagnostics = await asyncio.to_thread(scan_value_candidates, ("today", "tomorrow"), "all")
-        # Keep this command on the same research/value gate as the SportyBet
-        # auto-builder. The old implementation selected the six highest raw
-        # probabilities, bypassed the 3% EV screen and hard-coded six legs.
-        rows, research_stats = prepare_candidate_pool(rows, marginal_ev_floor=0.0)
+        rows,diagnostics=await asyncio.to_thread(scan_value_candidates,("today","tomorrow"),"all","SportyBet")
+        rows,research_stats=prepare_candidate_pool(rows)
     except Exception as exc:
-        logger.exception("Accumulator scan failed")
-        await reply(update, f"❌ ACCUMULATOR SCAN FAILED: {type(exc).__name__}: {str(exc)[:250]}")
+        logger.exception("Odds-only accumulator scan failed")
+        await reply(update,f"❌ SPORTYBET SCAN FAILED: {type(exc).__name__}: {str(exc)[:220]}")
         return
-
-    fixture_count = len({
-        (str(x.get("day") or "")[:10], canonical_team_key(x.get("home")), canonical_team_key(x.get("away")))
-        for x in rows if x.get("home") and x.get("away")
-    })
-    if not rows or fixture_count == 0:
-        await reply(update, "⚠️ NO QUALIFIED ACCUMULATOR CANDIDATES\n"
-                    + ("Feed notes: " + "; ".join(diagnostics[:5]) if diagnostics else "No model-supported bookmaker prices were retrieved.")
-                    + f"\nResearch screen: {research_stats.get('rejected', 0)} rejected; {research_stats.get('eligible', 0)} eligible.")
+    fixture_count=len({(str(x.get("day") or "")[:10],canonical_team_key(x.get("home")),canonical_team_key(x.get("away"))) for x in rows})
+    if not rows or fixture_count<2:
+        await reply(update,"NO SLIP: fewer than two distinct SportyBet fixtures have usable, exact market identifiers.\n"+"\n".join(diagnostics[:4]))
         return
-
-    # The engine chooses the number of legs automatically from distinct fixtures.
-    build = build_accumulator(rows, target, max_legs=20, ranking="value")
-    chosen, combined = build["selections"], build["combined_odds"]
+    build=build_accumulator(rows,target,max_legs=20,ranking="odds")
+    chosen,combined=build["selections"],build["combined_odds"]
     if not chosen or not build.get("target_reached"):
-        await reply(update, f"NO BET: no qualifying combination reached your {target:.2f} target within the 20% tolerance. "
-                    "No partial slip has been presented as a completed accumulator. "
-                    f"Qualified fixtures: {fixture_count}; eligible markets: {len(rows)}.")
+        await reply(update,f"NO SLIP: available SportyBet prices did not reach {target:.2f} within the 20% target band. No filler legs were added.")
         return
-
-    probability_product = float(build.get("combined_probability") or math.prod(item["probability"] for item in chosen))
-    naive_probability_product = math.prod(item["probability"] for item in chosen)
-    lines = [
-        "🧮 PUNTER KENYA — EXPERIMENTAL ACCUMULATOR",
-        f"Target: {target:.2f} | Combined decimal odds: {combined:.2f} | TARGET REACHED",
-        f"Automatic leg count: {len(chosen)} | Qualified fixtures: {fixture_count}",
-        f"Research screen: {research_stats['eligible']} eligible; {research_stats['rejected']} rejected",
-        "",
-    ]
-    for number, item in enumerate(chosen, 1):
-        lines.extend([
-            f"{number}. {item['home']} vs {item['away']} — {item.get('league') or 'Competition'}",
-            f"   {item['market']}: {item['selection']} @ {item['odds']:.2f} ({item.get('bookmaker') or 'Unknown'})",
-            f"   Model probability: {item['probability']:.1%} | Estimated EV: {item.get('ev', 0):+.1%}",
-            f"   Evidence gaps: {', '.join(item.get('research_gaps') or []) or 'None reported'}",
-            *([f"   Confirmed lineups: {', '.join(x.get('team','') for x in (item.get('lineup_evidence') or {}).get('sides', []))}."]
-              if (item.get("lineup_evidence") or {}).get("sides") else []),
-            *([f"   Reported absences: {len((item.get('team_news_evidence') or {}).get('reported_absences', []))} (API-Football)."]
-              if item.get("team_news_evidence") else []),
-            *([f"   xG sample: home {item['xg_evidence'].get('home_sample')} / away {item['xg_evidence'].get('away_sample')}."]
-              if item.get("xg_evidence") else []),
-            *([f"   Tactical profile: {((item.get('tactical_evidence') or {}).get('home') or {}).get('descriptive_style','not available')}; away {((item.get('tactical_evidence') or {}).get('away') or {}).get('descriptive_style','not available')}."]
-              if item.get("tactical_evidence") else []),
-            *([f"   Odds movement: {item['odds_history_evidence'].get('movement_direction')} ({item['odds_history_evidence'].get('movement_fraction',0):+.1%}, {item['odds_history_evidence'].get('observations')} snapshots)."]
-              if (item.get('odds_history_evidence') or {}).get('status') == 'observed' else []),
-            *([f"   Best other bookmaker: {item['best_other_bookmaker'].get('bookmaker')} @ {item['best_other_bookmaker'].get('odds'):.2f}."]
-              if item.get("best_other_bookmaker") else []),
-            *([f"   Gemini review: {item['ai_research_review'].get('assessment','')[:180]}"]
-              if item.get("ai_research_review") else []),
-            *([f"   Calibration: temperature {item['calibration_evidence'].get('temperature'):.2f}; holdout n={item['calibration_evidence'].get('holdout')}."]
-              if item.get("calibration_evidence") else []),
-        ])
-    lines.extend([
-        "",
-        f"Naive independent-leg probability product: {naive_probability_product:.2%}",
-        f"Independent-leg combined probability estimate: {probability_product:.2%}.",
-        "Combined probability is the product of leg probabilities under an independence assumption; actual cross-match dependence is not measured.",
-    ])
-    if build.get("correlation_warnings"):
-        lines.append("Correlation warning: " + "; ".join(build["correlation_warnings"]))
-    lines.append("Experimental model estimates only. Confirm every price and settlement rule. No BTTS or Under 2.5.")
-    await reply(update, "\n".join(lines))
+    lines=["🎟️ PUNTER KENYA — SPORTYBET ODDS-ONLY COMBINATION",
+           f"Target: {target:.2f} | Combined odds: {combined:.2f}",
+           f"Automatic legs: {len(chosen)} | Available fixtures: {fixture_count}",""]
+    for n,item in enumerate(chosen,1):
+        lines.append(f"{n}. {item['home']} vs {item['away']} — {item['market']}: {item['selection']} @ {item['odds']:.2f}")
+    lines.extend(["","Method: current SportyBet prices and exact market IDs only.",
+                  "No team analysis, historical model, win probability or expected-value estimate was used.",
+                  "Odds-only construction is not a prediction or guarantee."])
+    await reply(update,"\n".join(lines))
 
 
 async def fullintel_callback(update, context):
